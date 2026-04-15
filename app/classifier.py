@@ -7,10 +7,10 @@ from app.config import OPENAI_API_KEY, OPENAI_EMAIL_BODY_PREVIEW_CHARS
 from app.schemas import CleanupDecision, EmailClassification, EmailSummary
 
 client = OpenAI(api_key=OPENAI_API_KEY)
-IMPORTANT_LABEL = "AI Important"
-UNIMPORTANT_LABEL = "AI Unimportant"
-RULES_IMPORTANT_LABEL = "Rules Important"
-RULES_UNIMPORTANT_LABEL = "Rules Unimportant"
+IMPORTANT_LABEL = "Important"
+UNIMPORTANT_LABEL = "Unimportant"
+LEGACY_IMPORTANT_LABELS = {"AI Important", "Rules Important"}
+LEGACY_UNIMPORTANT_LABELS = {"AI Unimportant", "Rules Unimportant", "Rules Security", "Rules Shopping"}
 
 LOW_VALUE_KEYWORDS = {
     "promo",
@@ -145,6 +145,20 @@ def _normalize_cleanup_label(label_name: str | None) -> str | None:
     return cleaned[:225]
 
 
+def canonicalize_importance_label(label_name: str | None) -> str | None:
+    cleaned = _normalize_cleanup_label(label_name)
+    if not cleaned:
+        return None
+
+    if cleaned == IMPORTANT_LABEL or cleaned in LEGACY_IMPORTANT_LABELS:
+        return IMPORTANT_LABEL
+
+    if cleaned == UNIMPORTANT_LABEL or cleaned in LEGACY_UNIMPORTANT_LABELS:
+        return UNIMPORTANT_LABEL
+
+    return cleaned
+
+
 def _text_for_cleanup(email: EmailSummary) -> str:
     return " ".join(
         part for part in [email.subject, email.sender, email.snippet, email.body or ""] if part
@@ -170,11 +184,11 @@ def classify_cleanup_email(email: EmailSummary, existing_labels=None) -> dict:
     system_prompt = """
 You are planning Gmail inbox cleanup and must return a single valid JSON object with no extra text.
 The goal is zero inbox for all processed messages.
-Use only one of these Gmail labels: AI Important or AI Unimportant.
-Choose AI Important for messages a person is likely to truly care about later, such as personal correspondence, mission updates from real people, work items, finance, bills, legal, health, travel, deadlines, or anything that may need follow-up.
-Choose AI Unimportant for noisy login alerts, promotions, newsletters, low-value notifications, routine automated mail, and anything that does not deserve attention later.
+Use only one of these Gmail labels: Important or Unimportant.
+Choose Important for messages a person is likely to truly care about later, such as personal correspondence, mission updates from real people, work items, finance, bills, legal, health, travel, deadlines, or anything that may need follow-up.
+Choose Unimportant for noisy login alerts, promotions, newsletters, low-value notifications, routine automated mail, and anything that does not deserve attention later.
 Every processed message must leave the inbox after labeling.
-Urgent or reply-needed messages should still be labeled AI Important, but they must also be archived.
+Urgent or reply-needed messages should still be labeled Important, but they must also be archived.
 
 Use exactly these fields:
 - category: one of [action_required, meeting, reference, newsletter, promotion, receipt, spam]
@@ -222,7 +236,7 @@ Body: {body_preview}
     if suggested_action not in {"archive", "label"}:
         suggested_action = "archive"
 
-    label_name = forced_label or _normalize_cleanup_label(parsed.get("label_name"))
+    label_name = forced_label or canonicalize_importance_label(parsed.get("label_name"))
     if label_name not in {IMPORTANT_LABEL, UNIMPORTANT_LABEL}:
         label_name = IMPORTANT_LABEL if (
             classification.needs_reply
@@ -257,12 +271,12 @@ def classify_new_email_ai_fallback(email: EmailSummary) -> CleanupDecision:
     system_prompt = """
 You are classifying a new email only when hard-coded rules were inconclusive.
 Return a single valid JSON object with no extra text.
-Choose only one of these labels: Rules Important or Rules Unimportant.
-Choose Rules Important for mail that is likely worth revisiting later or that may represent a real personal, work, financial, legal, travel, health, or follow-up matter.
-Choose Rules Unimportant for routine notifications, low-value automated mail, promotions, newsletters, login/security alerts, shopping updates, and general inbox noise.
+Choose only one of these labels: Important or Unimportant.
+Choose Important for mail that is likely worth revisiting later or that may represent a real personal, work, financial, legal, travel, health, or follow-up matter.
+Choose Unimportant for routine notifications, low-value automated mail, promotions, newsletters, login/security alerts, shopping updates, and general inbox noise.
 
 Use exactly these fields:
-- label_name: one of [Rules Important, Rules Unimportant]
+- label_name: one of [Important, Unimportant]
 - reason: short explanation
 """.strip()
 
@@ -277,11 +291,11 @@ Body: {body_preview}
     try:
         parsed, _ = _json_chat_completion(system_prompt, user_prompt)
     except Exception:
-        fallback_label = RULES_IMPORTANT_LABEL if (
+        fallback_label = IMPORTANT_LABEL if (
             "mission" in _text_for_cleanup(email)
             or "meeting" in _text_for_cleanup(email)
             or "deadline" in _text_for_cleanup(email)
-        ) else RULES_UNIMPORTANT_LABEL
+        ) else UNIMPORTANT_LABEL
         return CleanupDecision(
             action="archive",
             label_name=fallback_label,
@@ -289,9 +303,9 @@ Body: {body_preview}
             reason="AI fallback failed, so a conservative backup rule was used.",
         )
 
-    label_name = _normalize_cleanup_label(parsed.get("label_name"))
-    if label_name not in {RULES_IMPORTANT_LABEL, RULES_UNIMPORTANT_LABEL}:
-        label_name = RULES_UNIMPORTANT_LABEL
+    label_name = canonicalize_importance_label(parsed.get("label_name"))
+    if label_name not in {IMPORTANT_LABEL, UNIMPORTANT_LABEL}:
+        label_name = UNIMPORTANT_LABEL
 
     reason = str(parsed.get("reason") or "Used AI fallback because hard-coded rules were inconclusive.")
 

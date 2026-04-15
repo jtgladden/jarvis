@@ -13,6 +13,14 @@ class EmailSummary(BaseModel):
     body: Optional[str] = None
 
 
+class GmailLabel(BaseModel):
+    id: str
+    name: str
+    type: Literal["system", "user"]
+    messages_total: int = 0
+    messages_unread: int = 0
+
+
 class EmailClassification(BaseModel):
     category: Literal[
         "action_required",
@@ -104,3 +112,14 @@ class HandleEmailResponse(BaseModel):
     removed_label: str
     added_label: str
     status: str
+
+
+class EmailUpdateRequest(BaseModel):
+    add_label_names: List[str] = Field(default_factory=list)
+    remove_label_names: List[str] = Field(default_factory=list)
+    archive: Optional[bool] = None
+    unread: Optional[bool] = None
+
+
+class EmailUpdateResponse(BaseModel):
+    email: EmailSummary

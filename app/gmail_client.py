@@ -9,11 +9,17 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
-from app.classifier import IMPORTANT_LABEL, UNIMPORTANT_LABEL
+from app.classifier import IMPORTANT_LABEL, LEGACY_IMPORTANT_LABELS, LEGACY_UNIMPORTANT_LABELS, UNIMPORTANT_LABEL, canonicalize_importance_label
 from app.config import GMAIL_SCOPES, GMAIL_TOKEN_FILE, GMAIL_CREDENTIALS_FILE
-from app.schemas import CleanupDecision, CleanupItem, CleanupResponse, CleanupSummary, EmailClassification, EmailSummary, HandleEmailResponse, RuleDecision, RuleItem, RuleProcessResponse, RuleSummary
+from app.schemas import CleanupDecision, CleanupItem, CleanupResponse, CleanupSummary, EmailClassification, EmailSummary, EmailUpdateResponse, GmailLabel, HandleEmailResponse, RuleDecision, RuleItem, RuleProcessResponse, RuleSummary
 
 REVIEWED_LABEL = "Reviewed"
+ALL_IMPORTANCE_LABEL_NAMES = {
+    IMPORTANT_LABEL,
+    UNIMPORTANT_LABEL,
+    *LEGACY_IMPORTANT_LABELS,
+    *LEGACY_UNIMPORTANT_LABELS,
+}
 
 
 def get_gmail_service():
@@ -84,6 +90,42 @@ def get_label_maps(service) -> tuple[Dict[str, str], Dict[str, str]]:
         name_to_id[label_name] = label_id
 
     return id_to_name, name_to_id
+
+
+def list_gmail_labels() -> List[GmailLabel]:
+    service = get_gmail_service()
+    response = service.users().labels().list(userId="me").execute()
+    labels: List[GmailLabel] = []
+
+    for label in response.get("labels", []):
+        labels.append(
+            GmailLabel(
+                id=label["id"],
+                name=label["name"],
+                type=str(label.get("type", "user")).lower(),
+                messages_total=int(label.get("messagesTotal", 0)),
+                messages_unread=int(label.get("messagesUnread", 0)),
+            )
+        )
+
+    system_order = {
+        "INBOX": 0,
+        "UNREAD": 1,
+        "IMPORTANT": 2,
+        "STARRED": 3,
+        "SENT": 4,
+        "DRAFT": 5,
+        "TRASH": 6,
+        "SPAM": 7,
+    }
+    return sorted(
+        labels,
+        key=lambda label: (
+            0 if label.type == "system" else 1,
+            system_order.get(label.name, 99),
+            label.name.lower(),
+        ),
+    )
 
 
 def _to_email_summary(full_msg: dict, label_id_to_name: Dict[str, str]) -> EmailSummary:
@@ -159,6 +201,46 @@ def _list_inbox_message_ids(service, limit: Optional[int] = None, unread_only: b
     return message_ids
 
 
+def _list_message_ids(
+    service,
+    label_ids: Optional[List[str]] = None,
+    limit: Optional[int] = None,
+) -> List[str]:
+    message_ids: List[str] = []
+    page_token: Optional[str] = None
+
+    while True:
+        remaining = None if limit is None else max(limit - len(message_ids), 0)
+        if remaining == 0:
+            break
+
+        request_size = 100 if remaining is None else min(100, remaining)
+        request = service.users().messages().list(
+            userId="me",
+            maxResults=request_size,
+            pageToken=page_token,
+        )
+        if label_ids:
+            request = service.users().messages().list(
+                userId="me",
+                labelIds=label_ids,
+                maxResults=request_size,
+                pageToken=page_token,
+            )
+
+        response = request.execute()
+        messages = response.get("messages", [])
+        if not messages:
+            break
+
+        message_ids.extend(msg["id"] for msg in messages)
+        page_token = response.get("nextPageToken")
+        if not page_token:
+            break
+
+    return message_ids
+
+
 def get_recent_inbox_emails(max_results: int = 10) -> List[EmailSummary]:
     service = get_gmail_service()
     label_id_to_name, _ = get_label_maps(service)
@@ -207,10 +289,78 @@ def get_emails_by_label(label_name: str, limit: Optional[int] = None) -> List[Em
     return [_fetch_message(service, msg_id, label_id_to_name) for msg_id in message_ids]
 
 
+def get_emails_by_any_label(label_names: List[str], limit: Optional[int] = None) -> List[EmailSummary]:
+    service = get_gmail_service()
+    label_id_to_name, name_to_id = get_label_maps(service)
+    message_ids: List[str] = []
+    seen_ids: set[str] = set()
+
+    for label_name in label_names:
+        label_id = name_to_id.get(label_name)
+        if not label_id:
+            continue
+
+        page_token: Optional[str] = None
+        while True:
+            remaining = None if limit is None else max(limit - len(message_ids), 0)
+            if remaining == 0:
+                return [_fetch_message(service, msg_id, label_id_to_name) for msg_id in message_ids]
+
+            request_size = 100 if remaining is None else min(100, remaining)
+            response = (
+                service.users()
+                .messages()
+                .list(
+                    userId="me",
+                    labelIds=[label_id],
+                    maxResults=request_size,
+                    pageToken=page_token,
+                )
+                .execute()
+            )
+
+            messages = response.get("messages", [])
+            if not messages:
+                break
+
+            for msg in messages:
+                msg_id = msg["id"]
+                if msg_id in seen_ids:
+                    continue
+                seen_ids.add(msg_id)
+                message_ids.append(msg_id)
+                if limit is not None and len(message_ids) >= limit:
+                    return [_fetch_message(service, msg_id, label_id_to_name) for msg_id in message_ids]
+
+            page_token = response.get("nextPageToken")
+            if not page_token:
+                break
+
+    return [_fetch_message(service, msg_id, label_id_to_name) for msg_id in message_ids]
+
+
 def get_all_inbox_emails(limit: Optional[int] = None, page_size: int = 100) -> List[EmailSummary]:
     service = get_gmail_service()
     label_id_to_name, _ = get_label_maps(service)
     message_ids = _list_inbox_message_ids(service, limit=limit, unread_only=False)
+    return [_fetch_message(service, msg_id, label_id_to_name) for msg_id in message_ids]
+
+
+def get_mailbox_emails(mailbox: str = "INBOX", limit: Optional[int] = None) -> List[EmailSummary]:
+    service = get_gmail_service()
+    label_id_to_name, name_to_id = get_label_maps(service)
+
+    normalized_mailbox = (mailbox or "INBOX").strip()
+    label_ids: Optional[List[str]]
+    if normalized_mailbox.upper() == "ALL":
+        label_ids = None
+    else:
+        label_id = name_to_id.get(normalized_mailbox)
+        if not label_id:
+            return []
+        label_ids = [label_id]
+
+    message_ids = _list_message_ids(service, label_ids=label_ids, limit=limit)
     return [_fetch_message(service, msg_id, label_id_to_name) for msg_id in message_ids]
 
 
@@ -271,11 +421,18 @@ def _get_or_create_label_id(service, label_name: str, label_name_to_id: Dict[str
 def _apply_decision(service, item: CleanupItem, label_name_to_id: Dict[str, str]) -> None:
     add_label_ids: List[str] = []
     remove_label_ids: List[str] = []
+    target_label_name = canonicalize_importance_label(item.decision.label_name)
 
-    if item.decision.label_name:
-        label_id = _get_or_create_label_id(service, item.decision.label_name, label_name_to_id)
-        if item.decision.label_name not in item.email.labels:
+    if target_label_name:
+        label_id = _get_or_create_label_id(service, target_label_name, label_name_to_id)
+        if target_label_name not in item.email.labels:
             add_label_ids.append(label_id)
+        for existing_label in item.email.labels:
+            if existing_label == target_label_name or existing_label not in ALL_IMPORTANCE_LABEL_NAMES:
+                continue
+            existing_label_id = label_name_to_id.get(existing_label)
+            if existing_label_id:
+                remove_label_ids.append(existing_label_id)
 
     if item.decision.archive and "INBOX" in item.email.labels:
         remove_label_ids.append("INBOX")
@@ -301,10 +458,17 @@ def _apply_decision(service, item: CleanupItem, label_name_to_id: Dict[str, str]
 def _apply_rule_decision(service, email: EmailSummary, decision: RuleDecision, label_name_to_id: Dict[str, str]) -> None:
     add_label_ids: List[str] = []
     remove_label_ids: List[str] = []
+    target_label_name = canonicalize_importance_label(decision.label_name) or UNIMPORTANT_LABEL
 
-    label_id = _get_or_create_label_id(service, decision.label_name, label_name_to_id)
-    if decision.label_name not in email.labels:
+    label_id = _get_or_create_label_id(service, target_label_name, label_name_to_id)
+    if target_label_name not in email.labels:
         add_label_ids.append(label_id)
+    for existing_label in email.labels:
+        if existing_label == target_label_name or existing_label not in ALL_IMPORTANCE_LABEL_NAMES:
+            continue
+        existing_label_id = label_name_to_id.get(existing_label)
+        if existing_label_id:
+            remove_label_ids.append(existing_label_id)
 
     if decision.archive and "INBOX" in email.labels:
         remove_label_ids.append("INBOX")
@@ -346,9 +510,10 @@ def mark_email_handled(message_id: str) -> HandleEmailResponse:
     if REVIEWED_LABEL not in email.labels:
         add_label_ids.append(reviewed_label_id)
 
-    important_label_id = label_name_to_id.get(IMPORTANT_LABEL)
-    if important_label_id and IMPORTANT_LABEL in email.labels:
-        remove_label_ids.append(important_label_id)
+    for label_name in {IMPORTANT_LABEL, *LEGACY_IMPORTANT_LABELS}:
+        label_id = label_name_to_id.get(label_name)
+        if label_id and label_name in email.labels:
+            remove_label_ids.append(label_id)
 
     if add_label_ids or remove_label_ids:
         (
@@ -373,15 +538,79 @@ def mark_email_handled(message_id: str) -> HandleEmailResponse:
     )
 
 
+def update_email(
+    message_id: str,
+    add_label_names: Optional[List[str]] = None,
+    remove_label_names: Optional[List[str]] = None,
+    archive: Optional[bool] = None,
+    unread: Optional[bool] = None,
+) -> EmailUpdateResponse:
+    service = get_gmail_service()
+    label_id_to_name, label_name_to_id = get_label_maps(service)
+
+    add_label_ids: List[str] = []
+    remove_label_ids: List[str] = []
+
+    for label_name in add_label_names or []:
+        cleaned = " ".join(label_name.split()).strip()
+        if not cleaned:
+            continue
+        label_id = _get_or_create_label_id(service, cleaned, label_name_to_id)
+        add_label_ids.append(label_id)
+
+    for label_name in remove_label_names or []:
+        cleaned = " ".join(label_name.split()).strip()
+        if not cleaned:
+            continue
+        label_id = label_name_to_id.get(cleaned)
+        if label_id:
+            remove_label_ids.append(label_id)
+
+    if archive is True:
+        remove_label_ids.append("INBOX")
+    elif archive is False:
+        add_label_ids.append("INBOX")
+
+    if unread is True:
+        add_label_ids.append("UNREAD")
+    elif unread is False:
+        remove_label_ids.append("UNREAD")
+
+    deduped_add = [label_id for label_id in dict.fromkeys(add_label_ids) if label_id not in remove_label_ids]
+    deduped_remove = list(dict.fromkeys(remove_label_ids))
+
+    if deduped_add or deduped_remove:
+        (
+            service.users()
+            .messages()
+            .modify(
+                userId="me",
+                id=message_id,
+                body={
+                    "addLabelIds": deduped_add,
+                    "removeLabelIds": deduped_remove,
+                },
+            )
+            .execute()
+        )
+
+    updated_email = _fetch_message(service, message_id, label_id_to_name)
+    return EmailUpdateResponse(email=updated_email)
+
+
 def expire_stale_important_emails(days_old: int = 7, limit: int = 200) -> int:
     service = get_gmail_service()
     label_id_to_name, label_name_to_id = get_label_maps(service)
     reviewed_label_id = _get_or_create_label_id(service, REVIEWED_LABEL, label_name_to_id)
-    important_label_id = label_name_to_id.get(IMPORTANT_LABEL)
-    if not important_label_id:
+    important_label_ids = [
+        label_name_to_id[label_name]
+        for label_name in {IMPORTANT_LABEL, *LEGACY_IMPORTANT_LABELS}
+        if label_name in label_name_to_id
+    ]
+    if not important_label_ids:
         return 0
 
-    emails = get_emails_by_label(IMPORTANT_LABEL, limit=limit)
+    emails = get_emails_by_any_label([IMPORTANT_LABEL, *LEGACY_IMPORTANT_LABELS], limit=limit)
     cutoff = datetime.now(timezone.utc) - timedelta(days=days_old)
     updated = 0
 
@@ -412,7 +641,7 @@ def expire_stale_important_emails(days_old: int = 7, limit: int = 200) -> int:
                 id=email.id,
                 body={
                     "addLabelIds": [reviewed_label_id],
-                    "removeLabelIds": [important_label_id],
+                    "removeLabelIds": important_label_ids,
                 },
             )
             .execute()
@@ -502,11 +731,17 @@ def process_new_inbox_emails(
         if decision.matched_rule == "needs_ai_review" and ai_fallback_fn is not None:
             ai_decision = ai_fallback_fn(email)
             decision = RuleDecision(
-                label_name=ai_decision.label_name or UNIMPORTANT_LABEL,
+                label_name=canonicalize_importance_label(ai_decision.label_name) or UNIMPORTANT_LABEL,
                 archive=ai_decision.archive,
                 matched_rule="needs_ai_review",
                 source="ai_fallback",
                 reason=ai_decision.reason,
+            )
+        else:
+            decision = decision.model_copy(
+                update={
+                    "label_name": canonicalize_importance_label(decision.label_name) or UNIMPORTANT_LABEL,
+                }
             )
         item = RuleItem(email=email, decision=decision)
 

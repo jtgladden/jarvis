@@ -1,7 +1,5 @@
+from app.classifier import IMPORTANT_LABEL, UNIMPORTANT_LABEL
 from app.schemas import EmailSummary, RuleDecision
-
-RULE_LABEL_PREFIX = "Rules"
-REVIEW_LABEL = f"{RULE_LABEL_PREFIX} Review"
 
 
 def _email_text(email: EmailSummary) -> str:
@@ -30,7 +28,7 @@ def classify_new_email_rule(email: EmailSummary) -> RuleDecision:
         }
     ):
         return RuleDecision(
-            label_name=f"{RULE_LABEL_PREFIX} Security",
+            label_name=UNIMPORTANT_LABEL,
             archive=True,
             matched_rule="security_alerts",
             reason="Matched a security or login-notification rule.",
@@ -55,7 +53,7 @@ def classify_new_email_rule(email: EmailSummary) -> RuleDecision:
         }
     ):
         return RuleDecision(
-            label_name=f"{RULE_LABEL_PREFIX} Unimportant",
+            label_name=UNIMPORTANT_LABEL,
             archive=True,
             matched_rule="promotions_and_newsletters",
             reason="Matched a promotional or newsletter-style rule.",
@@ -75,7 +73,7 @@ def classify_new_email_rule(email: EmailSummary) -> RuleDecision:
         }
     ):
         return RuleDecision(
-            label_name=f"{RULE_LABEL_PREFIX} Shopping",
+            label_name=UNIMPORTANT_LABEL,
             archive=True,
             matched_rule="shopping_and_receipts",
             reason="Matched an order, shipping, or receipt rule.",
@@ -95,7 +93,7 @@ def classify_new_email_rule(email: EmailSummary) -> RuleDecision:
         }
     ):
         return RuleDecision(
-            label_name=f"{RULE_LABEL_PREFIX} Important",
+            label_name=IMPORTANT_LABEL,
             archive=True,
             matched_rule="finance_and_bills",
             reason="Matched a finance, bill, or payment-related rule.",
@@ -119,14 +117,14 @@ def classify_new_email_rule(email: EmailSummary) -> RuleDecision:
         }
     ):
         return RuleDecision(
-            label_name=f"{RULE_LABEL_PREFIX} Important",
+            label_name=IMPORTANT_LABEL,
             archive=True,
             matched_rule="personal_or_actionable",
             reason="Matched a human-important or follow-up-oriented rule.",
         )
 
     return RuleDecision(
-        label_name=REVIEW_LABEL,
+        label_name=UNIMPORTANT_LABEL,
         archive=True,
         matched_rule="needs_ai_review",
         reason="No hard-coded rule matched, so this email should use the AI fallback.",

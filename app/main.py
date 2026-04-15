@@ -5,11 +5,11 @@ from uuid import uuid4
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.classifier import IMPORTANT_LABEL, classify_cleanup_email, classify_email, classify_new_email_ai_fallback
+from app.classifier import IMPORTANT_LABEL, LEGACY_IMPORTANT_LABELS, classify_cleanup_email, classify_email, classify_new_email_ai_fallback
 from app.config import CORS_ALLOWED_ORIGINS, OPENAI_MAX_EMAILS_PER_RUN
-from app.gmail_client import cleanup_inbox, expire_stale_important_emails, get_all_inbox_emails, get_emails_by_label, get_new_inbox_emails, get_recent_inbox_emails, mark_email_handled, process_new_inbox_emails
+from app.gmail_client import cleanup_inbox, expire_stale_important_emails, get_all_inbox_emails, get_emails_by_any_label, get_mailbox_emails, get_new_inbox_emails, get_recent_inbox_emails, list_gmail_labels, mark_email_handled, process_new_inbox_emails, update_email
 from app.rules import classify_new_email_rule
-from app.schemas import CleanupJobStartResponse, CleanupJobStatus, CleanupResponse, EmailSummary, HandleEmailResponse, RuleProcessResponse
+from app.schemas import CleanupJobStartResponse, CleanupJobStatus, CleanupResponse, EmailSummary, EmailUpdateRequest, EmailUpdateResponse, GmailLabel, HandleEmailResponse, RuleProcessResponse
 
 app = FastAPI(title="Mail AI", version="0.1.0")
 
@@ -126,11 +126,23 @@ def root():
 
 
 @app.get("/emails", response_model=list[EmailSummary])
-def list_emails(limit: int | None = Query(default=None, ge=1)):
+def list_emails(
+    limit: int | None = Query(default=None, ge=1),
+    mailbox: str = Query(default="INBOX"),
+):
+    normalized_mailbox = mailbox.strip() or "INBOX"
+    if normalized_mailbox.upper() != "INBOX":
+        return get_mailbox_emails(mailbox=normalized_mailbox, limit=limit)
+
     if limit is None:
         return get_all_inbox_emails()
 
     return get_recent_inbox_emails(max_results=limit)
+
+
+@app.get("/labels", response_model=list[GmailLabel])
+def list_labels():
+    return list_gmail_labels()
 
 
 @app.get("/classify")
@@ -138,7 +150,7 @@ def classify_emails(limit: int | None = Query(default=None, ge=1)):
     requested_limit = (
         OPENAI_MAX_EMAILS_PER_RUN if limit is None else min(limit, OPENAI_MAX_EMAILS_PER_RUN)
     )
-    emails = get_emails_by_label(IMPORTANT_LABEL, limit=requested_limit)
+    emails = get_emails_by_any_label([IMPORTANT_LABEL, *LEGACY_IMPORTANT_LABELS], limit=requested_limit)
 
     results = []
     for email in emails:
@@ -205,3 +217,14 @@ def apply_new_email_rules(
 @app.post("/emails/{message_id}/handle", response_model=HandleEmailResponse)
 def handle_email(message_id: str):
     return mark_email_handled(message_id)
+
+
+@app.patch("/emails/{message_id}", response_model=EmailUpdateResponse)
+def patch_email(message_id: str, payload: EmailUpdateRequest):
+    return update_email(
+        message_id=message_id,
+        add_label_names=payload.add_label_names,
+        remove_label_names=payload.remove_label_names,
+        archive=payload.archive,
+        unread=payload.unread,
+    )
