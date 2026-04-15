@@ -1,0 +1,33 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: jarvis-api
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      GMAIL_TOKEN_FILE: /data/token.json
+      GMAIL_CREDENTIALS_FILE: /data/credentials.json
+      OPENAI_MAX_EMAILS_PER_RUN: ${OPENAI_MAX_EMAILS_PER_RUN:-50}
+      OPENAI_EMAIL_BODY_PREVIEW_CHARS: ${OPENAI_EMAIL_BODY_PREVIEW_CHARS:-0}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
+    volumes:
+      - ./data:/data
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ./jarvis-ui
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_BASE: ${NEXT_PUBLIC_API_BASE:-http://localhost:8000}
+    container_name: jarvis-web
+    environment:
+      NEXT_PUBLIC_API_BASE: ${NEXT_PUBLIC_API_BASE:-http://localhost:8000}
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+    restart: unless-stopped

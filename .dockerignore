@@ -1,0 +1,12 @@
+.git
+.gitignore
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+node_modules
+jarvis-ui/node_modules
+jarvis-ui/.next
+.DS_Store
+data/token.json
