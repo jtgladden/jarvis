@@ -26,7 +26,14 @@ The dashboard now talks to the backend through same-origin `/api` requests. In D
 4. Put your Gmail OAuth client file at `data/credentials.json`.
 5. Start the stack.
 
-The backend stores the Gmail token at `data/token.json`, so that login persists across container restarts.
+The backend stores its persistent local state in the mounted `data/` folder, including:
+
+- `data/token.json`
+- `data/journal_entries.db`
+- `data/classification_cache.db`
+- `data/classification_guidance.json`
+
+That means Gmail auth, journal entries, saved classification cache, and guidance survive container restarts as long as the `data/` folder is preserved.
 
 ### Important Gmail note
 
