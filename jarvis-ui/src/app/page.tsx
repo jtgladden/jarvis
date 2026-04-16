@@ -1256,7 +1256,16 @@ export default function HomePage() {
     reader.readAsDataURL(file);
   };
 
-  const saveTask = async (taskId: string, payload: Partial<TaskDraft> & { completed?: boolean }) => {
+  const saveTask = async (
+    taskId: string,
+    payload: {
+      title?: string;
+      detail?: string;
+      due_text?: string | null;
+      priority?: "high" | "medium" | "low";
+      completed?: boolean;
+    }
+  ) => {
     setTaskSavingId(taskId);
     setError("");
     try {
