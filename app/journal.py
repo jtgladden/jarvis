@@ -11,19 +11,31 @@ from openai import OpenAI
 
 from app.calendar_client import list_events_between
 from app.config import DEFAULT_TIMEZONE, OPENAI_API_KEY, OPENAI_PLANNING_MAX_TOKENS, OPENAI_PLANNING_MODEL, OPENAI_PLANNING_TIMEOUT_SECONDS
-from app.journal_store import list_journal_entries, upsert_journal_entry
-from app.schemas import CalendarAgendaItem, JournalDayEntry, JournalResponse
+from app.journal_store import list_journal_entries, upsert_journal_entry, upsert_journal_news
+from app.schemas import CalendarAgendaItem, JournalDayEntry, JournalNewsArticle, JournalResponse
 from app.user_context import get_default_user_context
 
 logger = logging.getLogger(__name__)
 client = OpenAI(api_key=OPENAI_API_KEY)
 LOCAL_TIMEZONE = ZoneInfo(DEFAULT_TIMEZONE)
-NEWS_RSS_URL = "https://feeds.bbci.co.uk/news/world/rss.xml"
+NEWS_FEEDS = [
+    ("BBC World", "https://feeds.bbci.co.uk/news/world/rss.xml"),
+    ("New York Times", "https://rss.nytimes.com/services/xml/rss/nyt/World.xml"),
+    ("Wall Street Journal", "https://feeds.a.dj.com/rss/RSSWorldNews.xml"),
+]
 
 
 def _fetch_recent_news() -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for source_name, rss_url in NEWS_FEEDS:
+        items.extend(_fetch_feed_items(source_name, rss_url))
+    items.sort(key=lambda item: item["published_at"], reverse=True)
+    return items
+
+
+def _fetch_feed_items(source_name: str, rss_url: str) -> list[dict[str, Any]]:
     request = Request(
-        NEWS_RSS_URL,
+        rss_url,
         headers={
             "User-Agent": "JarvisJournal/1.0",
             "Accept": "application/rss+xml, application/xml, text/xml;q=0.9, */*;q=0.8",
@@ -52,27 +64,14 @@ def _fetch_recent_news() -> list[dict[str, Any]]:
         items.append(
             {
                 "title": title,
-                "source": "BBC World",
+                "source": source_name,
+                "link": (item.findtext("link") or "").strip() or None,
                 "published_at": published,
                 "day_key": published.date().isoformat(),
             }
         )
 
-    items.sort(key=lambda item: item["published_at"], reverse=True)
     return items
-
-
-def _news_item_for_day(day_key: str, news_items: list[dict[str, Any]]) -> dict[str, str | None]:
-    exact_match = next((item for item in news_items if item["day_key"] == day_key), None)
-    if exact_match:
-        return {
-            "title": exact_match["title"],
-            "source": exact_match["source"],
-        }
-    return {
-        "title": None,
-        "source": None,
-    }
 
 
 def _format_date_label(day: date) -> str:
@@ -142,7 +141,7 @@ def _apply_calendar_overrides(
     return merged
 
 
-def _ai_day_summaries(entries: list[dict]) -> dict[str, dict[str, str]]:
+def _ai_calendar_summaries(entries: list[dict]) -> dict[str, dict[str, str]]:
     if not entries:
         return {}
 
@@ -150,7 +149,6 @@ def _ai_day_summaries(entries: list[dict]) -> dict[str, dict[str, str]]:
         return {
             entry["date"]: {
                 "calendar_summary": _fallback_calendar_summary(entry["calendar_items"]),
-                "world_event_summary": _fallback_world_summary(entry["world_event_title"]),
             }
             for entry in entries
         }
@@ -162,13 +160,12 @@ Return one valid JSON object with this exact shape:
   "items": [
     {
       "date": "YYYY-MM-DD",
-      "calendar_summary": "1-2 sentence summary of what the person did according to calendar items that day",
-      "world_event_summary": "1-2 sentence explanation of the world event headline for that day, or say no headline was captured"
+      "calendar_summary": "1-2 sentence summary of what the person did according to calendar items that day"
     }
   ]
 }
 Be concise, specific, and grounded only in the provided titles/headlines.
-Do not invent details beyond what can reasonably be inferred from the event names and headline.
+Do not invent details beyond what can reasonably be inferred from the event names.
 """.strip()
 
     try:
@@ -188,7 +185,6 @@ Do not invent details beyond what can reasonably be inferred from the event name
       return {
           entry["date"]: {
               "calendar_summary": _fallback_calendar_summary(entry["calendar_items"]),
-              "world_event_summary": _fallback_world_summary(entry["world_event_title"]),
           }
           for entry in entries
       }
@@ -200,7 +196,6 @@ Do not invent details beyond what can reasonably be inferred from the event name
         continue
       summaries[day_key] = {
           "calendar_summary": str((item or {}).get("calendar_summary") or "").strip(),
-          "world_event_summary": str((item or {}).get("world_event_summary") or "").strip(),
       }
 
     for entry in entries:
@@ -208,11 +203,281 @@ Do not invent details beyond what can reasonably be inferred from the event name
           entry["date"],
           {
               "calendar_summary": _fallback_calendar_summary(entry["calendar_items"]),
-              "world_event_summary": _fallback_world_summary(entry["world_event_title"]),
           },
       )
 
     return summaries
+
+
+def _fallback_persisted_world_news(articles: list[dict[str, Any]]) -> dict[str, str | None]:
+    usable_articles = [
+        item
+        for item in articles
+        if str(item.get("title") or "").strip()
+    ]
+    if not usable_articles:
+        return {
+            "world_event_title": None,
+            "world_event_summary": "No world headline was captured for this day.",
+            "world_event_source": None,
+        }
+
+    top_titles = [str(item["title"]).strip() for item in usable_articles[:3]]
+    unique_sources: list[str] = []
+    for item in usable_articles:
+        source_name = str(item.get("source") or "").strip()
+        if source_name and source_name not in unique_sources:
+            unique_sources.append(source_name)
+
+    return {
+        "world_event_title": top_titles[0],
+        "world_event_summary": f"Major coverage centered on {', '.join(top_titles[:2])}.",
+        "world_event_source": ", ".join(unique_sources[:3]) or None,
+    }
+
+
+def _serialize_news_articles(news_items: list[dict[str, Any]]) -> str:
+    payload = [
+        {
+            "title": str(item.get("title") or "").strip(),
+            "source": str(item.get("source") or "").strip() or None,
+            "link": str(item.get("link") or "").strip() or None,
+            "published_at": item.get("published_at").isoformat()
+            if isinstance(item.get("published_at"), datetime)
+            else item.get("published_at"),
+        }
+        for item in news_items
+        if str(item.get("title") or "").strip()
+    ]
+    return json.dumps(payload, ensure_ascii=True)
+
+
+def _parse_news_articles(saved_payload: str | None) -> list[dict[str, str | None]]:
+    if not saved_payload:
+        return []
+    try:
+        parsed = json.loads(saved_payload)
+    except Exception:
+        return []
+
+    articles: list[dict[str, str | None]] = []
+    for item in parsed or []:
+        title = str((item or {}).get("title") or "").strip()
+        if not title:
+            continue
+        articles.append(
+            {
+                "title": title,
+                "source": str((item or {}).get("source") or "").strip() or None,
+                "link": str((item or {}).get("link") or "").strip() or None,
+                "published_at": str((item or {}).get("published_at") or "").strip() or None,
+            }
+        )
+    return articles
+
+
+def _merge_saved_articles_with_feed(
+    saved_articles: list[dict[str, str | None]],
+    feed_articles: list[dict[str, Any]],
+) -> list[dict[str, str | None]]:
+    if not saved_articles:
+        return [
+            {
+                "title": str(item.get("title") or "").strip(),
+                "source": str(item.get("source") or "").strip() or None,
+                "link": str(item.get("link") or "").strip() or None,
+                "published_at": item.get("published_at").isoformat()
+                if isinstance(item.get("published_at"), datetime)
+                else str(item.get("published_at") or "").strip() or None,
+            }
+            for item in feed_articles
+            if str(item.get("title") or "").strip()
+        ]
+
+    feed_lookup = {
+        (
+            str(item.get("title") or "").strip().lower(),
+            str(item.get("source") or "").strip().lower(),
+        ): item
+        for item in feed_articles
+        if str(item.get("title") or "").strip()
+    }
+    merged: list[dict[str, str | None]] = []
+    changed = False
+
+    for article in saved_articles:
+        title = str(article.get("title") or "").strip()
+        source = str(article.get("source") or "").strip()
+        existing_link = str(article.get("link") or "").strip() or None
+        feed_match = feed_lookup.get((title.lower(), source.lower()))
+        merged_link = existing_link or (
+            str(feed_match.get("link") or "").strip() or None if feed_match else None
+        )
+        if merged_link != existing_link:
+            changed = True
+        merged.append(
+            {
+                "title": title,
+                "source": source or None,
+                "link": merged_link,
+                "published_at": str(article.get("published_at") or "").strip() or None,
+            }
+        )
+
+    return merged if changed else saved_articles
+
+
+def _ai_world_news_summaries(entries: list[dict[str, Any]]) -> dict[str, dict[str, str | None]]:
+    if not entries:
+        return {}
+
+    if not OPENAI_API_KEY:
+        return {
+            entry["date"]: _fallback_persisted_world_news(entry["articles"])
+            for entry in entries
+        }
+
+    system_prompt = """
+You are writing a short historical world-news summary for a personal journal.
+Return one valid JSON object with this exact shape:
+{
+  "items": [
+    {
+      "date": "YYYY-MM-DD",
+      "world_event_title": "short representative headline for the day's world event coverage",
+      "world_event_summary": "1-3 sentence summary synthesizing the provided articles",
+      "world_event_source": "comma-separated sources represented in the summary"
+    }
+  ]
+}
+Use only the provided article titles and sources. Do not invent details beyond what can be reasonably inferred.
+Prefer a broad event summary rather than repeating one title word-for-word.
+""".strip()
+
+    try:
+        response = client.with_options(timeout=OPENAI_PLANNING_TIMEOUT_SECONDS).chat.completions.create(
+            model=OPENAI_PLANNING_MODEL,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {
+                    "role": "user",
+                    "content": json.dumps({"days": entries}, ensure_ascii=True),
+                },
+            ],
+            temperature=0.2,
+            max_tokens=min(OPENAI_PLANNING_MAX_TOKENS, 1400),
+            response_format={"type": "json_object"},
+        )
+        parsed = json.loads(response.choices[0].message.content or "{}")
+    except Exception as exc:
+        logger.warning("Journal world news summary failed: %s", exc)
+        return {
+            entry["date"]: _fallback_persisted_world_news(entry["articles"])
+            for entry in entries
+        }
+
+    summaries: dict[str, dict[str, str | None]] = {}
+    for item in parsed.get("items") or []:
+        day_key = str((item or {}).get("date") or "").strip()
+        if not day_key:
+            continue
+        summaries[day_key] = {
+            "world_event_title": str((item or {}).get("world_event_title") or "").strip() or None,
+            "world_event_summary": str((item or {}).get("world_event_summary") or "").strip()
+            or "No world headline was captured for this day.",
+            "world_event_source": str((item or {}).get("world_event_source") or "").strip() or None,
+        }
+
+    for entry in entries:
+        summaries.setdefault(
+            entry["date"],
+            _fallback_persisted_world_news(entry["articles"]),
+        )
+
+    return summaries
+
+
+def _ensure_persisted_world_news(
+    saved_entries: dict[str, dict[str, str | None]],
+    day_keys: list[str],
+    today_local: date,
+    user_id: str,
+) -> dict[str, dict[str, str | None]]:
+    try:
+        news_items = _fetch_recent_news()
+    except Exception as exc:
+        logger.warning("Journal news fetch failed: %s", exc)
+        return saved_entries
+
+    for day_key in day_keys:
+        existing_articles = _parse_news_articles(
+            saved_entries.get(day_key, {}).get("news_articles_json")
+        )
+        matching_articles = [item for item in news_items if item["day_key"] == day_key][:8]
+        if not matching_articles and existing_articles:
+            continue
+        if not matching_articles and not existing_articles:
+            continue
+
+        merged_articles = _merge_saved_articles_with_feed(existing_articles, matching_articles)
+        existing_payload = saved_entries.get(day_key, {}).get("news_articles_json") or "[]"
+        merged_payload = json.dumps(merged_articles, ensure_ascii=True)
+        if existing_articles and merged_payload == existing_payload:
+            continue
+
+        current_entry = saved_entries.get(day_key, {})
+        persisted = upsert_journal_news(
+            entry_date=day_key,
+            world_event_title=current_entry.get("world_event_title"),
+            world_event_summary=str(current_entry.get("world_event_summary") or "").strip(),
+            world_event_source=current_entry.get("world_event_source"),
+            news_articles_json=merged_payload if existing_articles else _serialize_news_articles(matching_articles),
+            user_id=user_id,
+        )
+        saved_entries.setdefault(day_key, {}).update(persisted)
+
+    completed_days = [
+        day_key
+        for day_key in day_keys
+        if date.fromisoformat(day_key) < today_local
+    ]
+    missing_days = [
+        day_key
+        for day_key in completed_days
+        if not str(saved_entries.get(day_key, {}).get("world_event_summary") or "").strip()
+    ]
+    if not missing_days:
+        return saved_entries
+
+    entries = []
+    for day_key in missing_days:
+        matching_articles = _parse_news_articles(
+            saved_entries.get(day_key, {}).get("news_articles_json")
+        )[:6]
+        entries.append({"date": day_key, "articles": matching_articles})
+
+    summaries = _ai_world_news_summaries(entries)
+    for day_key in missing_days:
+        summary = summaries.get(
+            day_key,
+            {
+                "world_event_title": None,
+                "world_event_summary": "No world headline was captured for this day.",
+                "world_event_source": None,
+            },
+        )
+        persisted = upsert_journal_news(
+            entry_date=day_key,
+            world_event_title=summary.get("world_event_title"),
+            world_event_summary=str(summary.get("world_event_summary") or "").strip()
+            or "No world headline was captured for this day.",
+            world_event_source=summary.get("world_event_source"),
+            news_articles_json=saved_entries.get(day_key, {}).get("news_articles_json") or "[]",
+            user_id=user_id,
+        )
+        saved_entries.setdefault(day_key, {}).update(persisted)
+
+    return saved_entries
 
 
 def _fallback_calendar_summary(calendar_items: list[dict]) -> str:
@@ -224,12 +489,6 @@ def _fallback_calendar_summary(calendar_items: list[dict]) -> str:
         f"Your day included {calendar_items[0]['title']} and {len(calendar_items) - 1} "
         f"other scheduled item{'s' if len(calendar_items) - 1 != 1 else ''}."
     )
-
-
-def _fallback_world_summary(world_event_title: str | None) -> str:
-    if not world_event_title:
-        return "No world headline was captured for this day."
-    return f"One major headline that day was: {world_event_title}"
 
 
 def get_journal(days: int = 7) -> JournalResponse:
@@ -249,21 +508,28 @@ def get_journal(days: int = 7) -> JournalResponse:
         day_key = (item.start or "")[:10]
         events_by_day.setdefault(day_key, []).append(item)
 
-    try:
-        news_items = _fetch_recent_news()
-    except Exception as exc:
-        logger.warning("Journal news fetch failed: %s", exc)
-        news_items = []
-
     saved_entries = list_journal_entries(user_id=user_id)
+    day_keys = [
+        (today_local - timedelta(days=offset)).isoformat()
+        for offset in range(clamped_days)
+    ]
+    try:
+        saved_entries = _ensure_persisted_world_news(
+            saved_entries=saved_entries,
+            day_keys=day_keys,
+            today_local=today_local,
+            user_id=user_id,
+        )
+    except Exception as exc:
+        logger.warning("Journal news persistence failed: %s", exc)
     base_entries: list[dict] = []
     day = today_local
     while day >= start_day:
         day_key = day.isoformat()
-        news_item = _news_item_for_day(day_key, news_items)
+        saved = saved_entries.get(day_key, {})
         calendar_items = _apply_calendar_overrides(
             events_by_day.get(day_key, []),
-            saved_entries.get(day_key, {}).get("calendar_items_json"),
+            saved.get("calendar_items_json"),
         )
         base_entries.append(
             {
@@ -271,13 +537,16 @@ def get_journal(days: int = 7) -> JournalResponse:
                 "date_label": _format_date_label(day),
                 "calendar_items": [_calendar_payload_for_day(item) for item in calendar_items if not item.removed],
                 "calendar_items_full": calendar_items,
-                "world_event_title": news_item.get("title"),
-                "world_event_source": news_item.get("source"),
+                "world_event_title": saved.get("world_event_title"),
+                "world_event_source": saved.get("world_event_source"),
+                "world_event_summary": str(saved.get("world_event_summary") or "").strip()
+                or "No world headline was captured for this day.",
+                "world_event_articles": _parse_news_articles(saved.get("news_articles_json")),
             }
         )
         day -= timedelta(days=1)
 
-    ai_summaries = _ai_day_summaries(base_entries)
+    ai_summaries = _ai_calendar_summaries(base_entries)
     entries: list[JournalDayEntry] = []
     for entry in base_entries:
         saved = saved_entries.get(entry["date"], {})
@@ -289,7 +558,11 @@ def get_journal(days: int = 7) -> JournalResponse:
                 calendar_summary=summaries.get("calendar_summary") or _fallback_calendar_summary(entry["calendar_items"]),
                 world_event_title=entry["world_event_title"],
                 world_event_source=entry["world_event_source"],
-                world_event_summary=summaries.get("world_event_summary") or _fallback_world_summary(entry["world_event_title"]),
+                world_event_summary=entry["world_event_summary"],
+                world_event_articles=[
+                    JournalNewsArticle.model_validate(article)
+                    for article in entry["world_event_articles"][:6]
+                ],
                 journal_entry=str(saved.get("journal_entry") or ""),
                 accomplishments=str(saved.get("accomplishments") or ""),
                 gratitude_entry=str(saved.get("gratitude_entry") or ""),
@@ -331,6 +604,7 @@ def save_journal_day(
         accomplishments=saved["accomplishments"],
         gratitude_entry=saved["gratitude_entry"],
         photo_data_url=saved.get("photo_data_url"),
+        world_event_articles=[],
         calendar_items=[CalendarAgendaItem.model_validate(item) for item in json.loads(saved["calendar_items_json"] or "[]")],
         updated_at=saved["updated_at"],
     )

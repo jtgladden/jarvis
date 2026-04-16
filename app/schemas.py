@@ -347,6 +347,13 @@ class JournalDayNoteUpdateRequest(BaseModel):
     calendar_items: List[CalendarAgendaItem] = Field(default_factory=list)
 
 
+class JournalNewsArticle(BaseModel):
+    title: str
+    source: Optional[str] = None
+    link: Optional[str] = None
+    published_at: Optional[str] = None
+
+
 class JournalDayEntry(BaseModel):
     date: str
     date_label: str
@@ -354,6 +361,7 @@ class JournalDayEntry(BaseModel):
     world_event_title: Optional[str] = None
     world_event_summary: str = ""
     world_event_source: Optional[str] = None
+    world_event_articles: List[JournalNewsArticle] = Field(default_factory=list)
     journal_entry: str = ""
     accomplishments: str = ""
     gratitude_entry: str = ""

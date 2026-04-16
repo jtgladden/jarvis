@@ -463,6 +463,12 @@ type JournalDayEntry = {
   world_event_title?: string | null;
   world_event_summary: string;
   world_event_source?: string | null;
+  world_event_articles: Array<{
+    title: string;
+    source?: string | null;
+    link?: string | null;
+    published_at?: string | null;
+  }>;
   journal_entry: string;
   accomplishments: string;
   gratitude_entry: string;
@@ -482,6 +488,11 @@ type JournalDraft = {
   gratitude_entry: string;
   photo_data_url?: string | null;
   calendar_items: CalendarAgendaItem[];
+};
+
+type JournalSectionState = {
+  calendarOpen: boolean;
+  articlesOpen: boolean;
 };
 
 type AgendaDayGroup = {
@@ -743,6 +754,7 @@ export default function HomePage() {
   const [dashboard, setDashboard] = useState<DashboardResponse | null>(null);
   const [journal, setJournal] = useState<JournalResponse | null>(null);
   const [journalDrafts, setJournalDrafts] = useState<Record<string, JournalDraft>>({});
+  const [journalSectionState, setJournalSectionState] = useState<Record<string, JournalSectionState>>({});
   const [journalSavingDate, setJournalSavingDate] = useState<string | null>(null);
   const [classifiedBucket] = useState<"all" | "important" | "unimportant">("all");
   const [overview, setOverview] = useState<ClassificationOverview | null>(null);
@@ -1039,6 +1051,20 @@ export default function HomePage() {
     const draft = journalDrafts[entryDate];
     if (!draft) return;
     await persistJournalDraft(entryDate, draft);
+  };
+
+  const toggleJournalSection = (
+    entryDate: string,
+    key: keyof JournalSectionState
+  ) => {
+    setJournalSectionState((current) => ({
+      ...current,
+      [entryDate]: {
+        calendarOpen: current[entryDate]?.calendarOpen ?? false,
+        articlesOpen: current[entryDate]?.articlesOpen ?? false,
+        [key]: !(current[entryDate]?.[key] ?? false),
+      },
+    }));
   };
 
   const handleJournalPhotoChange = async (
@@ -2415,6 +2441,10 @@ export default function HomePage() {
                   photo_data_url: entry.photo_data_url || null,
                   calendar_items: entry.calendar_items || [],
                 };
+                const sectionState = journalSectionState[entry.date] || {
+                  calendarOpen: false,
+                  articlesOpen: false,
+                };
 
                 return (
                   <Card
@@ -2440,127 +2470,148 @@ export default function HomePage() {
                       </div>
                     </CardHeader>
                     <CardContent className="space-y-5">
-                      <div className="grid gap-4 lg:grid-cols-2">
+                      <div className="grid items-start gap-4 lg:grid-cols-2">
                         <div className="rounded-[1.6rem] border border-white/6 bg-[rgba(35,37,58,0.7)] p-4">
-                          <div className="flex items-center justify-between gap-3">
-                            <div className="text-xs uppercase tracking-wide text-slate-400">
-                              What your calendar says you did
-                            </div>
-                            <Badge variant="outline" className="rounded-xl">
-                              {draft.calendar_items.filter((item) => !item.removed).length} kept
-                            </Badge>
-                          </div>
-                          <div className="mt-3 text-sm leading-6 text-slate-200">
-                            {entry.calendar_summary}
-                          </div>
-                          <div className="mt-4 space-y-3">
-                            <div className="flex justify-end">
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                className="rounded-xl"
-                                onClick={() =>
-                                  void updateJournalCalendarItems(
-                                    entry.date,
-                                    (items) => [
-                                      ...items,
-                                      {
-                                        event_id: `custom-${entry.date}-${items.length}`,
-                                        title: "",
-                                        start: entry.date,
-                                        end: null,
-                                        is_all_day: true,
-                                        location: null,
-                                        description: null,
-                                        html_link: null,
-                                        removed: false,
-                                      },
-                                    ]
-                                  )
-                                }
+                          <button
+                            type="button"
+                            onClick={() => toggleJournalSection(entry.date, "calendarOpen")}
+                            className="flex w-full items-center justify-between gap-3 text-left"
+                          >
+                            <div>
+                              <div className="text-xs uppercase tracking-wide text-slate-400">
+                                What your calendar says you did
+                              </div>
+                              <div
+                                className={`mt-2 text-slate-200 ${
+                                  sectionState.calendarOpen
+                                    ? "text-sm leading-6"
+                                    : "line-clamp-1 text-xs leading-5 text-slate-300"
+                                }`}
                               >
-                                <Plus className="mr-2 h-4 w-4" />
-                                Add something
-                              </Button>
+                                {entry.calendar_summary}
+                              </div>
                             </div>
-                            {draft.calendar_items.length ? (
-                              draft.calendar_items.map((item, itemIndex) => (
-                                <div
-                                  key={`${item.event_id}-${itemIndex}`}
-                                  className={`rounded-[1rem] border px-3 py-3 text-sm transition ${
-                                    item.removed
-                                      ? "border-dashed border-white/10 bg-[rgba(20,22,37,0.4)] text-slate-500"
-                                      : "border-cyan-300/20 bg-[linear-gradient(135deg,rgba(56,189,248,0.12),rgba(20,22,37,0.88))] text-slate-200 shadow-[0_6px_18px_rgba(8,10,20,0.14)]"
-                                  }`}
+                            <div className="flex items-center gap-2">
+                              <Badge variant="outline" className="rounded-xl">
+                                {draft.calendar_items.filter((item) => !item.removed).length} kept
+                              </Badge>
+                              {sectionState.calendarOpen ? (
+                                <ChevronDown className="h-4 w-4 text-slate-400" />
+                              ) : (
+                                <ChevronRight className="h-4 w-4 text-slate-400" />
+                              )}
+                            </div>
+                          </button>
+                          {sectionState.calendarOpen ? (
+                            <div className="mt-4 space-y-3">
+                              <div className="flex justify-end">
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="rounded-xl"
+                                  onClick={() =>
+                                    void updateJournalCalendarItems(
+                                      entry.date,
+                                      (items) => [
+                                        ...items,
+                                        {
+                                          event_id: `custom-${entry.date}-${items.length}`,
+                                          title: "",
+                                          start: entry.date,
+                                          end: null,
+                                          is_all_day: true,
+                                          location: null,
+                                          description: null,
+                                          html_link: null,
+                                          removed: false,
+                                        },
+                                      ]
+                                    )
+                                  }
                                 >
-                                  <div className="space-y-2">
-                                    <div className="flex items-start justify-between gap-3">
-                                      <div className="min-w-0 flex-1">
-                                        <Input
-                                          value={item.title}
-                                          onChange={(e) =>
-                                            setJournalDrafts((current) => {
-                                              const currentDraft = current[entry.date] || draft;
-                                              return {
-                                                ...current,
-                                                [entry.date]: {
-                                                  ...currentDraft,
-                                                  calendar_items: currentDraft.calendar_items.map((currentItem, currentIndex) =>
-                                                  currentIndex === itemIndex
-                                                    ? { ...currentItem, title: e.target.value }
-                                                    : currentItem
-                                                  ),
-                                                },
-                                              };
-                                            })
-                                          }
-                                          className="h-9 rounded-xl"
-                                          placeholder="What you actually did"
-                                        />
-                                        <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
-                                          <span
-                                            className={`inline-flex items-center rounded-full px-2.5 py-1 ${
-                                              item.removed
-                                                ? "border border-white/10 bg-[rgba(255,255,255,0.04)] text-slate-500"
-                                                : "border border-cyan-300/20 bg-cyan-300/10 text-cyan-100"
-                                            }`}
-                                          >
-                                            {formatScheduleTimeRange(item)}
-                                          </span>
-                                          {item.removed ? (
-                                            <span className="text-slate-500">Marked as not done</span>
-                                          ) : null}
+                                  <Plus className="mr-2 h-4 w-4" />
+                                  Add something
+                                </Button>
+                              </div>
+                              {draft.calendar_items.length ? (
+                                draft.calendar_items.map((item, itemIndex) => (
+                                  <div
+                                    key={`${item.event_id}-${itemIndex}`}
+                                    className={`rounded-[1rem] border px-3 py-3 text-sm transition ${
+                                      item.removed
+                                        ? "border-dashed border-white/10 bg-[rgba(20,22,37,0.4)] text-slate-500"
+                                        : "border-cyan-300/20 bg-[linear-gradient(135deg,rgba(56,189,248,0.12),rgba(20,22,37,0.88))] text-slate-200 shadow-[0_6px_18px_rgba(8,10,20,0.14)]"
+                                    }`}
+                                  >
+                                    <div className="space-y-2">
+                                      <div className="flex items-start justify-between gap-3">
+                                        <div className="min-w-0 flex-1">
+                                          <Input
+                                            value={item.title}
+                                            onChange={(e) =>
+                                              setJournalDrafts((current) => {
+                                                const currentDraft = current[entry.date] || draft;
+                                                return {
+                                                  ...current,
+                                                  [entry.date]: {
+                                                    ...currentDraft,
+                                                    calendar_items: currentDraft.calendar_items.map((currentItem, currentIndex) =>
+                                                    currentIndex === itemIndex
+                                                      ? { ...currentItem, title: e.target.value }
+                                                      : currentItem
+                                                    ),
+                                                  },
+                                                };
+                                              })
+                                            }
+                                            className="h-9 rounded-xl"
+                                            placeholder="What you actually did"
+                                          />
+                                          <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                                            <span
+                                              className={`inline-flex items-center rounded-full px-2.5 py-1 ${
+                                                item.removed
+                                                  ? "border border-white/10 bg-[rgba(255,255,255,0.04)] text-slate-500"
+                                                  : "border border-cyan-300/20 bg-cyan-300/10 text-cyan-100"
+                                              }`}
+                                            >
+                                              {formatScheduleTimeRange(item)}
+                                            </span>
+                                            {item.removed ? (
+                                              <span className="text-slate-500">Marked as not done</span>
+                                            ) : null}
+                                          </div>
                                         </div>
+                                        <Button
+                                          size="sm"
+                                          variant="outline"
+                                          className="rounded-xl"
+                                          onClick={() =>
+                                            void updateJournalCalendarItems(
+                                              entry.date,
+                                              (items) =>
+                                                items.map((currentItem, currentIndex) =>
+                                                  currentIndex === itemIndex
+                                                    ? { ...currentItem, removed: !currentItem.removed }
+                                                    : currentItem
+                                                ),
+                                              true
+                                            )
+                                          }
+                                        >
+                                          {item.removed ? "Restore" : "Remove"}
+                                        </Button>
                                       </div>
-                                      <Button
-                                        size="sm"
-                                        variant="outline"
-                                        className="rounded-xl"
-                                        onClick={() =>
-                                          void updateJournalCalendarItems(
-                                            entry.date,
-                                            (items) =>
-                                              items.map((currentItem, currentIndex) =>
-                                                currentIndex === itemIndex
-                                                  ? { ...currentItem, removed: !currentItem.removed }
-                                                  : currentItem
-                                              ),
-                                            true
-                                          )
-                                        }
-                                      >
-                                        {item.removed ? "Restore" : "Remove"}
-                                      </Button>
                                     </div>
                                   </div>
+                                ))
+                              ) : (
+                                <div className="text-sm text-slate-400">
+                                  No calendar events were captured for this day.
                                 </div>
-                              ))
-                            ) : (
-                              <div className="text-sm text-slate-400">
-                                No calendar events were captured for this day.
-                              </div>
-                            )}
-                          </div>
+                              )}
+                            </div>
+                          ) : null}
                         </div>
 
                         <div className="space-y-4">
@@ -2577,6 +2628,59 @@ export default function HomePage() {
                             <div className="mt-3 text-sm leading-6 text-slate-200">
                               {entry.world_event_summary}
                             </div>
+                            {entry.world_event_articles?.length ? (
+                              <div className="mt-4">
+                                <button
+                                  type="button"
+                                  onClick={() => toggleJournalSection(entry.date, "articlesOpen")}
+                                  className="flex w-full items-center justify-between gap-3 text-left"
+                                >
+                                  <div className="text-xs uppercase tracking-wide text-slate-400">
+                                    Referenced articles
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                    <Badge variant="outline" className="rounded-xl">
+                                      {entry.world_event_articles.length}
+                                    </Badge>
+                                    {sectionState.articlesOpen ? (
+                                      <ChevronDown className="h-4 w-4 text-slate-400" />
+                                    ) : (
+                                      <ChevronRight className="h-4 w-4 text-slate-400" />
+                                    )}
+                                  </div>
+                                </button>
+                                {sectionState.articlesOpen ? (
+                                  <div className="mt-3 space-y-2">
+                                    {entry.world_event_articles.map((article, index) => (
+                                      article.link ? (
+                                        <a
+                                          key={`${article.title}-${index}`}
+                                          href={article.link}
+                                          target="_blank"
+                                          rel="noreferrer"
+                                          className="block w-full rounded-[1rem] border border-white/6 bg-[rgba(20,22,37,0.82)] px-3 py-2 text-left transition hover:border-cyan-300/30 hover:bg-[rgba(32,35,57,0.96)]"
+                                        >
+                                          <div className="text-sm text-slate-100">{article.title}</div>
+                                          <div className="mt-1 text-xs text-slate-400">
+                                            {article.source || "Article"}
+                                          </div>
+                                        </a>
+                                      ) : (
+                                        <div
+                                          key={`${article.title}-${index}`}
+                                          className="rounded-[1rem] border border-white/6 bg-[rgba(20,22,37,0.82)] px-3 py-2"
+                                        >
+                                          <div className="text-sm text-slate-100">{article.title}</div>
+                                          <div className="mt-1 text-xs text-slate-400">
+                                            {article.source || "Article"}
+                                          </div>
+                                        </div>
+                                      )
+                                    ))}
+                                  </div>
+                                ) : null}
+                              </div>
+                            ) : null}
                           </div>
 
                           <div className="rounded-[1.6rem] border border-white/6 bg-[rgba(35,37,58,0.7)] p-4">

@@ -33,6 +33,11 @@ def _ensure_journal_schema(connection: sqlite3.Connection) -> None:
             accomplishments TEXT NOT NULL DEFAULT '',
             gratitude_entry TEXT NOT NULL DEFAULT '',
             photo_data_url TEXT,
+            world_event_title TEXT,
+            world_event_summary TEXT NOT NULL DEFAULT '',
+            world_event_source TEXT,
+            news_articles_json TEXT NOT NULL DEFAULT '[]',
+            news_updated_at TEXT,
             calendar_items_json TEXT NOT NULL DEFAULT '[]',
             updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY (user_id, entry_date)
@@ -52,6 +57,20 @@ def _ensure_journal_columns(connection: sqlite3.Connection) -> None:
         )
     if "photo_data_url" not in columns:
         connection.execute("ALTER TABLE journal_entries ADD COLUMN photo_data_url TEXT")
+    if "world_event_title" not in columns:
+        connection.execute("ALTER TABLE journal_entries ADD COLUMN world_event_title TEXT")
+    if "world_event_summary" not in columns:
+        connection.execute(
+            "ALTER TABLE journal_entries ADD COLUMN world_event_summary TEXT NOT NULL DEFAULT ''"
+        )
+    if "world_event_source" not in columns:
+        connection.execute("ALTER TABLE journal_entries ADD COLUMN world_event_source TEXT")
+    if "news_articles_json" not in columns:
+        connection.execute(
+            "ALTER TABLE journal_entries ADD COLUMN news_articles_json TEXT NOT NULL DEFAULT '[]'"
+        )
+    if "news_updated_at" not in columns:
+        connection.execute("ALTER TABLE journal_entries ADD COLUMN news_updated_at TEXT")
 
 
 def _needs_legacy_migration(connection: sqlite3.Connection) -> bool:
@@ -82,12 +101,22 @@ def _migrate_legacy_journal_table(connection: sqlite3.Connection) -> None:
     has_calendar_items = "calendar_items_json" in legacy_columns
     has_gratitude_entry = "gratitude_entry" in legacy_columns
     has_photo_data_url = "photo_data_url" in legacy_columns
+    has_world_event_title = "world_event_title" in legacy_columns
+    has_world_event_summary = "world_event_summary" in legacy_columns
+    has_world_event_source = "world_event_source" in legacy_columns
+    has_news_articles_json = "news_articles_json" in legacy_columns
+    has_news_updated_at = "news_updated_at" in legacy_columns
 
     select_sql = (
         """
         SELECT entry_date, journal_entry, accomplishments,
                {gratitude_entry} AS gratitude_entry,
                {photo_data_url} AS photo_data_url,
+               {world_event_title} AS world_event_title,
+               {world_event_summary} AS world_event_summary,
+               {world_event_source} AS world_event_source,
+               {news_articles_json} AS news_articles_json,
+               {news_updated_at} AS news_updated_at,
                {calendar_items_json} AS calendar_items_json,
                updated_at
         FROM journal_entries_legacy
@@ -95,6 +124,11 @@ def _migrate_legacy_journal_table(connection: sqlite3.Connection) -> None:
     ).format(
         gratitude_entry="gratitude_entry" if has_gratitude_entry else "''",
         photo_data_url="photo_data_url" if has_photo_data_url else "NULL",
+        world_event_title="world_event_title" if has_world_event_title else "NULL",
+        world_event_summary="world_event_summary" if has_world_event_summary else "''",
+        world_event_source="world_event_source" if has_world_event_source else "NULL",
+        news_articles_json="news_articles_json" if has_news_articles_json else "'[]'",
+        news_updated_at="news_updated_at" if has_news_updated_at else "NULL",
         calendar_items_json="calendar_items_json" if has_calendar_items else "'[]'",
     )
 
@@ -104,9 +138,10 @@ def _migrate_legacy_journal_table(connection: sqlite3.Connection) -> None:
             """
             INSERT OR REPLACE INTO journal_entries (
                 user_id, entry_date, journal_entry, accomplishments, gratitude_entry,
-                photo_data_url, calendar_items_json, updated_at
+                photo_data_url, world_event_title, world_event_summary, world_event_source,
+                news_articles_json, news_updated_at, calendar_items_json, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 APP_DEFAULT_USER_ID,
@@ -115,6 +150,11 @@ def _migrate_legacy_journal_table(connection: sqlite3.Connection) -> None:
                 row["accomplishments"],
                 row["gratitude_entry"] or "",
                 row["photo_data_url"],
+                row["world_event_title"],
+                row["world_event_summary"] or "",
+                row["world_event_source"],
+                row["news_articles_json"] or "[]",
+                row["news_updated_at"],
                 row["calendar_items_json"] or "[]",
                 row["updated_at"],
             ),
@@ -135,10 +175,13 @@ def init_journal_store() -> None:
 
 def list_journal_entries(user_id: str = APP_DEFAULT_USER_ID) -> dict[str, dict[str, str | None]]:
     with _db_lock, closing(_connect()) as connection:
+        _ensure_journal_schema(connection)
+        _ensure_journal_columns(connection)
         rows = connection.execute(
             """
             SELECT entry_date, journal_entry, accomplishments, gratitude_entry,
-                   photo_data_url, calendar_items_json, updated_at
+                   photo_data_url, world_event_title, world_event_summary, world_event_source,
+                   news_articles_json, news_updated_at, calendar_items_json, updated_at
             FROM journal_entries
             WHERE user_id = ?
             """,
@@ -151,6 +194,11 @@ def list_journal_entries(user_id: str = APP_DEFAULT_USER_ID) -> dict[str, dict[s
             "accomplishments": row["accomplishments"],
             "gratitude_entry": row["gratitude_entry"],
             "photo_data_url": row["photo_data_url"],
+            "world_event_title": row["world_event_title"],
+            "world_event_summary": row["world_event_summary"],
+            "world_event_source": row["world_event_source"],
+            "news_articles_json": row["news_articles_json"],
+            "news_updated_at": row["news_updated_at"],
             "calendar_items_json": row["calendar_items_json"],
             "updated_at": row["updated_at"],
         }
@@ -168,6 +216,8 @@ def upsert_journal_entry(
     user_id: str = APP_DEFAULT_USER_ID,
 ) -> dict[str, str]:
     with _db_lock, closing(_connect()) as connection:
+        _ensure_journal_schema(connection)
+        _ensure_journal_columns(connection)
         connection.execute(
             """
             INSERT INTO journal_entries (
@@ -196,7 +246,8 @@ def upsert_journal_entry(
         row = connection.execute(
             """
             SELECT entry_date, journal_entry, accomplishments, gratitude_entry,
-                   photo_data_url, calendar_items_json, updated_at
+                   photo_data_url, world_event_title, world_event_summary, world_event_source,
+                   news_articles_json, news_updated_at, calendar_items_json, updated_at
             FROM journal_entries
             WHERE user_id = ? AND entry_date = ?
             """,
@@ -210,6 +261,66 @@ def upsert_journal_entry(
         "accomplishments": row["accomplishments"],
         "gratitude_entry": row["gratitude_entry"],
         "photo_data_url": row["photo_data_url"],
+        "world_event_title": row["world_event_title"],
+        "world_event_summary": row["world_event_summary"],
+        "world_event_source": row["world_event_source"],
+        "news_articles_json": row["news_articles_json"],
+        "news_updated_at": row["news_updated_at"],
         "calendar_items_json": row["calendar_items_json"],
         "updated_at": row["updated_at"],
+    }
+
+
+def upsert_journal_news(
+    entry_date: str,
+    world_event_title: str | None,
+    world_event_summary: str,
+    world_event_source: str | None,
+    news_articles_json: str = "[]",
+    user_id: str = APP_DEFAULT_USER_ID,
+) -> dict[str, str | None]:
+    with _db_lock, closing(_connect()) as connection:
+        _ensure_journal_schema(connection)
+        _ensure_journal_columns(connection)
+        connection.execute(
+            """
+            INSERT INTO journal_entries (
+                user_id, entry_date, world_event_title, world_event_summary, world_event_source,
+                news_articles_json, news_updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(user_id, entry_date) DO UPDATE SET
+                world_event_title = excluded.world_event_title,
+                world_event_summary = excluded.world_event_summary,
+                world_event_source = excluded.world_event_source,
+                news_articles_json = excluded.news_articles_json,
+                news_updated_at = CURRENT_TIMESTAMP
+            """,
+            (
+                user_id,
+                entry_date,
+                world_event_title,
+                world_event_summary,
+                world_event_source,
+                news_articles_json,
+            ),
+        )
+        row = connection.execute(
+            """
+            SELECT entry_date, world_event_title, world_event_summary, world_event_source,
+                   news_articles_json, news_updated_at
+            FROM journal_entries
+            WHERE user_id = ? AND entry_date = ?
+            """,
+            (user_id, entry_date),
+        ).fetchone()
+        connection.commit()
+
+    return {
+        "entry_date": row["entry_date"],
+        "world_event_title": row["world_event_title"],
+        "world_event_summary": row["world_event_summary"],
+        "world_event_source": row["world_event_source"],
+        "news_articles_json": row["news_articles_json"],
+        "news_updated_at": row["news_updated_at"],
     }
