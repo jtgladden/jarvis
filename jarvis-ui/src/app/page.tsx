@@ -1,9 +1,11 @@
 "use client";
 
+import Image from "next/image";
 import React, { useEffect, useEffectEvent, useMemo, useState } from "react";
 import {
   AlertCircle,
   Archive,
+  BookOpen,
   CalendarDays,
   ChevronDown,
   ChevronRight,
@@ -140,9 +142,66 @@ function normalizeOverview(data: Partial<ClassificationOverview>): Classificatio
 
 function parseCalendarDate(value: string | null | undefined) {
   if (!value) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    const [year, month, day] = value.split("-").map(Number);
+    const parsed = new Date(year, month - 1, day);
+    if (Number.isNaN(parsed.getTime())) return null;
+    return parsed;
+  }
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return null;
   return parsed;
+}
+
+function formatLocalDateKey(value: Date) {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, "0");
+  const day = String(value.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function isSameLocalDay(left: Date, right: Date) {
+  return (
+    left.getFullYear() === right.getFullYear() &&
+    left.getMonth() === right.getMonth() &&
+    left.getDate() === right.getDate()
+  );
+}
+
+function formatRelativeDayLabel(value: string | null | undefined) {
+  const parsed = parseCalendarDate(value);
+  if (!parsed) return "Scheduled";
+
+  const now = new Date();
+  const tomorrow = new Date(now);
+  tomorrow.setDate(now.getDate() + 1);
+
+  if (isSameLocalDay(parsed, now)) {
+    return "Today";
+  }
+
+  if (isSameLocalDay(parsed, tomorrow)) {
+    return "Tomorrow";
+  }
+
+  return new Intl.DateTimeFormat(undefined, {
+    weekday: "short",
+  }).format(parsed);
+}
+
+function formatDashboardTaskDueText(task: DashboardTaskItem) {
+  if (!task.due_text) return null;
+
+  const parsed = parseCalendarDate(task.due_text);
+  if (!parsed) return task.due_text;
+
+  if (task.source === "calendar") {
+    return `${formatRelativeDayLabel(task.due_text)} · ${formatScheduleTimeRange({
+      start: task.due_text,
+    })}`;
+  }
+
+  return formatScheduleDateTime(task.due_text);
 }
 
 function formatScheduleDayLabel(value: string) {
@@ -208,7 +267,7 @@ function buildAgendaDayGroups(items: CalendarAgendaItem[]): AgendaDayGroup[] {
 
   for (const item of items) {
     const parsed = parseCalendarDate(item.start);
-    const key = parsed ? parsed.toISOString().slice(0, 10) : item.start;
+    const key = parsed ? formatLocalDateKey(parsed) : item.start;
     const existing = groups.get(key);
     if (existing) {
       existing.items.push(item);
@@ -234,7 +293,7 @@ function buildPlanningDayGroups(items: PlanningItem[]): Array<{
 
   for (const item of items) {
     const parsed = parseCalendarDate(item.start);
-    const key = parsed ? parsed.toISOString().slice(0, 10) : item.day_label;
+    const key = parsed ? formatLocalDateKey(parsed) : item.day_label;
     const label = parsed ? formatScheduleDayLabel(item.start) : item.day_label;
     const existing = groups.get(key);
     if (existing) {
@@ -322,6 +381,19 @@ type CalendarCreateResponse = {
   preview: CalendarPreview;
 };
 
+type CalendarQuickAddResponse = {
+  created: boolean;
+  event_id?: string | null;
+  html_link?: string | null;
+  title?: string | null;
+  start?: string | null;
+  end?: string | null;
+  is_all_day: boolean;
+  location?: string | null;
+  notes?: string | null;
+  source_text: string;
+};
+
 type CalendarAgendaItem = {
   event_id: string;
   title: string;
@@ -338,6 +410,77 @@ type CalendarAgenda = {
   time_min: string;
   time_max: string;
   items: CalendarAgendaItem[];
+};
+
+type DashboardMailItem = {
+  message_id: string;
+  subject: string;
+  sender: string;
+  summary: string;
+  why_it_matters: string;
+  urgency: "low" | "medium" | "high";
+  needs_reply: boolean;
+  deadline_hint?: string | null;
+  action_items: string[];
+};
+
+type DashboardNewsItem = {
+  title: string;
+  source?: string | null;
+  link?: string | null;
+  published_at?: string | null;
+};
+
+type DashboardTaskItem = {
+  id: string;
+  title: string;
+  detail?: string | null;
+  due_text?: string | null;
+  source: "mail" | "calendar" | "news" | "planning";
+  priority: "high" | "medium" | "low";
+  related_message_id?: string | null;
+  related_event_id?: string | null;
+};
+
+type DashboardResponse = {
+  generated_at: string;
+  date_label: string;
+  overview: string;
+  mail_summary: string;
+  news_summary: string;
+  tasks_summary: string;
+  calendar_items: CalendarAgendaItem[];
+  important_emails: DashboardMailItem[];
+  news_items: DashboardNewsItem[];
+  tasks: DashboardTaskItem[];
+};
+
+type JournalDayEntry = {
+  date: string;
+  date_label: string;
+  calendar_summary: string;
+  world_event_title?: string | null;
+  world_event_summary: string;
+  world_event_source?: string | null;
+  journal_entry: string;
+  accomplishments: string;
+  gratitude_entry: string;
+  photo_data_url?: string | null;
+  calendar_items: CalendarAgendaItem[];
+  updated_at?: string | null;
+};
+
+type JournalResponse = {
+  generated_at: string;
+  entries: JournalDayEntry[];
+};
+
+type JournalDraft = {
+  journal_entry: string;
+  accomplishments: string;
+  gratitude_entry: string;
+  photo_data_url?: string | null;
+  calendar_items: CalendarAgendaItem[];
 };
 
 type AgendaDayGroup = {
@@ -594,13 +737,19 @@ export default function HomePage() {
   const [error, setError] = useState("");
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [mode, setMode] = useState<"classified" | "raw" | "overview" | "schedule" | "planning">("classified");
-  const [classifiedBucket, setClassifiedBucket] = useState<"all" | "important" | "unimportant">(
-    "all"
-  );
+  const [mode, setMode] = useState<"dashboard" | "journal" | "mail" | "overview" | "schedule" | "planning">("dashboard");
+  const [mailView, setMailView] = useState<"ai" | "raw">("ai");
+  const [dashboard, setDashboard] = useState<DashboardResponse | null>(null);
+  const [journal, setJournal] = useState<JournalResponse | null>(null);
+  const [journalDrafts, setJournalDrafts] = useState<Record<string, JournalDraft>>({});
+  const [journalSavingDate, setJournalSavingDate] = useState<string | null>(null);
+  const [classifiedBucket] = useState<"all" | "important" | "unimportant">("all");
   const [overview, setOverview] = useState<ClassificationOverview | null>(null);
   const [agenda, setAgenda] = useState<CalendarAgenda | null>(null);
   const [scheduleDays, setScheduleDays] = useState("7");
+  const [quickCalendarPrompt, setQuickCalendarPrompt] = useState("");
+  const [quickCalendarLoading, setQuickCalendarLoading] = useState(false);
+  const [quickCalendarResult, setQuickCalendarResult] = useState<CalendarQuickAddResponse | null>(null);
   const [selectedMailbox, setSelectedMailbox] = useState<string>("INBOX");
   const [extraVisibleMailboxes, setExtraVisibleMailboxes] = useState<string[]>([]);
   const [inboxLimit, setInboxLimit] = useState("");
@@ -662,11 +811,12 @@ export default function HomePage() {
   };
 
   const loadEmails = async (
-    currentMode: "classified" | "raw" | "overview" | "schedule" | "planning" = mode,
+    currentMode: "dashboard" | "journal" | "mail" | "overview" | "schedule" | "planning" = mode,
     mailboxOverride?: string,
-    pageTokenOverride?: string | null
+    pageTokenOverride?: string | null,
+    currentMailView: "ai" | "raw" = mailView
   ) => {
-    if (currentMode === "planning") {
+    if (currentMode === "planning" || currentMode === "dashboard" || currentMode === "journal") {
       return;
     }
 
@@ -682,7 +832,7 @@ export default function HomePage() {
         params.set("days", String(Number.isFinite(days) && days > 0 ? Math.floor(days) : 7));
       } else if (currentMode === "overview") {
         params.set("mailbox", mailboxOverride ?? selectedMailbox);
-      } else if (currentMode === "raw") {
+      } else if (currentMode === "mail" && currentMailView === "raw") {
         const pageSize =
           trimmed && Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : 50;
         params.set("limit", String(pageSize));
@@ -694,12 +844,12 @@ export default function HomePage() {
         params.set("limit", String(Math.floor(limit)));
         params.set("bucket", classifiedBucket);
         params.set("mailbox", mailboxOverride ?? selectedMailbox);
-      } else if (currentMode === "classified") {
+      } else if (currentMode === "mail") {
         params.set("bucket", classifiedBucket);
         params.set("mailbox", mailboxOverride ?? selectedMailbox);
       }
       const endpoint =
-        currentMode === "classified"
+        currentMode === "mail" && currentMailView === "ai"
           ? "/classify"
           : currentMode === "overview"
             ? "/overview"
@@ -738,7 +888,7 @@ export default function HomePage() {
       }
 
       const normalized: Email[] =
-        currentMode === "classified"
+        currentMode === "mail" && currentMailView === "ai"
           ? data.map((item: { email: Email; classification: Classification }) => ({
               ...item.email,
               classification: item.classification,
@@ -748,7 +898,7 @@ export default function HomePage() {
       setOverview(null);
       setAgenda(null);
       setEmails(normalized);
-      if (currentMode === "raw") {
+      if (currentMode === "mail" && currentMailView === "raw") {
         setRawPageToken(pageTokenOverride ?? null);
         setRawNextPageToken((data as EmailPageResponse).next_page_token ?? null);
       } else {
@@ -767,12 +917,197 @@ export default function HomePage() {
     }
   };
 
+  const loadDashboard = async () => {
+    setLoading(true);
+    setError("");
+
+    try {
+      const response = await fetch(`${API_BASE}/dashboard`);
+      if (!response.ok) {
+        throw new Error(
+          await getErrorMessage(response, `Dashboard request failed with status ${response.status}`)
+        );
+      }
+
+      const data: DashboardResponse = await response.json();
+      setDashboard(data);
+      setOverview(null);
+      setAgenda(null);
+      setEmails([]);
+      setCleanupSummary(null);
+      setCleanupJob(null);
+      setSelectedId(null);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to load dashboard.";
+      setError(message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const loadJournal = async () => {
+    setLoading(true);
+    setError("");
+
+    try {
+      const response = await fetch(`${API_BASE}/journal`);
+      if (!response.ok) {
+        throw new Error(
+          await getErrorMessage(response, `Journal request failed with status ${response.status}`)
+        );
+      }
+
+      const data: JournalResponse = await response.json();
+      setJournal(data);
+      setJournalDrafts(
+        Object.fromEntries(
+          data.entries.map((entry) => [
+            entry.date,
+            {
+              journal_entry: entry.journal_entry || "",
+              accomplishments: entry.accomplishments || "",
+              gratitude_entry: entry.gratitude_entry || "",
+              photo_data_url: entry.photo_data_url || null,
+              calendar_items: entry.calendar_items || [],
+            },
+          ])
+        )
+      );
+      setOverview(null);
+      setAgenda(null);
+      setEmails([]);
+      setCleanupSummary(null);
+      setCleanupJob(null);
+      setSelectedId(null);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to load journal.";
+      setError(message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const persistJournalDraft = async (entryDate: string, draft: JournalDraft) => {
+    setJournalSavingDate(entryDate);
+    setError("");
+    try {
+      const response = await fetch(`${API_BASE}/journal/${entryDate}`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(draft),
+      });
+      if (!response.ok) {
+        throw new Error(
+          await getErrorMessage(response, `Journal save failed with status ${response.status}`)
+        );
+      }
+
+      const saved: JournalDayEntry = await response.json();
+      setJournal((current) =>
+        current
+          ? {
+              ...current,
+              entries: current.entries.map((entry) =>
+                entry.date === entryDate
+                  ? {
+                      ...entry,
+                      journal_entry: saved.journal_entry,
+                      accomplishments: saved.accomplishments,
+                      gratitude_entry: saved.gratitude_entry,
+                      photo_data_url: saved.photo_data_url,
+                      calendar_items: saved.calendar_items,
+                      updated_at: saved.updated_at,
+                    }
+                  : entry
+              ),
+            }
+          : current
+      );
+      await loadJournal();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to save journal entry.";
+      setError(message);
+    } finally {
+      setJournalSavingDate(null);
+    }
+  };
+
+  const saveJournalEntry = async (entryDate: string) => {
+    const draft = journalDrafts[entryDate];
+    if (!draft) return;
+    await persistJournalDraft(entryDate, draft);
+  };
+
+  const handleJournalPhotoChange = async (
+    entryDate: string,
+    event: React.ChangeEvent<HTMLInputElement>
+  ) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = typeof reader.result === "string" ? reader.result : null;
+      if (!result) return;
+      setJournalDrafts((current) => {
+        const currentDraft = current[entryDate];
+        if (!currentDraft) return current;
+        return {
+          ...current,
+          [entryDate]: {
+            ...currentDraft,
+            photo_data_url: result,
+          },
+        };
+      });
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const updateJournalCalendarItems = async (
+    entryDate: string,
+    updater: (items: CalendarAgendaItem[]) => CalendarAgendaItem[],
+    persist = false
+  ) => {
+    const currentDraft = journalDrafts[entryDate];
+    if (!currentDraft) return;
+
+    const nextDraft: JournalDraft = {
+      ...currentDraft,
+      calendar_items: updater(currentDraft.calendar_items),
+    };
+
+    setJournalDrafts((current) => ({
+      ...current,
+      [entryDate]: nextDraft,
+    }));
+
+    if (persist) {
+      await persistJournalDraft(entryDate, nextDraft);
+    }
+  };
+
   const fetchEmailsEffect = useEffectEvent(
-    (currentMode: "classified" | "raw" | "overview" | "schedule" | "planning", mailboxName?: string) => {
+    (
+      currentMode: "dashboard" | "journal" | "mail" | "overview" | "schedule" | "planning",
+      mailboxName?: string,
+      currentMailView: "ai" | "raw" = mailView
+    ) => {
+      if (currentMode === "dashboard") {
+        void loadDashboard();
+        return;
+      }
+      if (currentMode === "journal") {
+        void loadJournal();
+        return;
+      }
       if (currentMode === "planning") {
         return;
       }
-      void loadEmails(currentMode, mailboxName);
+      void loadEmails(currentMode, mailboxName, undefined, currentMailView);
     }
   );
 
@@ -780,7 +1115,9 @@ export default function HomePage() {
     setEmails((currentEmails) => {
       const nextEmails = currentEmails
         .map((email) => (email.id === updatedEmail.id ? { ...email, ...updatedEmail } : email))
-        .filter((email) => (mode === "raw" ? emailMatchesMailbox(email, selectedMailbox) : true));
+        .filter((email) =>
+          mode === "mail" && mailView === "raw" ? emailMatchesMailbox(email, selectedMailbox) : true
+        );
       syncSelectedId(nextEmails);
       return nextEmails;
     });
@@ -815,8 +1152,8 @@ export default function HomePage() {
       const data: EmailUpdateResponse = await response.json();
       replaceOrRemoveEmail(data.email);
       await loadLabels();
-      if (mode === "classified") {
-        await loadEmails("classified");
+      if (mode === "mail" && mailView === "ai") {
+        await loadEmails("mail", selectedMailbox, undefined, "ai");
       }
       if (mode === "overview") {
         await loadEmails("overview");
@@ -984,6 +1321,44 @@ export default function HomePage() {
     }
   };
 
+  const createQuickCalendarEvent = async () => {
+    const description = quickCalendarPrompt.trim();
+    if (!description) return;
+
+    setQuickCalendarLoading(true);
+    setError("");
+    setQuickCalendarResult(null);
+
+    try {
+      const response = await fetch(`${API_BASE}/calendar/quick-add`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ description }),
+      });
+      if (!response.ok) {
+        throw new Error(
+          await getErrorMessage(response, `Quick add failed with status ${response.status}`)
+        );
+      }
+
+      const data: CalendarQuickAddResponse = await response.json();
+      setQuickCalendarResult(data);
+      setQuickCalendarPrompt("");
+      await loadEmails("schedule");
+      if (data.event_id) {
+        setSelectedId(data.event_id);
+      }
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Failed to add the event to Calendar.";
+      setError(message);
+    } finally {
+      setQuickCalendarLoading(false);
+    }
+  };
+
   const generatePlan = async () => {
     setPlanningLoading(true);
     setError("");
@@ -1137,7 +1512,8 @@ export default function HomePage() {
         classification: data.classification,
       };
 
-      setMode("classified");
+      setMode("mail");
+      setMailView("ai");
       setOverview(null);
       setAgenda(null);
       setCleanupSummary(null);
@@ -1205,8 +1581,8 @@ export default function HomePage() {
       setSavedClassificationGuidance(data.text || "");
       setClassificationGuidanceUpdatedAt(data.updated_at || null);
 
-      if (mode === "classified") {
-        await loadEmails("classified", selectedMailbox);
+      if (mode === "mail" && mailView === "ai") {
+        await loadEmails("mail", selectedMailbox, undefined, "ai");
       }
     } catch (err) {
       const message =
@@ -1223,15 +1599,15 @@ export default function HomePage() {
   }, []);
 
   useEffect(() => {
-    fetchEmailsEffect(mode, selectedMailbox);
-  }, [mode, selectedMailbox, classifiedBucket, scheduleDays]);
+    fetchEmailsEffect(mode, selectedMailbox, mailView);
+  }, [mode, selectedMailbox, classifiedBucket, scheduleDays, mailView]);
 
   useEffect(() => {
-    if (mode !== "raw") return;
+    if (mode !== "mail" || mailView !== "raw") return;
     setRawPageToken(null);
     setRawNextPageToken(null);
     setRawPageHistory([]);
-  }, [mode, selectedMailbox]);
+  }, [mode, selectedMailbox, mailView]);
 
   useEffect(() => {
     if (!cleanupJob || (cleanupJob.status !== "queued" && cleanupJob.status !== "running")) {
@@ -1255,7 +1631,8 @@ export default function HomePage() {
 
         if (data.status === "completed" && data.result) {
           const normalized = normalizeCleanupItems(data.result);
-          setMode("classified");
+          setMode("mail");
+          setMailView("ai");
           setEmails(normalized);
           setCleanupSummary(data.result.summary);
           syncSelectedId(normalized);
@@ -1342,8 +1719,11 @@ export default function HomePage() {
     });
   }, [emails, query]);
 
+  const isMailMode = mode === "mail";
+  const isAiMailView = isMailMode && mailView === "ai";
+  const isRawMailView = isMailMode && mailView === "raw";
   const groupedRawEmails = useMemo(() => groupEmailsByThread(filteredEmails), [filteredEmails]);
-  const displayEmails = mode === "raw" ? groupedRawEmails.map((item) => item.email) : filteredEmails;
+  const displayEmails = isRawMailView ? groupedRawEmails.map((item) => item.email) : filteredEmails;
   const threadCountByEmailId = useMemo(
     () =>
       new Map(groupedRawEmails.map((item) => [item.email.id, item.count])),
@@ -1420,8 +1800,6 @@ export default function HomePage() {
       setCalendarPreview(null);
       return;
     }
-
-    void loadCalendarPreview(selectedEmail.id);
   }, [selectedEmail?.id, mode]);
 
   useEffect(() => {
@@ -1431,6 +1809,12 @@ export default function HomePage() {
   useEffect(() => {
     setPlanningBulkCalendarMessage("");
   }, [planningResult]);
+
+  useEffect(() => {
+    if (mode !== "schedule") {
+      setQuickCalendarResult(null);
+    }
+  }, [mode]);
 
   const selectedMailboxLabel =
     mailboxLabels.find((label) => label.name === selectedMailbox) ||
@@ -1485,6 +1869,169 @@ export default function HomePage() {
     });
   };
 
+  const utilitiesPanel = (
+    <Card className="rounded-[1.5rem] border border-white/8 bg-[rgba(20,22,37,0.6)] shadow-[0_12px_32px_rgba(6,7,14,0.2)] backdrop-blur-xl">
+      <CardHeader className="px-5 py-4">
+        <button
+          type="button"
+          onClick={() => setCleanupExpanded((current) => !current)}
+          className="flex w-full items-center justify-between gap-3 text-left"
+        >
+          <div className="min-w-0">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <ShieldCheck className="h-4 w-4" />
+              Utilities
+            </CardTitle>
+            <p className="mt-1 text-xs text-slate-400">
+              Inbox maintenance and cleanup tools.
+            </p>
+          </div>
+          <div className="flex items-center gap-2 text-slate-400">
+            {cleanupJob && (cleanupJob.status === "queued" || cleanupJob.status === "running") ? (
+              <Badge variant="secondary" className="rounded-xl">
+                Cleanup running
+              </Badge>
+            ) : null}
+            {cleanupExpanded ? (
+              <ChevronDown className="h-4 w-4" />
+            ) : (
+              <ChevronRight className="h-4 w-4" />
+            )}
+          </div>
+        </button>
+      </CardHeader>
+
+      {cleanupExpanded ? (
+        <CardContent className="space-y-4 px-5 pb-5 pt-0">
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <p className="max-w-2xl text-sm leading-6 text-slate-300">
+              Clean up the whole inbox with one click. Every processed message is labeled as Jarvis Important or Jarvis Unimportant and then archived so the inbox can reach zero. This version never deletes messages.
+            </p>
+            <div className="flex w-full flex-col gap-2 sm:flex-row md:w-auto">
+              <Input
+                type="number"
+                min="1"
+                value={cleanupLimit}
+                onChange={(e) => setCleanupLimit(e.target.value)}
+                className="w-full rounded-2xl sm:w-32"
+                placeholder="All mail"
+              />
+              <Button
+                className="rounded-2xl"
+                onClick={() => void runCleanup()}
+                disabled={loading || cleanupLoading}
+              >
+                <Archive className="mr-2 h-4 w-4" />
+                {cleanupLoading ? "Working..." : "Clean inbox"}
+              </Button>
+            </div>
+          </div>
+
+          {cleanupJob ? (
+            <>
+              <div className="rounded-[1.6rem] border border-white/6 bg-[rgba(35,37,58,0.7)] p-4">
+                <div className="mb-2 flex flex-wrap items-center gap-2">
+                  <Badge
+                    variant={
+                      cleanupJob.status === "completed"
+                        ? "default"
+                        : cleanupJob.status === "failed"
+                          ? "destructive"
+                          : "secondary"
+                    }
+                    className="rounded-xl"
+                  >
+                    {cleanupJob.status}
+                  </Badge>
+                  <Badge variant="outline" className="rounded-xl">
+                    Cleanup job
+                  </Badge>
+                  <Badge variant="outline" className="rounded-xl">
+                    {cleanupJob.processed}/{cleanupJob.total || "?"} processed
+                  </Badge>
+                </div>
+
+                <div className="h-2 overflow-hidden rounded-full bg-white/8">
+                  <div
+                    className="h-full rounded-full bg-[linear-gradient(90deg,#bd93f9,#8be9fd)] transition-all"
+                    style={{ width: `${cleanupProgressPercent}%` }}
+                  />
+                </div>
+
+                <div className="mt-3 flex flex-col gap-1 text-sm text-slate-300">
+                  <div>
+                    {cleanupJob.status === "completed"
+                      ? "Cleanup finished."
+                      : cleanupJob.status === "failed"
+                        ? cleanupJob.error || "Cleanup failed."
+                        : "Cleanup is running."}
+                  </div>
+                  {cleanupJob.current_subject ? (
+                    <div className="truncate">Current email: {cleanupJob.current_subject}</div>
+                  ) : null}
+                </div>
+              </div>
+
+              {cleanupSummary ? (
+                <>
+                  <div className="grid gap-3 md:grid-cols-4">
+                    <Card className="rounded-2xl shadow-none">
+                      <CardContent className="p-4">
+                        <div className="text-xs uppercase tracking-wide text-slate-400">
+                          Processed
+                        </div>
+                        <div className="mt-1 text-2xl font-semibold">
+                          {cleanupSummary.total_processed}
+                        </div>
+                      </CardContent>
+                    </Card>
+                    <Card className="rounded-2xl shadow-none">
+                      <CardContent className="p-4">
+                        <div className="text-xs uppercase tracking-wide text-slate-400">
+                          Archived
+                        </div>
+                        <div className="mt-1 text-2xl font-semibold">
+                          {cleanupSummary.archived}
+                        </div>
+                      </CardContent>
+                    </Card>
+                    <Card className="rounded-2xl shadow-none">
+                      <CardContent className="p-4">
+                        <div className="text-xs uppercase tracking-wide text-slate-400">
+                          Labeled only
+                        </div>
+                        <div className="mt-1 text-2xl font-semibold">
+                          {cleanupSummary.labeled_only}
+                        </div>
+                      </CardContent>
+                    </Card>
+                    <Card className="rounded-2xl shadow-none">
+                      <CardContent className="p-4">
+                        <div className="text-xs uppercase tracking-wide text-slate-400">Kept</div>
+                        <div className="mt-1 text-2xl font-semibold">{cleanupSummary.kept}</div>
+                      </CardContent>
+                    </Card>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Badge variant="default" className="rounded-xl">
+                      Changes applied
+                    </Badge>
+                    <Badge variant="outline" className="rounded-xl">
+                      Safe mode: archive and label only
+                    </Badge>
+                    <Badge variant="outline" className="rounded-xl">
+                      Cleanup uses only Jarvis Important and Jarvis Unimportant
+                    </Badge>
+                  </div>
+                </>
+              ) : null}
+            </>
+          ) : null}
+        </CardContent>
+      ) : null}
+    </Card>
+  );
+
   return (
     <div className="min-h-screen p-4 text-slate-100 md:p-6">
       <div className="mx-auto max-w-[1500px] space-y-6">
@@ -1495,31 +2042,44 @@ export default function HomePage() {
             <div className="mb-3 inline-flex items-center rounded-full border border-fuchsia-400/20 bg-fuchsia-400/10 px-3 py-1 text-[11px] font-medium uppercase tracking-[0.24em] text-fuchsia-200">
               Dracula Control Center
             </div>
-            <h1 className="text-3xl font-bold tracking-tight text-white md:text-4xl">Jarvis Mail Dashboard</h1>
+            <h1 className="text-3xl font-bold tracking-tight text-white md:text-4xl">Jarvis</h1>
             <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-300">
-              {mode === "planning"
+              {mode === "dashboard"
+                ? "Start here for a centralized briefing with your day, important mail, current headlines, and a focused task list."
+                : mode === "journal"
+                ? "Keep a lightweight daily journal with calendar-based summaries, a world event snapshot, and room for your own reflection."
+                : mode === "planning"
                 ? "Turn your goals for the day or week into a realistic schedule that fits around your calendar."
-                : "Browse Gmail folders in the raw view, relabel mail, and still use the classified review workflow for Important mail."}
+                : "Work through your inbox from one Mail tab, then switch between AI triage and raw Gmail controls whenever you need them."}
             </p>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
             <Button
-              variant={mode === "classified" ? "default" : "outline"}
+              variant={mode === "dashboard" ? "default" : "outline"}
               className="rounded-2xl"
-              onClick={() => setMode("classified")}
+              onClick={() => setMode("dashboard")}
             >
-              <Inbox className="mr-2 h-4 w-4" />
-              AI view
+              <Sparkles className="mr-2 h-4 w-4" />
+              Dashboard
             </Button>
 
             <Button
-              variant={mode === "raw" ? "default" : "outline"}
+              variant={mode === "journal" ? "default" : "outline"}
               className="rounded-2xl"
-              onClick={() => setMode("raw")}
+              onClick={() => setMode("journal")}
             >
-              <Archive className="mr-2 h-4 w-4" />
-              Raw mail
+              <BookOpen className="mr-2 h-4 w-4" />
+              Journal
+            </Button>
+
+            <Button
+              variant={mode === "mail" ? "default" : "outline"}
+              className="rounded-2xl"
+              onClick={() => setMode("mail")}
+            >
+              <Inbox className="mr-2 h-4 w-4" />
+              Mail
             </Button>
 
             <Button
@@ -1557,6 +2117,14 @@ export default function HomePage() {
                 setRawNextPageToken(null);
                 setRawPageHistory([]);
                 void loadLabels();
+                if (mode === "dashboard") {
+                  void loadDashboard();
+                  return;
+                }
+                if (mode === "journal") {
+                  void loadJournal();
+                  return;
+                }
                 if (mode === "planning") {
                   if (planningPrompt.trim()) {
                     void generatePlan();
@@ -1573,182 +2141,590 @@ export default function HomePage() {
               Refresh
             </Button>
 
-            {mode !== "planning" ? (
+            {mode !== "planning" && mode !== "dashboard" && mode !== "journal" ? (
               <Input
                 type="number"
                 min="1"
                 value={inboxLimit}
                 onChange={(e) => setInboxLimit(e.target.value)}
                 className="w-full rounded-2xl sm:w-36"
-                placeholder={mode === "raw" ? "Page size" : "Summary cap"}
+                placeholder={isRawMailView ? "Page size" : "Summary cap"}
               />
             ) : null}
           </div>
         </div>
         </div>
 
-        <Card className="rounded-[2rem] border border-white/8 bg-[rgba(20,22,37,0.72)] shadow-[0_18px_54px_rgba(6,7,14,0.28)] backdrop-blur-xl">
-          <CardHeader>
-            <button
-              type="button"
-              onClick={() => setCleanupExpanded((current) => !current)}
-              className="flex w-full items-start justify-between gap-3 text-left"
-            >
-              <div>
-                <CardTitle className="flex items-center gap-2 text-lg">
-                  <ShieldCheck className="h-5 w-5" />
-                  Utilities
-                </CardTitle>
-                <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-300">
-                  Rarely used maintenance tools like full inbox cleanup live here.
-                </p>
-              </div>
-              <div className="flex items-center gap-2 text-slate-400">
-                {cleanupJob && (cleanupJob.status === "queued" || cleanupJob.status === "running") ? (
-                  <Badge variant="secondary" className="rounded-xl">
-                    Cleanup running
-                  </Badge>
-                ) : null}
-                {cleanupExpanded ? (
-                  <ChevronDown className="h-4 w-4" />
-                ) : (
-                  <ChevronRight className="h-4 w-4" />
-                )}
-              </div>
-            </button>
-          </CardHeader>
-
-          {cleanupExpanded ? (
-            <CardContent className="space-y-4">
-              <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                <p className="max-w-2xl text-sm leading-6 text-slate-300">
-                  Clean up the whole inbox with one click. Every processed message is labeled as Jarvis Important or Jarvis Unimportant and then archived so the inbox can reach zero. This version never deletes messages.
-                </p>
-                <div className="flex w-full flex-col gap-2 sm:flex-row md:w-auto">
-                  <Input
-                    type="number"
-                    min="1"
-                    value={cleanupLimit}
-                    onChange={(e) => setCleanupLimit(e.target.value)}
-                    className="w-full rounded-2xl sm:w-32"
-                    placeholder="All mail"
-                  />
-                  <Button
-                    className="rounded-2xl"
-                    onClick={() => void runCleanup()}
-                    disabled={loading || cleanupLoading}
-                  >
-                    <Archive className="mr-2 h-4 w-4" />
-                    {cleanupLoading ? "Working..." : "Clean inbox"}
-                  </Button>
-                </div>
-              </div>
-
-              {cleanupJob ? (
-                <>
-                  <div className="rounded-[1.6rem] border border-white/6 bg-[rgba(35,37,58,0.7)] p-4">
-                    <div className="mb-2 flex flex-wrap items-center gap-2">
-                      <Badge
-                        variant={
-                          cleanupJob.status === "completed"
-                            ? "default"
-                            : cleanupJob.status === "failed"
-                              ? "destructive"
-                              : "secondary"
-                        }
-                        className="rounded-xl"
-                      >
-                        {cleanupJob.status}
-                      </Badge>
-                      <Badge variant="outline" className="rounded-xl">
-                        Cleanup job
-                      </Badge>
-                      <Badge variant="outline" className="rounded-xl">
-                        {cleanupJob.processed}/{cleanupJob.total || "?"} processed
-                      </Badge>
+        {mode === "dashboard" ? (
+          <div className="grid gap-6 lg:grid-cols-[1.2fr_0.8fr]">
+            <div className="space-y-6">
+              <Card className="rounded-[2rem] border border-white/8 bg-[rgba(17,19,34,0.82)] shadow-[0_16px_44px_rgba(6,7,14,0.36)] backdrop-blur-xl">
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2 text-lg">
+                    <Sparkles className="h-5 w-5" />
+                    Daily briefing
+                  </CardTitle>
+                  <p className="text-sm leading-6 text-slate-300">
+                    {dashboard?.date_label || "Today"} at a glance, generated from your calendar, important mail, and current headlines.
+                  </p>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  {error ? (
+                    <div className="flex items-start gap-3 rounded-[1.4rem] border border-rose-400/20 bg-rose-500/10 p-4 text-sm text-rose-200">
+                      <AlertCircle className="mt-0.5 h-4 w-4" />
+                      <div>{error}</div>
                     </div>
-
-                    <div className="h-2 overflow-hidden rounded-full bg-white/8">
-                      <div
-                        className="h-full rounded-full bg-[linear-gradient(90deg,#bd93f9,#8be9fd)] transition-all"
-                        style={{ width: `${cleanupProgressPercent}%` }}
-                      />
+                  ) : null}
+                  <div className="rounded-[1.6rem] border border-cyan-300/15 bg-[linear-gradient(135deg,rgba(56,189,248,0.16),rgba(35,37,58,0.92))] p-5">
+                    <div className="text-xs uppercase tracking-[0.22em] text-cyan-100/80">
+                      AI overview
                     </div>
-
-                    <div className="mt-3 flex flex-col gap-1 text-sm text-slate-300">
-                      <div>
-                        {cleanupJob.status === "completed"
-                          ? "Cleanup finished."
-                          : cleanupJob.status === "failed"
-                            ? cleanupJob.error || "Cleanup failed."
-                            : "Cleanup is running."}
-                      </div>
-                      {cleanupJob.current_subject ? (
-                        <div className="truncate">Current email: {cleanupJob.current_subject}</div>
-                      ) : null}
+                    <div className="mt-3 text-sm leading-7 text-slate-100">
+                      {dashboard?.overview || (loading ? "Building your dashboard..." : "Refresh to generate your daily overview.")}
                     </div>
                   </div>
-
-                  {cleanupSummary ? (
-                    <>
-                      <div className="grid gap-3 md:grid-cols-4">
-                        <Card className="rounded-2xl shadow-none">
-                          <CardContent className="p-4">
-                            <div className="text-xs uppercase tracking-wide text-slate-400">
-                              Processed
-                            </div>
-                            <div className="mt-1 text-2xl font-semibold">
-                              {cleanupSummary.total_processed}
-                            </div>
-                          </CardContent>
-                        </Card>
-                        <Card className="rounded-2xl shadow-none">
-                          <CardContent className="p-4">
-                            <div className="text-xs uppercase tracking-wide text-slate-400">
-                              Archived
-                            </div>
-                            <div className="mt-1 text-2xl font-semibold">
-                              {cleanupSummary.archived}
-                            </div>
-                          </CardContent>
-                        </Card>
-                        <Card className="rounded-2xl shadow-none">
-                          <CardContent className="p-4">
-                            <div className="text-xs uppercase tracking-wide text-slate-400">
-                              Labeled only
-                            </div>
-                            <div className="mt-1 text-2xl font-semibold">
-                              {cleanupSummary.labeled_only}
-                            </div>
-                          </CardContent>
-                        </Card>
-                        <Card className="rounded-2xl shadow-none">
-                          <CardContent className="p-4">
-                            <div className="text-xs uppercase tracking-wide text-slate-400">Kept</div>
-                            <div className="mt-1 text-2xl font-semibold">{cleanupSummary.kept}</div>
-                          </CardContent>
-                        </Card>
+                  <div className="grid gap-4 md:grid-cols-3">
+                    <div className="rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4">
+                      <div className="text-xs uppercase tracking-wide text-slate-400">Mail</div>
+                      <div className="mt-2 text-sm leading-6 text-slate-200">
+                        {dashboard?.mail_summary || "No mail summary yet."}
                       </div>
-                      <div className="flex flex-wrap gap-2">
-                        <Badge variant="default" className="rounded-xl">
-                          Changes applied
-                        </Badge>
-                        <Badge variant="outline" className="rounded-xl">
-                          Safe mode: archive and label only
-                        </Badge>
-                        <Badge variant="outline" className="rounded-xl">
-                          Cleanup uses only Jarvis Important and Jarvis Unimportant
-                        </Badge>
+                    </div>
+                    <div className="rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4">
+                      <div className="text-xs uppercase tracking-wide text-slate-400">News</div>
+                      <div className="mt-2 text-sm leading-6 text-slate-200">
+                        {dashboard?.news_summary || "No news summary yet."}
                       </div>
-                    </>
-                  ) : null}
-                </>
-              ) : null}
-            </CardContent>
-          ) : null}
-        </Card>
+                    </div>
+                    <div className="rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4">
+                      <div className="text-xs uppercase tracking-wide text-slate-400">Tasks</div>
+                      <div className="mt-2 text-sm leading-6 text-slate-200">
+                        {dashboard?.tasks_summary || "No task summary yet."}
+                      </div>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
 
-        {mode === "planning" ? (
+              <div className="grid gap-6 xl:grid-cols-2">
+                <Card className="rounded-[2rem] border border-white/8 bg-[rgba(17,19,34,0.82)] shadow-[0_16px_44px_rgba(6,7,14,0.36)] backdrop-blur-xl">
+                  <CardHeader className="pb-3">
+                    <CardTitle className="flex items-center gap-2 text-lg">
+                      <CalendarDays className="h-5 w-5" />
+                      Today&apos;s schedule
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="space-y-3">
+                      {dashboard?.calendar_items?.length ? (
+                        dashboard.calendar_items.map((item) => (
+                          <div
+                            key={item.event_id}
+                            className="rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4"
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0 flex-1">
+                                <div className="text-sm font-semibold text-slate-100">{item.title}</div>
+                                <div className="mt-1 text-sm text-cyan-100">
+                                  {formatScheduleTimeRange(item)}
+                                </div>
+                                {item.location ? (
+                                  <div className="mt-1 text-xs text-slate-400">{item.location}</div>
+                                ) : null}
+                              </div>
+                              <Badge variant="outline" className="rounded-xl">
+                                {item.is_all_day
+                                  ? `${formatRelativeDayLabel(item.start)} · All day`
+                                  : formatRelativeDayLabel(item.start)}
+                              </Badge>
+                            </div>
+                          </div>
+                        ))
+                      ) : (
+                        <div className="rounded-[1.6rem] border border-dashed border-white/10 p-6 text-sm text-slate-400">
+                          {loading ? "Loading today's schedule..." : "No calendar items found for today."}
+                        </div>
+                      )}
+                    </div>
+                  </CardContent>
+                </Card>
+
+                <Card className="rounded-[2rem] border border-white/8 bg-[rgba(17,19,34,0.82)] shadow-[0_16px_44px_rgba(6,7,14,0.36)] backdrop-blur-xl">
+                  <CardHeader className="pb-3">
+                    <CardTitle className="flex items-center gap-2 text-lg">
+                      <ShieldCheck className="h-5 w-5" />
+                      Task list
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="space-y-3">
+                      {dashboard?.tasks?.length ? (
+                        dashboard.tasks.map((task) => (
+                          <div
+                            key={task.id}
+                            className="rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4"
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0 flex-1">
+                                <div className="text-sm font-semibold text-slate-100">{task.title}</div>
+                                {task.detail ? (
+                                  <div className="mt-1 text-sm text-slate-300">{task.detail}</div>
+                                ) : null}
+                                {task.due_text ? (
+                                  <div className="mt-1 text-xs text-slate-400">
+                                    {formatDashboardTaskDueText(task)}
+                                  </div>
+                                ) : null}
+                              </div>
+                              <Badge
+                                variant={
+                                  task.priority === "high"
+                                    ? "default"
+                                    : task.priority === "medium"
+                                      ? "secondary"
+                                      : "outline"
+                                }
+                                className="rounded-xl"
+                              >
+                                {task.priority}
+                              </Badge>
+                            </div>
+                          </div>
+                        ))
+                      ) : (
+                        <div className="rounded-[1.6rem] border border-dashed border-white/10 p-6 text-sm text-slate-400">
+                          {loading ? "Loading tasks..." : "No tasks surfaced yet."}
+                        </div>
+                      )}
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
+            </div>
+
+            <div className="space-y-6">
+              <Card className="rounded-[2rem] border border-white/8 bg-[rgba(17,19,34,0.82)] shadow-[0_16px_44px_rgba(6,7,14,0.36)] backdrop-blur-xl">
+                <CardHeader className="pb-3">
+                  <CardTitle className="flex items-center gap-2 text-lg">
+                    <Mail className="h-5 w-5" />
+                    Important mail
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-3">
+                    {dashboard?.important_emails?.length ? (
+                      dashboard.important_emails.map((item) => (
+                        <button
+                          key={item.message_id}
+                          type="button"
+                          onClick={() => void openOverviewEmail(item.message_id)}
+                          className="w-full rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4 text-left transition hover:border-cyan-300/30 hover:bg-[rgba(42,45,72,0.9)]"
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0 flex-1">
+                              <div className="text-sm font-semibold text-slate-100">{item.subject}</div>
+                              <div className="mt-1 text-xs text-slate-400">{item.sender}</div>
+                            </div>
+                            <Badge
+                              variant={
+                                item.urgency === "high"
+                                  ? "default"
+                                  : item.urgency === "medium"
+                                    ? "secondary"
+                                    : "outline"
+                              }
+                              className="rounded-xl"
+                            >
+                              {item.urgency}
+                            </Badge>
+                          </div>
+                          <div className="mt-3 text-sm leading-6 text-slate-200">{item.summary}</div>
+                          {item.deadline_hint ? (
+                            <div className="mt-2 text-xs text-cyan-100">{item.deadline_hint}</div>
+                          ) : null}
+                        </button>
+                      ))
+                    ) : (
+                      <div className="rounded-[1.6rem] border border-dashed border-white/10 p-6 text-sm text-slate-400">
+                        {loading ? "Loading important mail..." : "No important mail surfaced yet."}
+                      </div>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card className="rounded-[2rem] border border-white/8 bg-[rgba(17,19,34,0.82)] shadow-[0_16px_44px_rgba(6,7,14,0.36)] backdrop-blur-xl">
+                <CardHeader className="pb-3">
+                  <CardTitle className="flex items-center gap-2 text-lg">
+                    <Inbox className="h-5 w-5" />
+                    News summary
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-3">
+                    {dashboard?.news_items?.length ? (
+                      dashboard.news_items.map((item, index) => (
+                        <div
+                          key={`${item.title}-${index}`}
+                          className="rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4"
+                        >
+                          <div className="text-sm font-semibold text-slate-100">{item.title}</div>
+                          <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-400">
+                            {item.source ? <span>{item.source}</span> : null}
+                            {item.published_at ? (
+                              <span>{formatScheduleDateTime(item.published_at)}</span>
+                            ) : null}
+                          </div>
+                          {item.link ? (
+                            <a
+                              href={item.link}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="mt-3 inline-block text-sm text-cyan-200 underline decoration-cyan-300/40 underline-offset-4"
+                            >
+                              Open article
+                            </a>
+                          ) : null}
+                        </div>
+                      ))
+                    ) : (
+                      <div className="rounded-[1.6rem] border border-dashed border-white/10 p-6 text-sm text-slate-400">
+                        {loading ? "Loading news..." : "No news items available right now."}
+                      </div>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+          </div>
+        ) : mode === "journal" ? (
+          <div className="space-y-6">
+            {error ? (
+              <div className="flex items-start gap-3 rounded-[1.4rem] border border-rose-400/20 bg-rose-500/10 p-4 text-sm text-rose-200">
+                <AlertCircle className="mt-0.5 h-4 w-4" />
+                <div>{error}</div>
+              </div>
+            ) : null}
+            {journal?.entries?.length ? (
+              journal.entries.map((entry) => {
+                const draft = journalDrafts[entry.date] || {
+                  journal_entry: entry.journal_entry || "",
+                  accomplishments: entry.accomplishments || "",
+                  gratitude_entry: entry.gratitude_entry || "",
+                  photo_data_url: entry.photo_data_url || null,
+                  calendar_items: entry.calendar_items || [],
+                };
+
+                return (
+                  <Card
+                    key={entry.date}
+                    className="rounded-[2rem] border border-white/8 bg-[rgba(17,19,34,0.82)] shadow-[0_16px_44px_rgba(6,7,14,0.36)] backdrop-blur-xl"
+                  >
+                    <CardHeader className="pb-3">
+                      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                        <div>
+                          <CardTitle className="flex items-center gap-2 text-lg">
+                            <BookOpen className="h-5 w-5" />
+                            {entry.date_label}
+                          </CardTitle>
+                          <p className="mt-2 text-sm leading-6 text-slate-300">
+                            A quick memory capsule from your calendar plus one world event from the day.
+                          </p>
+                        </div>
+                        {entry.updated_at ? (
+                          <div className="text-xs text-slate-400">
+                            Saved {new Date(entry.updated_at).toLocaleString()}
+                          </div>
+                        ) : null}
+                      </div>
+                    </CardHeader>
+                    <CardContent className="space-y-5">
+                      <div className="grid gap-4 lg:grid-cols-2">
+                        <div className="rounded-[1.6rem] border border-white/6 bg-[rgba(35,37,58,0.7)] p-4">
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="text-xs uppercase tracking-wide text-slate-400">
+                              What your calendar says you did
+                            </div>
+                            <Badge variant="outline" className="rounded-xl">
+                              {draft.calendar_items.filter((item) => !item.removed).length} kept
+                            </Badge>
+                          </div>
+                          <div className="mt-3 text-sm leading-6 text-slate-200">
+                            {entry.calendar_summary}
+                          </div>
+                          <div className="mt-4 space-y-3">
+                            <div className="flex justify-end">
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="rounded-xl"
+                                onClick={() =>
+                                  void updateJournalCalendarItems(
+                                    entry.date,
+                                    (items) => [
+                                      ...items,
+                                      {
+                                        event_id: `custom-${entry.date}-${items.length}`,
+                                        title: "",
+                                        start: entry.date,
+                                        end: null,
+                                        is_all_day: true,
+                                        location: null,
+                                        description: null,
+                                        html_link: null,
+                                        removed: false,
+                                      },
+                                    ]
+                                  )
+                                }
+                              >
+                                <Plus className="mr-2 h-4 w-4" />
+                                Add something
+                              </Button>
+                            </div>
+                            {draft.calendar_items.length ? (
+                              draft.calendar_items.map((item, itemIndex) => (
+                                <div
+                                  key={`${item.event_id}-${itemIndex}`}
+                                  className={`rounded-[1rem] border px-3 py-3 text-sm transition ${
+                                    item.removed
+                                      ? "border-dashed border-white/10 bg-[rgba(20,22,37,0.4)] text-slate-500"
+                                      : "border-cyan-300/20 bg-[linear-gradient(135deg,rgba(56,189,248,0.12),rgba(20,22,37,0.88))] text-slate-200 shadow-[0_6px_18px_rgba(8,10,20,0.14)]"
+                                  }`}
+                                >
+                                  <div className="space-y-2">
+                                    <div className="flex items-start justify-between gap-3">
+                                      <div className="min-w-0 flex-1">
+                                        <Input
+                                          value={item.title}
+                                          onChange={(e) =>
+                                            setJournalDrafts((current) => {
+                                              const currentDraft = current[entry.date] || draft;
+                                              return {
+                                                ...current,
+                                                [entry.date]: {
+                                                  ...currentDraft,
+                                                  calendar_items: currentDraft.calendar_items.map((currentItem, currentIndex) =>
+                                                  currentIndex === itemIndex
+                                                    ? { ...currentItem, title: e.target.value }
+                                                    : currentItem
+                                                  ),
+                                                },
+                                              };
+                                            })
+                                          }
+                                          className="h-9 rounded-xl"
+                                          placeholder="What you actually did"
+                                        />
+                                        <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                                          <span
+                                            className={`inline-flex items-center rounded-full px-2.5 py-1 ${
+                                              item.removed
+                                                ? "border border-white/10 bg-[rgba(255,255,255,0.04)] text-slate-500"
+                                                : "border border-cyan-300/20 bg-cyan-300/10 text-cyan-100"
+                                            }`}
+                                          >
+                                            {formatScheduleTimeRange(item)}
+                                          </span>
+                                          {item.removed ? (
+                                            <span className="text-slate-500">Marked as not done</span>
+                                          ) : null}
+                                        </div>
+                                      </div>
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        className="rounded-xl"
+                                        onClick={() =>
+                                          void updateJournalCalendarItems(
+                                            entry.date,
+                                            (items) =>
+                                              items.map((currentItem, currentIndex) =>
+                                                currentIndex === itemIndex
+                                                  ? { ...currentItem, removed: !currentItem.removed }
+                                                  : currentItem
+                                              ),
+                                            true
+                                          )
+                                        }
+                                      >
+                                        {item.removed ? "Restore" : "Remove"}
+                                      </Button>
+                                    </div>
+                                  </div>
+                                </div>
+                              ))
+                            ) : (
+                              <div className="text-sm text-slate-400">
+                                No calendar events were captured for this day.
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="space-y-4">
+                          <div className="rounded-[1.6rem] border border-white/6 bg-[rgba(35,37,58,0.7)] p-4">
+                            <div className="text-xs uppercase tracking-wide text-slate-400">
+                              World event
+                            </div>
+                            <div className="mt-3 text-base font-medium text-slate-100">
+                              {entry.world_event_title || "No headline captured for this day"}
+                            </div>
+                            {entry.world_event_source ? (
+                              <div className="mt-1 text-xs text-cyan-100">{entry.world_event_source}</div>
+                            ) : null}
+                            <div className="mt-3 text-sm leading-6 text-slate-200">
+                              {entry.world_event_summary}
+                            </div>
+                          </div>
+
+                          <div className="rounded-[1.6rem] border border-white/6 bg-[rgba(35,37,58,0.7)] p-4">
+                            <div className="flex items-center justify-between gap-3">
+                              <div className="text-xs uppercase tracking-wide text-slate-400">
+                                Photo memory
+                              </div>
+                              <label className="cursor-pointer text-xs text-cyan-100 underline decoration-cyan-300/30 underline-offset-4">
+                                Add photo
+                                <input
+                                  type="file"
+                                  accept="image/*"
+                                  className="hidden"
+                                  onChange={(e) => void handleJournalPhotoChange(entry.date, e)}
+                                />
+                              </label>
+                            </div>
+                            {draft.photo_data_url ? (
+                              <div className="mt-3">
+                                <div className="relative h-52 w-full overflow-hidden rounded-[1.2rem]">
+                                  <Image
+                                    src={draft.photo_data_url}
+                                    alt={`Memory from ${entry.date_label}`}
+                                    fill
+                                    unoptimized
+                                    className="object-cover"
+                                  />
+                                </div>
+                                <div className="mt-3 flex justify-end">
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="rounded-xl"
+                                    onClick={() =>
+                                      setJournalDrafts((current) => ({
+                                        ...current,
+                                        [entry.date]: {
+                                          ...(current[entry.date] || draft),
+                                          photo_data_url: null,
+                                        },
+                                      }))
+                                    }
+                                  >
+                                    Remove photo
+                                  </Button>
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="mt-3 rounded-[1.2rem] border border-dashed border-white/10 px-4 py-6 text-sm text-slate-400">
+                                Add one image to make the day easier to remember later.
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="grid gap-4 lg:grid-cols-3">
+                        <div className="space-y-2">
+                          <div className="text-xs uppercase tracking-wide text-slate-400">
+                            Journal entry
+                          </div>
+                          <textarea
+                            value={draft.journal_entry}
+                            onChange={(e) =>
+                              setJournalDrafts((current) => ({
+                                ...current,
+                                [entry.date]: {
+                                  ...draft,
+                                  journal_entry: e.target.value,
+                                  accomplishments: current[entry.date]?.accomplishments ?? draft.accomplishments,
+                                  gratitude_entry: current[entry.date]?.gratitude_entry ?? draft.gratitude_entry,
+                                  photo_data_url: current[entry.date]?.photo_data_url ?? draft.photo_data_url,
+                                },
+                              }))
+                            }
+                            placeholder="Write a quick reflection about the day."
+                            className="min-h-[180px] w-full rounded-[1.2rem] border border-white/8 bg-[rgba(20,22,37,0.88)] px-4 py-3 text-sm leading-6 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-fuchsia-400/50"
+                          />
+                        </div>
+
+                        <div className="space-y-2">
+                          <div className="text-xs uppercase tracking-wide text-slate-400">
+                            Accomplishments
+                          </div>
+                          <textarea
+                            value={draft.accomplishments}
+                            onChange={(e) =>
+                              setJournalDrafts((current) => ({
+                                ...current,
+                                [entry.date]: {
+                                  ...draft,
+                                  journal_entry: current[entry.date]?.journal_entry ?? draft.journal_entry,
+                                  accomplishments: e.target.value,
+                                  gratitude_entry: current[entry.date]?.gratitude_entry ?? draft.gratitude_entry,
+                                  photo_data_url: current[entry.date]?.photo_data_url ?? draft.photo_data_url,
+                                },
+                              }))
+                            }
+                            placeholder="List wins, progress, or things you want to remember."
+                            className="min-h-[180px] w-full rounded-[1.2rem] border border-white/8 bg-[rgba(20,22,37,0.88)] px-4 py-3 text-sm leading-6 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-fuchsia-400/50"
+                          />
+                        </div>
+
+                        <div className="space-y-2">
+                          <div className="text-xs uppercase tracking-wide text-slate-400">
+                            Gratitude
+                          </div>
+                          <textarea
+                            value={draft.gratitude_entry}
+                            onChange={(e) =>
+                              setJournalDrafts((current) => ({
+                                ...current,
+                                [entry.date]: {
+                                  ...draft,
+                                  journal_entry: current[entry.date]?.journal_entry ?? draft.journal_entry,
+                                  accomplishments: current[entry.date]?.accomplishments ?? draft.accomplishments,
+                                  gratitude_entry: e.target.value,
+                                  photo_data_url: current[entry.date]?.photo_data_url ?? draft.photo_data_url,
+                                },
+                              }))
+                            }
+                            placeholder="What felt good, generous, or worth appreciating today?"
+                            className="min-h-[180px] w-full rounded-[1.2rem] border border-white/8 bg-[rgba(20,22,37,0.88)] px-4 py-3 text-sm leading-6 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-fuchsia-400/50"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="flex justify-end">
+                        <Button
+                          className="rounded-2xl"
+                          onClick={() => void saveJournalEntry(entry.date)}
+                          disabled={journalSavingDate === entry.date}
+                        >
+                          {journalSavingDate === entry.date ? "Saving..." : "Save entry"}
+                        </Button>
+                      </div>
+                    </CardContent>
+                  </Card>
+                );
+              })
+            ) : (
+              <Card className="rounded-[2rem] border border-white/8 bg-[rgba(17,19,34,0.82)] shadow-[0_16px_44px_rgba(6,7,14,0.36)] backdrop-blur-xl">
+                <CardContent className="p-6 text-sm text-slate-400">
+                  {loading ? "Loading journal..." : "No journal entries available yet."}
+                </CardContent>
+              </Card>
+            )}
+          </div>
+        ) : mode === "planning" ? (
           <div className="grid gap-6 lg:grid-cols-[320px_360px_1fr]">
             <Card className="rounded-[2rem] border border-white/8 bg-[rgba(17,19,34,0.82)] shadow-[0_16px_44px_rgba(6,7,14,0.36)] backdrop-blur-xl">
               <CardHeader className="pb-3">
@@ -2019,117 +2995,130 @@ export default function HomePage() {
             </Card>
           </div>
         ) : (
-        <div className="grid gap-6 lg:grid-cols-[260px_360px_1fr]">
-          <Card className="rounded-[2rem] border border-white/8 bg-[rgba(17,19,34,0.82)] shadow-[0_16px_44px_rgba(6,7,14,0.36)] backdrop-blur-xl">
-            <CardHeader className="pb-3">
-              <CardTitle className="flex items-center gap-2 text-lg">
-                <Mail className="h-5 w-5" />
-                Mailboxes
-              </CardTitle>
-              <p className="text-sm leading-6 text-slate-300">
-                {mode === "raw"
-                  ? "Switch folders and labels like Gmail."
-                  : mode === "schedule"
-                    ? "See upcoming events from your Google Calendar."
-                  : mode === "overview"
-                    ? "See saved AI insights for the selected mailbox without reclassifying everything."
-                  : "Pick a folder or label, review AI summaries, then correct any mistakes."}
-              </p>
-            </CardHeader>
+        <div
+          className={`grid gap-6 ${
+            mode === "schedule" ? "lg:grid-cols-[360px_1fr]" : "lg:grid-cols-[260px_360px_1fr]"
+          }`}
+        >
+          {mode !== "schedule" ? (
+            <Card className="rounded-[2rem] border border-white/8 bg-[rgba(17,19,34,0.82)] shadow-[0_16px_44px_rgba(6,7,14,0.36)] backdrop-blur-xl">
+              <CardHeader className="pb-3">
+                <CardTitle className="flex items-center gap-2 text-lg">
+                  <Mail className="h-5 w-5" />
+                  Mailboxes
+                </CardTitle>
+                <p className="text-sm leading-6 text-slate-300">
+                  {isRawMailView
+                    ? "Switch folders and labels like Gmail."
+                    : mode === "overview"
+                      ? "See saved AI insights for the selected mailbox without reclassifying everything."
+                      : "Pick a folder or label, review AI summaries, then correct any mistakes."}
+                </p>
+              </CardHeader>
 
-            <CardContent>
-              <ScrollArea className="h-[65vh] pr-3">
-                <div className="space-y-2">
-                  {visibleMailboxLabels.map((label) => {
-                    const active = selectedMailbox === label.name;
-                    const count =
-                      label.name === ALL_MAILBOX
-                        ? undefined
-                        : label.messages_unread > 0
-                          ? label.messages_unread
-                          : label.messages_total;
-                    const canRemove = !DEFAULT_VISIBLE_MAILBOXES.has(label.name);
+              <CardContent className="min-w-0 overflow-hidden">
+                <ScrollArea className="h-[65vh] min-w-0">
+                  <div className="space-y-2 pr-3">
+                    {visibleMailboxLabels.map((label) => {
+                      const active = selectedMailbox === label.name;
+                      const count =
+                        label.name === ALL_MAILBOX
+                          ? undefined
+                          : label.messages_unread > 0
+                            ? label.messages_unread
+                            : label.messages_total;
+                      const visibleCount =
+                        count !== undefined && count > 0 ? count : undefined;
+                      const canRemove = !DEFAULT_VISIBLE_MAILBOXES.has(label.name);
 
-                    return (
-                      <div key={label.id} className="flex items-center gap-2">
-                        <button
-                          onClick={() => setSelectedMailbox(label.name)}
-                          className={`flex min-w-0 flex-1 items-center justify-between rounded-2xl border px-3 py-2 text-left transition ${
-                            active
-                              ? "border-fuchsia-400/60 bg-[linear-gradient(135deg,rgba(189,147,249,0.22),rgba(40,42,54,0.95))] text-white shadow-[0_10px_28px_rgba(12,12,24,0.36)]"
-                              : "border-white/8 bg-[rgba(29,31,50,0.75)] text-slate-200 hover:border-cyan-300/30 hover:bg-[rgba(37,40,63,0.92)]"
+                      return (
+                        <div
+                          key={label.id}
+                          className={`grid min-w-0 items-center gap-2 ${
+                            canRemove ? "grid-cols-[minmax(0,1fr)_2rem]" : "grid-cols-1"
                           }`}
                         >
-                          <span className="truncate text-sm font-medium">
-                            {label.name === ALL_MAILBOX ? "All Mail" : label.name}
-                          </span>
-                          {count !== undefined ? (
-                            <span
-                              className={`ml-3 shrink-0 text-xs ${
-                                active ? "text-fuchsia-100" : "text-slate-400"
-                              }`}
-                            >
-                              {count}
-                            </span>
-                          ) : null}
-                        </button>
-
-                        {canRemove ? (
-                          <Button
-                            size="icon"
-                            variant="outline"
-                            className="h-10 w-10 rounded-2xl"
-                            onClick={() => {
-                              setExtraVisibleMailboxes((current) =>
-                                current.filter((name) => name !== label.name)
-                              );
-                              if (selectedMailbox === label.name) {
-                                setSelectedMailbox("INBOX");
-                              }
-                            }}
+                          <button
+                            onClick={() => setSelectedMailbox(label.name)}
+                            className={`flex min-w-0 w-full items-center justify-between overflow-hidden rounded-2xl border px-3 py-2 text-left transition ${
+                              active
+                                ? "border-fuchsia-400/60 bg-[linear-gradient(135deg,rgba(189,147,249,0.22),rgba(40,42,54,0.95))] text-white shadow-[0_10px_28px_rgba(12,12,24,0.36)]"
+                                : "border-white/8 bg-[rgba(29,31,50,0.75)] text-slate-200 hover:border-cyan-300/30 hover:bg-[rgba(37,40,63,0.92)]"
+                            }`}
                           >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
-                        ) : null}
-                      </div>
-                    );
-                  })}
-                </div>
+                            <span className="truncate text-sm font-medium">
+                              {label.name === ALL_MAILBOX ? "All Mail" : label.name}
+                            </span>
+                            {visibleCount !== undefined ? (
+                              <span
+                                className={`ml-3 shrink-0 text-xs ${
+                                  active ? "text-fuchsia-100" : "text-slate-400"
+                                }`}
+                              >
+                                {visibleCount}
+                              </span>
+                            ) : null}
+                          </button>
 
-                {hiddenMailboxLabels.length > 0 ? (
-                  <div className="mt-4 space-y-2 border-t border-white/8 pt-4">
-                    <div className="text-xs uppercase tracking-wide text-slate-400">
-                      Add To Sidebar
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      {hiddenMailboxLabels.map((label) => (
-                        <Button
-                          key={label.id}
-                          size="sm"
-                          variant="outline"
-                          className="rounded-2xl"
-                          onClick={() =>
-                            setExtraVisibleMailboxes((current) =>
-                              current.includes(label.name) ? current : [...current, label.name]
-                            )
-                          }
-                        >
-                          <Plus className="mr-2 h-4 w-4" />
-                          {label.name === ALL_MAILBOX ? "All Mail" : label.name}
-                        </Button>
-                      ))}
-                    </div>
+                          {canRemove ? (
+                            <Button
+                              size="icon"
+                              variant="outline"
+                              className="h-8 w-8 shrink-0 rounded-xl p-0"
+                              onClick={() => {
+                                setExtraVisibleMailboxes((current) =>
+                                  current.filter((name) => name !== label.name)
+                                );
+                                if (selectedMailbox === label.name) {
+                                  setSelectedMailbox("INBOX");
+                                }
+                              }}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          ) : null}
+                        </div>
+                      );
+                    })}
                   </div>
-                ) : null}
-              </ScrollArea>
-            </CardContent>
-          </Card>
+
+                  {hiddenMailboxLabels.length > 0 ? (
+                    <div className="mt-4 space-y-2 border-t border-white/8 pt-4 pr-3">
+                      <div className="text-xs uppercase tracking-wide text-slate-400">
+                        Add To Sidebar
+                      </div>
+                      <div className="grid gap-2">
+                        {hiddenMailboxLabels.map((label) => (
+                          <Button
+                            key={label.id}
+                            size="sm"
+                            variant="outline"
+                            className="w-full min-w-0 justify-start overflow-hidden rounded-2xl"
+                            onClick={() =>
+                              setExtraVisibleMailboxes((current) =>
+                                current.includes(label.name) ? current : [...current, label.name]
+                              )
+                            }
+                          >
+                            <Plus className="mr-2 h-4 w-4 shrink-0" />
+                            <span className="min-w-0 truncate">
+                              {label.name === ALL_MAILBOX ? "All Mail" : label.name}
+                            </span>
+                          </Button>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+                </ScrollArea>
+              </CardContent>
+            </Card>
+          ) : null}
 
           <Card className="rounded-[2rem] border border-white/8 bg-[rgba(17,19,34,0.82)] shadow-[0_16px_44px_rgba(6,7,14,0.36)] backdrop-blur-xl">
             <CardHeader className="pb-3">
               <CardTitle className="flex items-center gap-2 text-lg">
                 <Mail className="h-5 w-5" />
-                {mode === "raw"
+                {mode === "mail"
                   ? selectedMailboxLabel?.name === ALL_MAILBOX
                     ? "All Mail"
                     : selectedMailboxLabel?.name || "Inbox"
@@ -2154,31 +3143,23 @@ export default function HomePage() {
                 />
               </div>
 
-              {mode === "classified" ? (
+              {mode === "mail" ? (
                 <div className="flex flex-wrap gap-2">
                   <Button
                     size="sm"
-                    variant={classifiedBucket === "all" ? "default" : "outline"}
+                    variant={mailView === "ai" ? "default" : "outline"}
                     className="rounded-2xl"
-                    onClick={() => setClassifiedBucket("all")}
+                    onClick={() => setMailView("ai")}
                   >
-                    All
+                    AI
                   </Button>
                   <Button
                     size="sm"
-                    variant={classifiedBucket === "important" ? "default" : "outline"}
+                    variant={mailView === "raw" ? "default" : "outline"}
                     className="rounded-2xl"
-                    onClick={() => setClassifiedBucket("important")}
+                    onClick={() => setMailView("raw")}
                   >
-                    Important
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant={classifiedBucket === "unimportant" ? "default" : "outline"}
-                    className="rounded-2xl"
-                    onClick={() => setClassifiedBucket("unimportant")}
-                  >
-                    Unimportant
+                    Raw
                   </Button>
                 </div>
               ) : null}
@@ -2198,7 +3179,7 @@ export default function HomePage() {
                 </div>
               ) : null}
 
-              {mode === "raw" ? (
+              {isRawMailView ? (
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="text-xs text-slate-400">
                     Showing one row per loaded thread on this page.
@@ -2212,7 +3193,7 @@ export default function HomePage() {
                         const history = [...rawPageHistory];
                         const previousToken = history.pop() ?? null;
                         setRawPageHistory(history);
-                        void loadEmails("raw", selectedMailbox, previousToken);
+                        void loadEmails("mail", selectedMailbox, previousToken, "raw");
                       }}
                       disabled={loading || !rawHasPreviousPage}
                     >
@@ -2225,7 +3206,7 @@ export default function HomePage() {
                       onClick={() => {
                         if (!rawNextPageToken) return;
                         setRawPageHistory((current) => [...current, rawPageToken ?? ""]);
-                        void loadEmails("raw", selectedMailbox, rawNextPageToken);
+                        void loadEmails("mail", selectedMailbox, rawNextPageToken, "raw");
                       }}
                       disabled={loading || !rawNextPageToken}
                     >
@@ -2352,7 +3333,7 @@ export default function HomePage() {
                       </div>
                     ) : (
                       <div className="rounded-[1.6rem] border border-dashed border-white/10 p-6 text-sm text-slate-400">
-                        No cached overview yet. Open AI view on this mailbox to build it.
+                        No cached overview yet. Open Mail in AI mode on this mailbox to build it.
                       </div>
                     )
                   ) : null}
@@ -2426,7 +3407,7 @@ export default function HomePage() {
                           selected={selectedEmail?.id === email.id}
                           onClick={() => setSelectedId(email.id)}
                         />
-                        {mode === "raw" && threadCount > 1 ? (
+                        {isRawMailView && threadCount > 1 ? (
                           <div className="px-3 text-xs text-zinc-500">
                             {threadCount} messages loaded in this thread
                           </div>
@@ -2509,10 +3490,68 @@ export default function HomePage() {
                 </div>
               ) : null}
 
+              {isMailMode ? <div className="mb-6">{utilitiesPanel}</div> : null}
+
               {mode === "schedule" ? (
                 <div className="space-y-4">
                   <div className="rounded-[1.6rem] border border-white/6 bg-[rgba(35,37,58,0.7)] p-4 text-sm text-slate-300">
                     Upcoming events from your primary Google Calendar, organized as a day-by-day agenda.
+                  </div>
+                  <div className="rounded-[1.6rem] border border-cyan-300/15 bg-[linear-gradient(135deg,rgba(21,27,45,0.92),rgba(34,36,58,0.76))] p-4">
+                    <div className="flex items-center gap-2 text-xs uppercase tracking-wide text-slate-400">
+                      <Plus className="h-4 w-4" />
+                      Quick add
+                    </div>
+                    <div className="mt-2 text-sm leading-6 text-slate-300">
+                      Describe an event in plain English and add it straight to Google Calendar without a review step.
+                    </div>
+                    <textarea
+                      value={quickCalendarPrompt}
+                      onChange={(e) => setQuickCalendarPrompt(e.target.value)}
+                      placeholder="Example: Lunch with Sam tomorrow at 12:30 PM at Aubergine Kitchen for 1 hour."
+                      className="mt-4 min-h-[112px] w-full rounded-[1.2rem] border border-white/8 bg-[rgba(20,22,37,0.88)] px-4 py-3 text-sm leading-6 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-cyan-300/40"
+                    />
+                    <div className="mt-4 flex flex-wrap items-center gap-3">
+                      <Button
+                        className="rounded-2xl"
+                        onClick={() => void createQuickCalendarEvent()}
+                        disabled={quickCalendarLoading || !quickCalendarPrompt.trim()}
+                      >
+                        <CalendarDays className="mr-2 h-4 w-4" />
+                        {quickCalendarLoading ? "Adding..." : "Add directly to Calendar"}
+                      </Button>
+                      <div className="text-xs text-slate-400">
+                        Best with a clear day and time.
+                      </div>
+                    </div>
+                    {quickCalendarResult ? (
+                      <div className="mt-4 rounded-[1.2rem] border border-emerald-300/20 bg-emerald-400/10 px-4 py-3 text-sm text-emerald-100">
+                        <div className="font-medium text-emerald-50">
+                          Added {quickCalendarResult.title || "event"} to Google Calendar.
+                        </div>
+                        <div className="mt-1 text-emerald-100/90">
+                          {quickCalendarResult.start
+                            ? formatScheduleDateTime(
+                                quickCalendarResult.start,
+                                quickCalendarResult.is_all_day
+                              )
+                            : "Scheduled"}
+                          {quickCalendarResult.end && !quickCalendarResult.is_all_day
+                            ? ` - ${formatScheduleDateTime(quickCalendarResult.end)}`
+                            : ""}
+                        </div>
+                        {quickCalendarResult.html_link ? (
+                          <a
+                            href={quickCalendarResult.html_link}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="mt-2 inline-block text-sm text-emerald-50 underline decoration-emerald-200/40 underline-offset-4"
+                          >
+                            Open event
+                          </a>
+                        ) : null}
+                      </div>
+                    ) : null}
                   </div>
                   {agenda ? (
                     (() => {
@@ -2658,7 +3697,7 @@ export default function HomePage() {
                     {selectedEmail.date ? (
                       <div className="text-sm text-slate-400">{selectedEmail.date}</div>
                     ) : null}
-                    {mode === "raw" && selectedThreadCount > 1 ? (
+                    {isRawMailView && selectedThreadCount > 1 ? (
                       <div className="text-sm text-slate-400">
                         This row represents {selectedThreadCount} loaded messages in the same
                         thread.
@@ -2666,7 +3705,7 @@ export default function HomePage() {
                     ) : null}
                   </div>
 
-                  {mode === "raw" ? (
+                  {isRawMailView ? (
                     <div className="rounded-[1.6rem] border border-white/6 bg-[rgba(35,37,58,0.7)] p-4">
                       <div className="mb-3 text-xs uppercase tracking-wide text-slate-400">
                         Conversation actions
@@ -2716,7 +3755,7 @@ export default function HomePage() {
                     </div>
                   ) : null}
 
-                  {mode === "classified" ? (
+                  {isAiMailView ? (
                     <div className="rounded-[1.6rem] border border-white/6 bg-[rgba(35,37,58,0.7)] p-4">
                       <div className="mb-3 text-xs uppercase tracking-wide text-slate-400">
                         Classification correction
@@ -2748,43 +3787,67 @@ export default function HomePage() {
                   ) : null}
 
                   {calendarLoading ? (
-                    <div className="rounded-2xl bg-zinc-50 p-4 text-sm text-zinc-600">
+                    <div className="rounded-[1.6rem] border border-white/6 bg-[rgba(35,37,58,0.7)] p-4 text-sm text-slate-300">
                       Loading calendar suggestion...
                     </div>
                   ) : null}
 
-                  {calendarPreview ? (
-                    <div className="rounded-2xl bg-zinc-50 p-4">
-                      <div className="mb-3 flex items-center gap-2 text-xs uppercase tracking-wide text-zinc-500">
+                  {!calendarPreview ? (
+                    <div className="rounded-[1.6rem] border border-white/6 bg-[rgba(35,37,58,0.7)] p-4">
+                      <div className="mb-3 flex items-center gap-2 text-xs uppercase tracking-wide text-slate-400">
                         <CalendarDays className="h-4 w-4" />
                         Calendar suggestion
                       </div>
-                      <div className="space-y-2 text-sm text-zinc-700">
+                      <div className="text-sm text-slate-300">
+                        Generate a calendar suggestion only when you want one.
+                      </div>
+                      <div className="mt-4">
+                        <Button
+                          className="rounded-2xl"
+                          size="sm"
+                          variant="outline"
+                          onClick={() => void loadCalendarPreview(selectedEmail.id)}
+                          disabled={calendarLoading}
+                        >
+                          <CalendarDays className="mr-2 h-4 w-4" />
+                          Generate suggestion
+                        </Button>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {calendarPreview ? (
+                    <div className="rounded-[1.6rem] border border-white/6 bg-[rgba(35,37,58,0.7)] p-4">
+                      <div className="mb-3 flex items-center gap-2 text-xs uppercase tracking-wide text-slate-400">
+                        <CalendarDays className="h-4 w-4" />
+                        Calendar suggestion
+                      </div>
+                      <div className="space-y-2 text-sm text-slate-200">
                         <div>
-                          <span className="font-medium text-zinc-900">Title:</span>{" "}
+                          <span className="font-medium text-slate-100">Title:</span>{" "}
                           {calendarPreview.title || "Untitled event"}
                         </div>
                         {calendarPreview.start ? (
                           <div>
-                            <span className="font-medium text-zinc-900">Start:</span>{" "}
+                            <span className="font-medium text-slate-100">Start:</span>{" "}
                             {calendarPreview.start}
                           </div>
                         ) : null}
                         {calendarPreview.end ? (
                           <div>
-                            <span className="font-medium text-zinc-900">End:</span>{" "}
+                            <span className="font-medium text-slate-100">End:</span>{" "}
                             {calendarPreview.end}
                           </div>
                         ) : null}
                         {calendarPreview.location ? (
                           <div>
-                            <span className="font-medium text-zinc-900">Location:</span>{" "}
+                            <span className="font-medium text-slate-100">Location:</span>{" "}
                             {calendarPreview.location}
                           </div>
                         ) : null}
                         {calendarPreview.notes ? (
                           <div>
-                            <span className="font-medium text-zinc-900">Notes:</span>{" "}
+                            <span className="font-medium text-slate-100">Notes:</span>{" "}
                             {calendarPreview.notes}
                           </div>
                         ) : null}
@@ -2804,7 +3867,7 @@ export default function HomePage() {
                             href={calendarCreateLink}
                             target="_blank"
                             rel="noreferrer"
-                            className="text-sm text-zinc-700 underline"
+                            className="text-sm text-cyan-200 underline decoration-cyan-300/40 underline-offset-4"
                           >
                             Open event
                           </a>
@@ -2814,22 +3877,22 @@ export default function HomePage() {
                   ) : null}
 
                   {selectedEmail.classification?.short_summary ? (
-                    <div className="rounded-2xl bg-zinc-50 p-4">
-                      <div className="mb-2 text-xs uppercase tracking-wide text-zinc-500">
+                    <div className="rounded-[1.6rem] border border-white/6 bg-[rgba(35,37,58,0.7)] p-4">
+                      <div className="mb-2 text-xs uppercase tracking-wide text-slate-400">
                         AI summary
                       </div>
-                      <div className="text-sm text-zinc-700">
+                      <div className="text-sm text-slate-200">
                         {selectedEmail.classification.short_summary}
                       </div>
                     </div>
                   ) : null}
 
                   {selectedEmail.classification?.why_it_matters ? (
-                    <div className="rounded-2xl bg-zinc-50 p-4">
-                      <div className="mb-2 text-xs uppercase tracking-wide text-zinc-500">
+                    <div className="rounded-[1.6rem] border border-white/6 bg-[rgba(35,37,58,0.7)] p-4">
+                      <div className="mb-2 text-xs uppercase tracking-wide text-slate-400">
                         Why it matters
                       </div>
-                      <div className="text-sm text-zinc-700">
+                      <div className="text-sm text-slate-200">
                         {selectedEmail.classification.why_it_matters}
                       </div>
                     </div>
@@ -2838,37 +3901,40 @@ export default function HomePage() {
                   {(selectedEmail.classification?.action_items?.length ||
                     selectedEmail.classification?.deadline_hint ||
                     selectedEmail.classification?.suggested_reply) ? (
-                    <div className="rounded-2xl bg-zinc-50 p-4">
-                      <div className="mb-3 text-xs uppercase tracking-wide text-zinc-500">
+                    <div className="rounded-[1.6rem] border border-white/6 bg-[rgba(35,37,58,0.7)] p-4">
+                      <div className="mb-3 text-xs uppercase tracking-wide text-slate-400">
                         Action plan
                       </div>
                       {selectedEmail.classification?.action_items?.length ? (
                         <div className="mb-4 space-y-2">
                           {selectedEmail.classification.action_items.map((item) => (
-                            <div key={item} className="rounded-xl bg-white px-3 py-2 text-sm text-zinc-700">
+                            <div
+                              key={item}
+                              className="rounded-xl border border-white/6 bg-[rgba(20,22,37,0.82)] px-3 py-2 text-sm text-slate-200"
+                            >
                               {item}
                             </div>
                           ))}
                         </div>
                       ) : null}
                       {selectedEmail.classification?.deadline_hint ? (
-                        <div className="mb-3 text-sm text-zinc-700">
-                          <span className="font-medium text-zinc-900">Deadline:</span>{" "}
+                        <div className="mb-3 text-sm text-slate-200">
+                          <span className="font-medium text-slate-100">Deadline:</span>{" "}
                           {selectedEmail.classification.deadline_hint}
                         </div>
                       ) : null}
                       {selectedEmail.classification?.suggested_reply ? (
-                        <div className="text-sm text-zinc-700">
-                          <span className="font-medium text-zinc-900">Suggested reply:</span>{" "}
+                        <div className="text-sm text-slate-200">
+                          <span className="font-medium text-slate-100">Suggested reply:</span>{" "}
                           {selectedEmail.classification.suggested_reply}
                         </div>
                       ) : null}
                     </div>
                   ) : null}
 
-                  {mode === "raw" ? (
-                    <div className="rounded-2xl bg-zinc-50 p-4">
-                      <div className="mb-3 flex items-center gap-2 text-xs uppercase tracking-wide text-zinc-500">
+                  {isRawMailView ? (
+                    <div className="rounded-[1.6rem] border border-white/6 bg-[rgba(35,37,58,0.7)] p-4">
+                      <div className="mb-3 flex items-center gap-2 text-xs uppercase tracking-wide text-slate-400">
                         <Tag className="h-4 w-4" />
                         Labels
                       </div>
@@ -2880,8 +3946,8 @@ export default function HomePage() {
                               key={label.id}
                               className={`inline-flex cursor-pointer items-center gap-2 rounded-xl border px-3 py-2 text-sm ${
                                 checked
-                                  ? "border-zinc-900 bg-zinc-900 text-white"
-                                  : "border-zinc-300 bg-white text-zinc-700"
+                                  ? "border-cyan-300/40 bg-[rgba(56,189,248,0.14)] text-slate-100"
+                                  : "border-white/8 bg-[rgba(20,22,37,0.82)] text-slate-300"
                               }`}
                             >
                               <input
@@ -2917,7 +3983,7 @@ export default function HomePage() {
                   ) : null}
 
                   {selectedEmail.cleanupDecision ? (
-                    <div className="rounded-2xl bg-zinc-50 p-4">
+                    <div className="rounded-[1.6rem] border border-white/6 bg-[rgba(35,37,58,0.7)] p-4">
                       <div className="mb-3 flex flex-wrap items-center gap-2">
                         <Badge
                           variant={decisionTone[selectedEmail.cleanupDecision.action]}
@@ -2936,7 +4002,7 @@ export default function HomePage() {
                           </Badge>
                         ) : null}
                       </div>
-                      <p className="text-sm text-zinc-700">
+                      <p className="text-sm text-slate-200">
                         {selectedEmail.cleanupDecision.reason}
                       </p>
                     </div>
@@ -2944,34 +4010,34 @@ export default function HomePage() {
 
                   {selectedEmail.classification ? (
                     <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                      <Card className="rounded-2xl shadow-none">
+                      <Card className="rounded-2xl border border-white/6 bg-[rgba(35,37,58,0.7)] shadow-none">
                         <CardContent className="p-4">
-                          <div className="text-xs uppercase tracking-wide text-zinc-500">
+                          <div className="text-xs uppercase tracking-wide text-slate-400">
                             Category
                           </div>
-                          <div className="mt-1 text-base font-medium">
+                          <div className="mt-1 text-base font-medium text-slate-100">
                             {selectedEmail.classification.category || "Unknown"}
                           </div>
                         </CardContent>
                       </Card>
 
-                      <Card className="rounded-2xl shadow-none">
+                      <Card className="rounded-2xl border border-white/6 bg-[rgba(35,37,58,0.7)] shadow-none">
                         <CardContent className="p-4">
-                          <div className="text-xs uppercase tracking-wide text-zinc-500">
+                          <div className="text-xs uppercase tracking-wide text-slate-400">
                             Importance
                           </div>
-                          <div className="mt-1 text-base font-medium">
+                          <div className="mt-1 text-base font-medium text-slate-100">
                             {selectedEmail.classification.importance_score || "—"}/10
                           </div>
                         </CardContent>
                       </Card>
 
-                      <Card className="rounded-2xl shadow-none">
+                      <Card className="rounded-2xl border border-white/6 bg-[rgba(35,37,58,0.7)] shadow-none">
                         <CardContent className="p-4">
-                          <div className="text-xs uppercase tracking-wide text-zinc-500">
+                          <div className="text-xs uppercase tracking-wide text-slate-400">
                             Suggested action
                           </div>
-                          <div className="mt-1 text-base font-medium">
+                          <div className="mt-1 text-base font-medium text-slate-100">
                             {selectedEmail.classification.suggested_action || "—"}
                           </div>
                         </CardContent>
@@ -2980,11 +4046,11 @@ export default function HomePage() {
                   ) : null}
 
                   {selectedEmail.classification?.reason ? (
-                    <div className="rounded-2xl bg-zinc-50 p-4">
-                      <div className="mb-1 text-xs uppercase tracking-wide text-zinc-500">
+                    <div className="rounded-[1.6rem] border border-white/6 bg-[rgba(35,37,58,0.7)] p-4">
+                      <div className="mb-1 text-xs uppercase tracking-wide text-slate-400">
                         Why it was classified this way
                       </div>
-                      <p className="text-sm text-zinc-700">
+                      <p className="text-sm text-slate-200">
                         {selectedEmail.classification.reason}
                       </p>
                     </div>
@@ -2992,7 +4058,7 @@ export default function HomePage() {
 
                   {selectedEmail.labels?.length ? (
                     <div>
-                      <div className="mb-2 text-xs uppercase tracking-wide text-zinc-500">
+                      <div className="mb-2 text-xs uppercase tracking-wide text-slate-400">
                         Current Gmail labels
                       </div>
                       <div className="flex flex-wrap gap-2">
@@ -3006,25 +4072,25 @@ export default function HomePage() {
                   ) : null}
 
                   <div>
-                    <div className="mb-2 text-xs uppercase tracking-wide text-zinc-500">
+                    <div className="mb-2 text-xs uppercase tracking-wide text-slate-400">
                       Snippet
                     </div>
-                    <p className="rounded-2xl bg-zinc-50 p-4 text-sm leading-6 text-zinc-700">
+                    <p className="rounded-[1.6rem] border border-white/6 bg-[rgba(35,37,58,0.7)] p-4 text-sm leading-6 text-slate-200">
                       {decodeHtmlEntities(selectedEmail.snippet) || "No snippet available."}
                     </p>
                   </div>
 
                   <div>
-                    <div className="mb-2 text-xs uppercase tracking-wide text-zinc-500">
+                    <div className="mb-2 text-xs uppercase tracking-wide text-slate-400">
                       Body preview
                     </div>
-                    <div className="max-h-[40vh] overflow-auto whitespace-pre-wrap rounded-2xl bg-zinc-50 p-4 text-sm leading-6 text-zinc-700">
+                    <div className="max-h-[40vh] overflow-auto whitespace-pre-wrap rounded-[1.6rem] border border-white/6 bg-[rgba(35,37,58,0.7)] p-4 text-sm leading-6 text-slate-200">
                       {decodeHtmlEntities(selectedEmail.body) || "No body text extracted."}
                     </div>
                   </div>
 
-                  <div className="rounded-2xl border border-dashed border-zinc-300 p-4 text-sm text-zinc-500">
-                    <div className="mb-2 flex items-center gap-2 font-medium text-zinc-700">
+                  <div className="rounded-[1.6rem] border border-dashed border-white/10 bg-[rgba(20,22,37,0.45)] p-4 text-sm text-slate-400">
+                    <div className="mb-2 flex items-center gap-2 font-medium text-slate-200">
                       <Trash2 className="h-4 w-4" />
                       Safety boundary
                     </div>

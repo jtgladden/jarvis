@@ -203,6 +203,23 @@ class CalendarEventCreateResponse(BaseModel):
     preview: CalendarEventPreview
 
 
+class CalendarQuickAddRequest(BaseModel):
+    description: str
+
+
+class CalendarQuickAddResponse(BaseModel):
+    created: bool
+    event_id: Optional[str] = None
+    html_link: Optional[str] = None
+    title: Optional[str] = None
+    start: Optional[str] = None
+    end: Optional[str] = None
+    is_all_day: bool = False
+    location: Optional[str] = None
+    notes: Optional[str] = None
+    source_text: str = ""
+
+
 class CalendarAgendaItem(BaseModel):
     event_id: str
     title: str
@@ -212,6 +229,7 @@ class CalendarAgendaItem(BaseModel):
     location: Optional[str] = None
     description: Optional[str] = None
     html_link: Optional[str] = None
+    removed: bool = False
 
 
 class CalendarAgendaResponse(BaseModel):
@@ -276,3 +294,74 @@ class PlanningCalendarBulkCreateRequest(BaseModel):
 class PlanningCalendarBulkCreateResponse(BaseModel):
     created_count: int = 0
     items: List[PlanningCalendarCreateResponse] = Field(default_factory=list)
+
+
+class DashboardMailItem(BaseModel):
+    message_id: str
+    subject: str
+    sender: str
+    summary: str = ""
+    why_it_matters: str = ""
+    urgency: Literal["low", "medium", "high"] = "low"
+    needs_reply: bool = False
+    deadline_hint: Optional[str] = None
+    action_items: List[str] = Field(default_factory=list)
+
+
+class DashboardNewsItem(BaseModel):
+    title: str
+    source: Optional[str] = None
+    link: Optional[str] = None
+    published_at: Optional[str] = None
+
+
+class DashboardTaskItem(BaseModel):
+    id: str
+    title: str
+    detail: Optional[str] = None
+    due_text: Optional[str] = None
+    source: Literal["mail", "calendar", "news", "planning"] = "mail"
+    priority: Literal["high", "medium", "low"] = "medium"
+    related_message_id: Optional[str] = None
+    related_event_id: Optional[str] = None
+
+
+class DashboardResponse(BaseModel):
+    generated_at: str
+    date_label: str
+    overview: str = ""
+    mail_summary: str = ""
+    news_summary: str = ""
+    tasks_summary: str = ""
+    calendar_items: List[CalendarAgendaItem] = Field(default_factory=list)
+    important_emails: List[DashboardMailItem] = Field(default_factory=list)
+    news_items: List[DashboardNewsItem] = Field(default_factory=list)
+    tasks: List[DashboardTaskItem] = Field(default_factory=list)
+
+
+class JournalDayNoteUpdateRequest(BaseModel):
+    journal_entry: str = ""
+    accomplishments: str = ""
+    gratitude_entry: str = ""
+    photo_data_url: Optional[str] = None
+    calendar_items: List[CalendarAgendaItem] = Field(default_factory=list)
+
+
+class JournalDayEntry(BaseModel):
+    date: str
+    date_label: str
+    calendar_summary: str = ""
+    world_event_title: Optional[str] = None
+    world_event_summary: str = ""
+    world_event_source: Optional[str] = None
+    journal_entry: str = ""
+    accomplishments: str = ""
+    gratitude_entry: str = ""
+    photo_data_url: Optional[str] = None
+    calendar_items: List[CalendarAgendaItem] = Field(default_factory=list)
+    updated_at: Optional[str] = None
+
+
+class JournalResponse(BaseModel):
+    generated_at: str
+    entries: List[JournalDayEntry] = Field(default_factory=list)

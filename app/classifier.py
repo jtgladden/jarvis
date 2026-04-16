@@ -71,6 +71,45 @@ HIGH_VALUE_KEYWORDS = {
 }
 
 
+def _classification_system_prompt() -> str:
+    return """
+You classify emails and must return a single valid JSON object with no extra text.
+Use exactly these fields:
+- category: one of [action_required, meeting, reference, newsletter, promotion, receipt, spam]
+- importance_score: integer 1-10
+- needs_reply: boolean
+- urgency: one of [low, medium, high]
+- suggested_action: one of [keep, archive, label]
+- short_summary: one or two short sentences summarizing the email
+- why_it_matters: short explanation of why the user should care
+- action_items: array of short action items, can be empty
+- deadline_hint: short string for any explicit or implied deadline, otherwise empty string
+- suggested_reply: short string describing what a reply should accomplish, otherwise empty string
+- calendar_relevant: boolean, true only if this email clearly suggests a calendar event
+- calendar_title: short event title, otherwise empty string
+- calendar_start: RFC3339 datetime or YYYY-MM-DD for all-day events, otherwise empty string
+- calendar_end: RFC3339 datetime or YYYY-MM-DD for all-day events, otherwise empty string
+- calendar_is_all_day: boolean
+- calendar_location: short location string, otherwise empty string
+- calendar_notes: short event notes, otherwise empty string
+- reason: short explanation
+""".strip() + _classification_guidance_prompt()
+
+
+def _email_payload(email: EmailSummary) -> dict[str, str]:
+    body_preview = ""
+    if OPENAI_EMAIL_BODY_PREVIEW_CHARS > 0:
+        body_preview = (email.body or "")[:OPENAI_EMAIL_BODY_PREVIEW_CHARS]
+
+    return {
+        "id": email.id,
+        "subject": email.subject,
+        "sender": email.sender,
+        "snippet": email.snippet,
+        "body": body_preview,
+    }
+
+
 def _fallback_classification(raw: str | None = None, reason: str = "AI response fallback used.") -> EmailClassification:
     return EmailClassification(
         category="reference",
@@ -125,43 +164,18 @@ Follow that guidance when it is relevant, while still grounding your answer in t
 
 
 def classify_email(email: EmailSummary) -> EmailClassification:
-    body_preview = ""
-    if OPENAI_EMAIL_BODY_PREVIEW_CHARS > 0:
-        body_preview = (email.body or "")[:OPENAI_EMAIL_BODY_PREVIEW_CHARS]
-
-    system_prompt = """
-You classify emails and must return a single valid JSON object with no extra text.
-Use exactly these fields:
-- category: one of [action_required, meeting, reference, newsletter, promotion, receipt, spam]
-- importance_score: integer 1-10
-- needs_reply: boolean
-- urgency: one of [low, medium, high]
-- suggested_action: one of [keep, archive, label]
-- short_summary: one or two short sentences summarizing the email
-- why_it_matters: short explanation of why the user should care
-- action_items: array of short action items, can be empty
-- deadline_hint: short string for any explicit or implied deadline, otherwise empty string
-- suggested_reply: short string describing what a reply should accomplish, otherwise empty string
-- calendar_relevant: boolean, true only if this email clearly suggests a calendar event
-- calendar_title: short event title, otherwise empty string
-- calendar_start: RFC3339 datetime or YYYY-MM-DD for all-day events, otherwise empty string
-- calendar_end: RFC3339 datetime or YYYY-MM-DD for all-day events, otherwise empty string
-- calendar_is_all_day: boolean
-- calendar_location: short location string, otherwise empty string
-- calendar_notes: short event notes, otherwise empty string
-- reason: short explanation
-""".strip() + _classification_guidance_prompt()
+    payload = _email_payload(email)
 
     user_prompt = f"""
 Email:
-Subject: {email.subject}
-From: {email.sender}
-Snippet: {email.snippet}
-Body: {body_preview}
+Subject: {payload["subject"]}
+From: {payload["sender"]}
+Snippet: {payload["snippet"]}
+Body: {payload["body"]}
 """.strip()
 
     try:
-        parsed, raw = _json_chat_completion(system_prompt, user_prompt)
+        parsed, raw = _json_chat_completion(_classification_system_prompt(), user_prompt)
     except Exception as exc:
         return _fallback_classification(reason=f"AI classification failed: {exc}")
 
@@ -171,6 +185,70 @@ Body: {body_preview}
         return _fallback_classification(raw=raw)
 
     return classification.model_copy(update={"raw": raw})
+
+
+def classify_emails_batch(emails: list[EmailSummary]) -> list[EmailClassification]:
+    if not emails:
+        return []
+
+    payloads = [_email_payload(email) for email in emails]
+    system_prompt = f"""
+You classify emails and must return a single valid JSON object with no extra text.
+Return exactly this shape:
+{{
+  "items": [
+    {{
+      "id": "email id",
+      "classification": {{
+        "category": "...",
+        "importance_score": 1,
+        "needs_reply": false,
+        "urgency": "low",
+        "suggested_action": "keep",
+        "short_summary": "",
+        "why_it_matters": "",
+        "action_items": [],
+        "deadline_hint": "",
+        "suggested_reply": "",
+        "calendar_relevant": false,
+        "calendar_title": "",
+        "calendar_start": "",
+        "calendar_end": "",
+        "calendar_is_all_day": false,
+        "calendar_location": "",
+        "calendar_notes": "",
+        "reason": ""
+      }}
+    }}
+  ]
+}}
+Classify each email independently. Include every provided id exactly once.
+""".strip() + _classification_guidance_prompt()
+
+    try:
+        parsed, raw = _json_chat_completion(
+            system_prompt,
+            json.dumps({"emails": payloads}, ensure_ascii=True),
+        )
+    except Exception:
+        return [classify_email(email) for email in emails]
+
+    parsed_items = parsed.get("items") or []
+    by_id: dict[str, EmailClassification] = {}
+
+    for item in parsed_items:
+        item_id = str((item or {}).get("id") or "").strip()
+        classification_payload = (item or {}).get("classification") or {}
+        if not item_id:
+            continue
+        try:
+            by_id[item_id] = EmailClassification.model_validate(classification_payload).model_copy(
+                update={"raw": raw}
+            )
+        except Exception:
+            continue
+
+    return [by_id.get(email.id) or classify_email(email) for email in emails]
 
 
 def _normalize_cleanup_label(label_name: str | None) -> str | None:

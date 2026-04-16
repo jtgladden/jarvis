@@ -70,19 +70,23 @@ def build_calendar_preview(email: EmailSummary, classification: EmailClassificat
     )
 
 
-def create_calendar_event_from_preview(preview: CalendarEventPreview) -> CalendarEventCreateResponse:
-    if not preview.relevant or not preview.title or not preview.start:
-        return CalendarEventCreateResponse(created=False, preview=preview)
-
+def create_calendar_event(
+    title: str,
+    start: str,
+    end: str | None = None,
+    is_all_day: bool = False,
+    location: str | None = None,
+    notes: str | None = None,
+):
     event: dict = {
-        "summary": preview.title,
-        "location": preview.location,
-        "description": preview.notes,
+        "summary": title,
+        "location": location,
+        "description": notes,
     }
 
-    if preview.is_all_day:
-        event["start"] = {"date": preview.start}
-        end_date = preview.end or preview.start
+    if is_all_day:
+        event["start"] = {"date": start}
+        end_date = end or start
         try:
             parsed = datetime.fromisoformat(end_date)
             exclusive_end = (parsed + timedelta(days=1)).date().isoformat()
@@ -90,17 +94,31 @@ def create_calendar_event_from_preview(preview: CalendarEventPreview) -> Calenda
             exclusive_end = end_date
         event["end"] = {"date": exclusive_end}
     else:
-        event["start"] = {"dateTime": preview.start, "timeZone": DEFAULT_TIMEZONE}
+        event["start"] = {"dateTime": start, "timeZone": DEFAULT_TIMEZONE}
         event["end"] = {
-            "dateTime": preview.end or preview.start,
+            "dateTime": end or start,
             "timeZone": DEFAULT_TIMEZONE,
         }
 
-    created = (
+    return (
         get_calendar_service()
         .events()
         .insert(calendarId="primary", body=event)
         .execute()
+    )
+
+
+def create_calendar_event_from_preview(preview: CalendarEventPreview) -> CalendarEventCreateResponse:
+    if not preview.relevant or not preview.title or not preview.start:
+        return CalendarEventCreateResponse(created=False, preview=preview)
+
+    created = create_calendar_event(
+        title=preview.title,
+        start=preview.start,
+        end=preview.end,
+        is_all_day=preview.is_all_day,
+        location=preview.location,
+        notes=preview.notes,
     )
     return CalendarEventCreateResponse(
         created=True,
@@ -183,5 +201,50 @@ def list_upcoming_events(days: int = 7, max_results: int = 25) -> CalendarAgenda
         calendar_id="primary",
         time_min=now,
         time_max=time_max,
+        items=items,
+    )
+
+
+def list_events_between(
+    time_min: datetime,
+    time_max: datetime,
+    max_results: int = 250,
+) -> CalendarAgendaResponse:
+    response = (
+        get_calendar_service()
+        .events()
+        .list(
+            calendarId="primary",
+            timeMin=time_min.astimezone().isoformat(),
+            timeMax=time_max.astimezone().isoformat(),
+            singleEvents=True,
+            orderBy="startTime",
+            maxResults=max_results,
+        )
+        .execute()
+    )
+
+    items = []
+    for item in response.get("items", []):
+        start = item.get("start", {})
+        end = item.get("end", {})
+        is_all_day = "date" in start
+        items.append(
+            CalendarAgendaItem(
+                event_id=item.get("id", ""),
+                title=item.get("summary") or "(Untitled event)",
+                start=start.get("dateTime") or start.get("date") or "",
+                end=end.get("dateTime") or end.get("date"),
+                is_all_day=is_all_day,
+                location=item.get("location"),
+                description=item.get("description"),
+                html_link=item.get("htmlLink"),
+            )
+        )
+
+    return CalendarAgendaResponse(
+        calendar_id="primary",
+        time_min=time_min.isoformat(),
+        time_max=time_max.isoformat(),
         items=items,
     )

@@ -8,14 +8,19 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.calendar_client import build_calendar_preview, create_calendar_event_from_plan_item, create_calendar_events_from_plan_items, create_calendar_event_from_preview, list_upcoming_events
+from app.calendar_quick_add import create_calendar_event_from_description
 from app.classification_cache import get_cached_classification, init_classification_cache, save_classification, summarize_cached_classifications
 from app.classification_guidance import get_classification_guidance, init_classification_guidance, update_classification_guidance
-from app.classifier import IMPORTANT_LABEL, LEGACY_IMPORTANT_LABELS, LEGACY_UNIMPORTANT_LABELS, UNIMPORTANT_LABEL, classify_cleanup_email, classify_email, classify_new_email_ai_fallback
+from app.classifier import IMPORTANT_LABEL, LEGACY_IMPORTANT_LABELS, LEGACY_UNIMPORTANT_LABELS, UNIMPORTANT_LABEL, classify_cleanup_email, classify_email, classify_emails_batch, classify_new_email_ai_fallback
 from app.config import CORS_ALLOWED_ORIGINS, OPENAI_MAX_EMAILS_PER_RUN
+from app.dashboard import generate_dashboard
 from app.gmail_client import cleanup_inbox, expire_stale_important_emails, get_all_inbox_emails, get_email_by_id, get_emails_by_any_label, get_mailbox_emails, get_mailbox_emails_page, get_new_inbox_emails, get_recent_inbox_emails, list_gmail_labels, mark_email_handled, process_new_inbox_emails, update_email
+from app.journal import get_journal, save_journal_day
+from app.journal_store import init_journal_store
 from app.planner import generate_schedule_plan
 from app.rules import classify_new_email_rule
-from app.schemas import CalendarAgendaResponse, CalendarEventCreateResponse, CalendarEventPreview, ClassifiedEmailResponse, ClassificationGuidanceRequest, ClassificationGuidanceResponse, ClassificationOverviewResponse, CleanupJobStartResponse, CleanupJobStatus, CleanupResponse, EmailPageResponse, EmailSummary, EmailUpdateRequest, EmailUpdateResponse, GmailLabel, HandleEmailResponse, PlanningCalendarBulkCreateRequest, PlanningCalendarBulkCreateResponse, PlanningCalendarCreateRequest, PlanningCalendarCreateResponse, PlanningJobStartResponse, PlanningJobStatus, PlanningRequest, PlanningResponse, RuleProcessResponse
+from app.schemas import CalendarAgendaResponse, CalendarEventCreateResponse, CalendarEventPreview, CalendarQuickAddRequest, CalendarQuickAddResponse, ClassifiedEmailResponse, ClassificationGuidanceRequest, ClassificationGuidanceResponse, ClassificationOverviewResponse, CleanupJobStartResponse, CleanupJobStatus, CleanupResponse, DashboardResponse, EmailPageResponse, EmailSummary, EmailUpdateRequest, EmailUpdateResponse, GmailLabel, HandleEmailResponse, JournalDayEntry, JournalDayNoteUpdateRequest, JournalResponse, PlanningCalendarBulkCreateRequest, PlanningCalendarBulkCreateResponse, PlanningCalendarCreateRequest, PlanningCalendarCreateResponse, PlanningJobStartResponse, PlanningJobStatus, PlanningRequest, PlanningResponse, RuleProcessResponse
+from app.user_context import get_default_user_context
 
 app = FastAPI(title="Mail AI", version="0.1.0")
 api = APIRouter(prefix="/api")
@@ -165,6 +170,7 @@ def _new_mail_sort_loop() -> None:
 def start_background_new_mail_sorter() -> None:
     init_classification_cache()
     init_classification_guidance()
+    init_journal_store()
     thread = Thread(target=_new_mail_sort_loop, daemon=True)
     thread.start()
 
@@ -212,6 +218,7 @@ def classify_emails(
     bucket: str = Query(default="all"),
     mailbox: str = Query(default="INBOX"),
 ):
+    user_id = get_default_user_context().user_id
     requested_limit = (
         OPENAI_MAX_EMAILS_PER_RUN if limit is None else min(limit, OPENAI_MAX_EMAILS_PER_RUN)
     )
@@ -233,16 +240,29 @@ def classify_emails(
             if any(label in {UNIMPORTANT_LABEL, *LEGACY_UNIMPORTANT_LABELS} for label in email.labels)
         ]
 
-    results = []
+    cached_results = []
+    uncached_emails = []
     for email in emails:
-        cached = get_cached_classification(email)
-        classification = cached.classification if cached else classify_email(email)
+        cached = get_cached_classification(email, user_id=user_id)
         if cached is None:
-            save_classification(email, classification)
-        results.append({
+            uncached_emails.append(email)
+            continue
+        cached_results.append((email.id, cached.classification))
+
+    classified_uncached = classify_emails_batch(uncached_emails)
+    for email, classification in zip(uncached_emails, classified_uncached):
+        save_classification(email, classification, user_id=user_id)
+        cached_results.append((email.id, classification))
+
+    classifications_by_id = {email_id: classification for email_id, classification in cached_results}
+    results = [
+        {
             "email": email,
-            "classification": classification,
-        })
+            "classification": classifications_by_id[email.id],
+        }
+        for email in emails
+        if email.id in classifications_by_id
+    ]
 
     return results
 
@@ -252,8 +272,31 @@ def classification_overview(
     mailbox: str = Query(default=IMPORTANT_LABEL),
     limit: int = Query(default=200, ge=1, le=1000),
 ):
+    user_id = get_default_user_context().user_id
     return ClassificationOverviewResponse.model_validate(
-        summarize_cached_classifications(mailbox=mailbox, limit=limit)
+        summarize_cached_classifications(mailbox=mailbox, limit=limit, user_id=user_id)
+    )
+
+
+@api.get("/dashboard", response_model=DashboardResponse)
+def dashboard():
+    return generate_dashboard()
+
+
+@api.get("/journal", response_model=JournalResponse)
+def journal(days: int = Query(default=7, ge=1, le=30)):
+    return get_journal(days=days)
+
+
+@api.put("/journal/{entry_date}", response_model=JournalDayEntry)
+def journal_save(entry_date: str, payload: JournalDayNoteUpdateRequest):
+    return save_journal_day(
+        entry_date=entry_date,
+        journal_entry=payload.journal_entry,
+        accomplishments=payload.accomplishments,
+        gratitude_entry=payload.gratitude_entry,
+        photo_data_url=payload.photo_data_url,
+        calendar_items=payload.calendar_items,
     )
 
 
@@ -268,12 +311,13 @@ def put_saved_classification_guidance(payload: ClassificationGuidanceRequest):
 
 
 def _get_or_create_classification(email: EmailSummary):
-    cached = get_cached_classification(email)
+    user_id = get_default_user_context().user_id
+    cached = get_cached_classification(email, user_id=user_id)
     if cached is not None:
         return cached.classification
 
     classification = classify_email(email)
-    save_classification(email, classification)
+    save_classification(email, classification, user_id=user_id)
     return classification
 
 
@@ -298,6 +342,11 @@ def calendar_schedule(
     max_results: int = Query(default=25, ge=1, le=200),
 ):
     return list_upcoming_events(days=days, max_results=max_results)
+
+
+@api.post("/calendar/quick-add", response_model=CalendarQuickAddResponse)
+def calendar_quick_add(payload: CalendarQuickAddRequest):
+    return create_calendar_event_from_description(payload.description)
 
 
 @api.post("/planning/plan", response_model=PlanningJobStartResponse)

@@ -8,6 +8,7 @@ from threading import Lock
 from typing import Optional
 
 from app.classification_guidance import get_classification_guidance_version
+from app.config import APP_DEFAULT_USER_ID
 from app.schemas import EmailClassification, EmailSummary
 
 _db_lock = Lock()
@@ -50,23 +51,81 @@ def _connect() -> sqlite3.Connection:
 
 def init_classification_cache() -> None:
     with _db_lock, closing(_connect()) as connection:
-        connection.execute(
+        row = connection.execute(
             """
-            CREATE TABLE IF NOT EXISTS classification_cache (
-                message_id TEXT PRIMARY KEY,
-                thread_id TEXT NOT NULL,
-                subject TEXT NOT NULL,
-                sender TEXT NOT NULL,
-                snippet TEXT NOT NULL,
-                date TEXT,
-                labels_json TEXT NOT NULL,
-                body TEXT,
-                fingerprint TEXT NOT NULL,
-                classification_json TEXT NOT NULL,
-                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            SELECT name
+            FROM sqlite_master
+            WHERE type = 'table' AND name = 'classification_cache'
+            """
+        ).fetchone()
+        if row is not None:
+            columns = connection.execute("PRAGMA table_info(classification_cache)").fetchall()
+            column_names = {column["name"] for column in columns}
+            primary_keys = {column["name"] for column in columns if column["pk"]}
+            if "user_id" not in column_names or primary_keys != {"user_id", "message_id"}:
+                connection.execute("ALTER TABLE classification_cache RENAME TO classification_cache_legacy")
+                row = None
+
+        if row is None:
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS classification_cache (
+                    user_id TEXT NOT NULL,
+                    message_id TEXT NOT NULL,
+                    thread_id TEXT NOT NULL,
+                    subject TEXT NOT NULL,
+                    sender TEXT NOT NULL,
+                    snippet TEXT NOT NULL,
+                    date TEXT,
+                    labels_json TEXT NOT NULL,
+                    body TEXT,
+                    fingerprint TEXT NOT NULL,
+                    classification_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (user_id, message_id)
+                )
+                """
             )
-            """
-        )
+            legacy_exists = connection.execute(
+                """
+                SELECT name
+                FROM sqlite_master
+                WHERE type = 'table' AND name = 'classification_cache_legacy'
+                """
+            ).fetchone()
+            if legacy_exists is not None:
+                rows = connection.execute(
+                    """
+                    SELECT message_id, thread_id, subject, sender, snippet, date, labels_json, body,
+                           fingerprint, classification_json, updated_at
+                    FROM classification_cache_legacy
+                    """
+                ).fetchall()
+                for row in rows:
+                    connection.execute(
+                        """
+                        INSERT OR REPLACE INTO classification_cache (
+                            user_id, message_id, thread_id, subject, sender, snippet, date,
+                            labels_json, body, fingerprint, classification_json, updated_at
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            APP_DEFAULT_USER_ID,
+                            row["message_id"],
+                            row["thread_id"],
+                            row["subject"],
+                            row["sender"],
+                            row["snippet"],
+                            row["date"],
+                            row["labels_json"],
+                            row["body"],
+                            row["fingerprint"],
+                            row["classification_json"],
+                            row["updated_at"],
+                        ),
+                    )
+                connection.execute("DROP TABLE classification_cache_legacy")
         connection.commit()
 
 
@@ -86,16 +145,19 @@ def email_fingerprint(email: EmailSummary) -> str:
     return sha256(payload.encode("utf-8")).hexdigest()
 
 
-def get_cached_classification(email: EmailSummary) -> Optional[CachedClassification]:
+def get_cached_classification(
+    email: EmailSummary,
+    user_id: str = APP_DEFAULT_USER_ID,
+) -> Optional[CachedClassification]:
     fingerprint = email_fingerprint(email)
     with _db_lock, closing(_connect()) as connection:
         row = connection.execute(
             """
             SELECT classification_json, fingerprint
             FROM classification_cache
-            WHERE message_id = ?
+            WHERE user_id = ? AND message_id = ?
             """,
-            (email.id,),
+            (user_id, email.id),
         ).fetchone()
 
     if row is None:
@@ -115,17 +177,21 @@ def get_cached_classification(email: EmailSummary) -> Optional[CachedClassificat
     )
 
 
-def save_classification(email: EmailSummary, classification: EmailClassification) -> None:
+def save_classification(
+    email: EmailSummary,
+    classification: EmailClassification,
+    user_id: str = APP_DEFAULT_USER_ID,
+) -> None:
     fingerprint = email_fingerprint(email)
     with _db_lock, closing(_connect()) as connection:
         connection.execute(
             """
             INSERT INTO classification_cache (
-                message_id, thread_id, subject, sender, snippet, date, labels_json, body,
+                user_id, message_id, thread_id, subject, sender, snippet, date, labels_json, body,
                 fingerprint, classification_json, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-            ON CONFLICT(message_id) DO UPDATE SET
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(user_id, message_id) DO UPDATE SET
                 thread_id = excluded.thread_id,
                 subject = excluded.subject,
                 sender = excluded.sender,
@@ -138,6 +204,7 @@ def save_classification(email: EmailSummary, classification: EmailClassification
                 updated_at = CURRENT_TIMESTAMP
             """,
             (
+                user_id,
                 email.id,
                 email.thread_id,
                 email.subject,
@@ -153,11 +220,11 @@ def save_classification(email: EmailSummary, classification: EmailClassification
         connection.commit()
 
 
-def update_cached_email(email: EmailSummary) -> None:
+def update_cached_email(email: EmailSummary, user_id: str = APP_DEFAULT_USER_ID) -> None:
     with _db_lock, closing(_connect()) as connection:
         row = connection.execute(
-            "SELECT classification_json FROM classification_cache WHERE message_id = ?",
-            (email.id,),
+            "SELECT classification_json FROM classification_cache WHERE user_id = ? AND message_id = ?",
+            (user_id, email.id),
         ).fetchone()
         if row is None:
             return
@@ -167,7 +234,7 @@ def update_cached_email(email: EmailSummary) -> None:
             UPDATE classification_cache
             SET thread_id = ?, subject = ?, sender = ?, snippet = ?, date = ?, labels_json = ?,
                 body = ?, fingerprint = ?, updated_at = CURRENT_TIMESTAMP
-            WHERE message_id = ?
+            WHERE user_id = ? AND message_id = ?
             """,
             (
                 email.thread_id,
@@ -178,22 +245,28 @@ def update_cached_email(email: EmailSummary) -> None:
                 json.dumps(email.labels),
                 email.body,
                 email_fingerprint(email),
+                user_id,
                 email.id,
             ),
         )
         connection.commit()
 
 
-def summarize_cached_classifications(mailbox: str, limit: int = 200) -> dict:
+def summarize_cached_classifications(
+    mailbox: str,
+    limit: int = 200,
+    user_id: str = APP_DEFAULT_USER_ID,
+) -> dict:
     with _db_lock, closing(_connect()) as connection:
         rows = connection.execute(
             """
             SELECT message_id, thread_id, subject, sender, snippet, date, labels_json, body, classification_json
             FROM classification_cache
+            WHERE user_id = ?
             ORDER BY updated_at DESC
             LIMIT ?
             """,
-            (limit,),
+            (user_id, limit),
         ).fetchall()
 
     normalized_mailbox = (mailbox or "INBOX").strip()
@@ -267,3 +340,44 @@ def summarize_cached_classifications(mailbox: str, limit: int = 200) -> dict:
         ],
         "deadline_highlights": list(deadline_highlights.values())[:5],
     }
+
+
+def list_cached_classifications(
+    mailbox: str,
+    limit: int = 20,
+    user_id: str = APP_DEFAULT_USER_ID,
+) -> list[tuple[EmailSummary, EmailClassification]]:
+    with _db_lock, closing(_connect()) as connection:
+        rows = connection.execute(
+            """
+            SELECT message_id, thread_id, subject, sender, snippet, date, labels_json, body, classification_json
+            FROM classification_cache
+            WHERE user_id = ?
+            ORDER BY updated_at DESC
+            LIMIT ?
+            """,
+            (user_id, limit),
+        ).fetchall()
+
+    normalized_mailbox = (mailbox or "INBOX").strip()
+    matched: list[tuple[EmailSummary, EmailClassification]] = []
+
+    for row in rows:
+        labels = json.loads(row["labels_json"])
+        if normalized_mailbox != "ALL" and normalized_mailbox not in labels:
+            continue
+
+        email = EmailSummary(
+            id=row["message_id"],
+            thread_id=row["thread_id"],
+            subject=row["subject"],
+            sender=row["sender"],
+            snippet=row["snippet"],
+            date=row["date"],
+            labels=labels,
+            body=row["body"],
+        )
+        classification = EmailClassification.model_validate(json.loads(row["classification_json"]))
+        matched.append((email, classification))
+
+    return matched
