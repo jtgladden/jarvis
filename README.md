@@ -14,7 +14,7 @@ The dashboard now talks to the backend through same-origin `/api` requests. In D
 ### Files
 
 - [docker-compose.yml](/Users/jt_gladden/Dev/jarvis/docker-compose.yml)
-- [Dockerfile.backend](/Users/jt_gladden/Dev/jarvis/Dockerfile.backend)
+- [Dockerfile](/Users/jt_gladden/Dev/jarvis/Dockerfile)
 - [jarvis-ui/Dockerfile](/Users/jt_gladden/Dev/jarvis/jarvis-ui/Dockerfile)
 - [.env.example](/Users/jt_gladden/Dev/jarvis/.env.example)
 
