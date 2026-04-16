@@ -1,8 +1,6 @@
 services:
   api:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: ${API_IMAGE:?Set API_IMAGE in .env to your GHCR backend image, e.g. ghcr.io/owner/repo-api:latest}
     container_name: jarvis-api
     environment:
       OPENAI_API_KEY: ${OPENAI_API_KEY}
@@ -22,12 +20,7 @@ services:
     restart: unless-stopped
 
   web:
-    build:
-      context: ./jarvis-ui
-      dockerfile: Dockerfile
-      args:
-        NEXT_PUBLIC_API_BASE: ${NEXT_PUBLIC_API_BASE:-/api}
-        API_PROXY_TARGET: ${API_PROXY_TARGET:-http://api:8000}
+    image: ${WEB_IMAGE:?Set WEB_IMAGE in .env to your GHCR frontend image, e.g. ghcr.io/owner/repo-web:latest}
     container_name: jarvis-web
     environment:
       NEXT_PUBLIC_API_BASE: ${NEXT_PUBLIC_API_BASE:-/api}

@@ -21,10 +21,15 @@ The dashboard now talks to the backend through same-origin `/api` requests. In D
 ### For Dockge
 
 1. Create a stack from this repo or paste in `docker-compose.yml`.
-2. Copy `.env.example` to `.env` and fill in `OPENAI_API_KEY`.
+2. Copy `.env.example` to `.env` and fill in `OPENAI_API_KEY`, `API_IMAGE`, and `WEB_IMAGE`.
 3. Create a local `data/` folder beside the compose file.
 4. Put your Gmail OAuth client file at `data/credentials.json`.
 5. Start the stack.
+
+Example image values:
+
+- `API_IMAGE=ghcr.io/<your-user-or-org>/<repo>-api:latest`
+- `WEB_IMAGE=ghcr.io/<your-user-or-org>/<repo>-web:latest`
 
 The backend stores its persistent local state in the mounted `data/` folder, including:
 
