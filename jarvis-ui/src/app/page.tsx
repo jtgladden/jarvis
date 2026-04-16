@@ -3424,7 +3424,11 @@ export default function HomePage() {
           <Card className="rounded-[2rem] border border-white/8 bg-[rgba(17,19,34,0.82)] shadow-[0_16px_44px_rgba(6,7,14,0.36)] backdrop-blur-xl">
             <CardHeader>
               <CardTitle className="text-lg">
-                {mode === "overview" ? "Overview detail" : "Email detail"}
+                {mode === "overview"
+                  ? "Overview detail"
+                  : mode === "schedule"
+                    ? "Event detail"
+                    : "Email detail"}
               </CardTitle>
             </CardHeader>
 
