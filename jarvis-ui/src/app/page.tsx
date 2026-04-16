@@ -403,6 +403,7 @@ type CalendarAgendaItem = {
   location?: string | null;
   description?: string | null;
   html_link?: string | null;
+  removed?: boolean;
 };
 
 type CalendarAgenda = {
