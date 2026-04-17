@@ -655,11 +655,13 @@ function JournalPreviewBlock({
   value,
   query,
   placeholder,
+  compact = false,
 }: {
   label: string;
   value: string | null | undefined;
   query: string;
   placeholder: string;
+  compact?: boolean;
 }) {
   const hasValue = Boolean((value || "").trim());
 
@@ -667,7 +669,7 @@ function JournalPreviewBlock({
     <div className="space-y-2">
       <div className="text-xs uppercase tracking-wide text-slate-400">{label}</div>
       <div
-        className={`min-h-[180px] rounded-[1.2rem] border px-4 py-3 text-sm leading-6 ${
+        className={`${compact ? "min-h-[88px]" : "min-h-[180px]"} rounded-[1.2rem] border px-4 py-3 text-sm leading-6 ${
           hasValue
             ? "border-white/8 bg-[rgba(20,22,37,0.72)] text-slate-100"
             : "border-dashed border-white/10 bg-[rgba(20,22,37,0.42)] text-slate-500"
@@ -3605,13 +3607,20 @@ export default function HomePage() {
                               size="sm"
                               variant={isEditingJournalEntry ? "default" : "outline"}
                               className="rounded-xl"
-                              onClick={() =>
-                                setJournalEditingDate((current) =>
-                                  current === entry.date ? null : entry.date
-                                )
-                              }
+                              onClick={() => {
+                                if (isEditingJournalEntry) {
+                                  void saveJournalEntry(entry.date);
+                                  return;
+                                }
+                                setJournalEditingDate(entry.date);
+                              }}
+                              disabled={journalSavingDate === entry.date}
                             >
-                              {isEditingJournalEntry ? "Close editor" : "Edit notes"}
+                              {journalSavingDate === entry.date
+                                ? "Saving..."
+                                : isEditingJournalEntry
+                                  ? "Save and close"
+                                  : "Edit notes"}
                             </Button>
                           </div>
                           <div className="mt-3 space-y-3">
@@ -3653,6 +3662,7 @@ export default function HomePage() {
                                   value={draft.scripture_study}
                                   query={journalQuery}
                                   placeholder="No study saved for this day yet."
+                                  compact
                                 />
                                 <div className="space-y-2">
                                   <div className="text-xs uppercase tracking-wide text-slate-400">
