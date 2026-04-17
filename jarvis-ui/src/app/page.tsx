@@ -18,6 +18,7 @@ import {
   RefreshCw,
   Search,
   ShieldCheck,
+  SlidersHorizontal,
   Sparkles,
   Tag,
   Trash2,
@@ -40,7 +41,9 @@ const LEGACY_UNIMPORTANT_LABELS = new Set([
   "Rules Shopping",
 ]);
 const ALL_MAILBOX = "ALL";
+const JARVIS_REVIEW_MAILBOX = "JARVIS_REVIEW";
 const DEFAULT_VISIBLE_MAILBOXES = new Set([
+  JARVIS_REVIEW_MAILBOX,
   IMPORTANT_LABEL,
   UNIMPORTANT_LABEL,
   "Reviewed",
@@ -204,6 +207,21 @@ function formatDashboardTaskDueText(task: DashboardTaskItem) {
   }
 
   return formatScheduleDateTime(task.due_text);
+}
+
+function formatTaskSourceLabel(source: DashboardTaskItem["source"]) {
+  switch (source) {
+    case "mail":
+      return "Mail";
+    case "calendar":
+      return "Calendar";
+    case "news":
+      return "News";
+    case "planning":
+      return "Planning";
+    default:
+      return "Custom";
+  }
 }
 
 function formatScheduleDayLabel(value: string) {
@@ -735,6 +753,9 @@ function emailHasLabel(email: Email | null, labelName: string) {
 
 function emailMatchesMailbox(email: Email, mailbox: string) {
   if (mailbox === ALL_MAILBOX) return true;
+  if (mailbox === JARVIS_REVIEW_MAILBOX) {
+    return hasImportantLabel(email.labels) || hasUnimportantLabel(email.labels);
+  }
   return (email.labels || []).includes(mailbox);
 }
 
@@ -794,10 +815,10 @@ function EmailListItem({
   return (
     <button
       onClick={onClick}
-      className={`w-full rounded-[1.6rem] border p-4 text-left transition duration-200 ${
+      className={`block w-full max-w-full min-w-0 overflow-hidden rounded-[1.6rem] border p-4 text-left transition duration-200 ${
         selected
-          ? "border-fuchsia-400/70 bg-[linear-gradient(135deg,rgba(189,147,249,0.24),rgba(40,42,54,0.98))] shadow-[0_18px_50px_rgba(15,16,33,0.48)]"
-          : "border-white/8 bg-[rgba(24,26,42,0.82)] hover:border-cyan-300/30 hover:bg-[rgba(32,35,57,0.95)] hover:shadow-[0_12px_32px_rgba(0,0,0,0.28)]"
+          ? "border-fuchsia-400/70 bg-[linear-gradient(135deg,rgba(189,147,249,0.24),rgba(40,42,54,0.98))] ring-1 ring-fuchsia-400/20"
+          : "border-white/8 bg-[rgba(24,26,42,0.82)] hover:border-cyan-300/30 hover:bg-[rgba(32,35,57,0.95)] hover:ring-1 hover:ring-cyan-300/12"
       }`}
     >
       <div className="mb-2 flex items-start justify-between gap-3">
@@ -817,13 +838,13 @@ function EmailListItem({
         ) : null}
       </div>
 
-      <p className="mb-3 line-clamp-2 text-sm text-slate-300">
+      <p className="mb-3 line-clamp-2 break-words text-sm text-slate-300">
         {decodeHtmlEntities(email.snippet) || "No preview available."}
       </p>
 
-      <div className="flex flex-wrap gap-2">
+      <div className="flex min-w-0 max-w-full flex-wrap gap-2 overflow-hidden">
         {byuEmail ? (
-          <Badge className="rounded-xl bg-sky-500/20 text-sky-100 hover:bg-sky-500/20">
+          <Badge className="max-w-full rounded-xl bg-sky-500/20 text-sky-100 hover:bg-sky-500/20">
             BYU mail
           </Badge>
         ) : null}
@@ -831,24 +852,24 @@ function EmailListItem({
         {classification.category ? (
           <Badge
             variant={categoryTone[classification.category] || "secondary"}
-            className="rounded-xl"
+            className="max-w-full truncate rounded-xl"
           >
             {classification.category.replaceAll("_", " ")}
           </Badge>
         ) : null}
 
         {classification.needs_reply ? (
-          <Badge className="rounded-xl">needs reply</Badge>
+          <Badge className="max-w-full rounded-xl">needs reply</Badge>
         ) : null}
 
         {classification.urgency ? (
-          <Badge variant="outline" className="rounded-xl">
+          <Badge variant="outline" className="max-w-full rounded-xl">
             {classification.urgency}
           </Badge>
         ) : null}
 
         {cleanupDecision ? (
-          <Badge variant={decisionTone[cleanupDecision.action]} className="rounded-xl">
+          <Badge variant={decisionTone[cleanupDecision.action]} className="max-w-full truncate rounded-xl">
             {cleanupDecision.action}
           </Badge>
         ) : null}
@@ -934,7 +955,8 @@ export default function HomePage() {
   const [error, setError] = useState("");
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [mode, setMode] = useState<"dashboard" | "tasks" | "journal" | "mail" | "news" | "overview" | "schedule" | "planning">("dashboard");
+  const [mode, setMode] = useState<"dashboard" | "tasks" | "journal" | "mail" | "news" | "overview" | "schedule" | "planning" | "settings">("dashboard");
+  const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const [mailView, setMailView] = useState<"ai" | "raw">("ai");
   const [dashboard, setDashboard] = useState<DashboardResponse | null>(null);
   const [tasks, setTasks] = useState<DashboardTaskItem[]>([]);
@@ -968,7 +990,8 @@ export default function HomePage() {
   const [quickCalendarPrompt, setQuickCalendarPrompt] = useState("");
   const [quickCalendarLoading, setQuickCalendarLoading] = useState(false);
   const [quickCalendarResult, setQuickCalendarResult] = useState<CalendarQuickAddResponse | null>(null);
-  const [selectedMailbox, setSelectedMailbox] = useState<string>(ALL_MAILBOX);
+  const [selectedMailbox, setSelectedMailbox] = useState<string>(JARVIS_REVIEW_MAILBOX);
+  const [mailSidebarOpen, setMailSidebarOpen] = useState(true);
   const [skipNextMailFetch, setSkipNextMailFetch] = useState(false);
   const [extraVisibleMailboxes, setExtraVisibleMailboxes] = useState<string[]>([]);
   const [mailboxAddOpen, setMailboxAddOpen] = useState(false);
@@ -986,8 +1009,8 @@ export default function HomePage() {
   const [classificationGuidanceUpdatedAt, setClassificationGuidanceUpdatedAt] = useState<string | null>(null);
   const [guidanceLoading, setGuidanceLoading] = useState(false);
   const [guidanceSaving, setGuidanceSaving] = useState(false);
-  const [guidanceExpanded, setGuidanceExpanded] = useState(false);
   const [labelDraft, setLabelDraft] = useState<string[]>([]);
+  const [labelSectionOpen, setLabelSectionOpen] = useState(false);
   const [newLabelName, setNewLabelName] = useState("");
   const [planningPrompt, setPlanningPrompt] = useState("");
   const [planningDays, setPlanningDays] = useState("7");
@@ -1046,7 +1069,7 @@ export default function HomePage() {
   };
 
   const loadEmails = async (
-    currentMode: "dashboard" | "tasks" | "journal" | "mail" | "news" | "overview" | "schedule" | "planning" = mode,
+    currentMode: "dashboard" | "tasks" | "journal" | "mail" | "news" | "overview" | "schedule" | "planning" | "settings" = mode,
     mailboxOverride?: string,
     pageTokenOverride?: string | null,
     currentMailView: "ai" | "raw" = mailView
@@ -1057,6 +1080,7 @@ export default function HomePage() {
       currentMode === "tasks" ||
       currentMode === "journal" ||
       currentMode === "news"
+      || currentMode === "settings"
     ) {
       return;
     }
@@ -1067,6 +1091,7 @@ export default function HomePage() {
     try {
       const targetMailbox = mailboxOverride ?? selectedMailbox;
       const targetsAllMail = targetMailbox === ALL_MAILBOX;
+      const targetsJarvisReview = targetMailbox === JARVIS_REVIEW_MAILBOX;
       if (currentMode === "overview" && targetsAllMail) {
         setOverview(null);
         setAgenda(null);
@@ -1084,6 +1109,69 @@ export default function HomePage() {
         setCleanupJob(null);
         setError("All Mail is browse-only. AI summaries are disabled for it.");
         setMailView("raw");
+        return;
+      }
+
+      if (currentMode === "mail" && targetsJarvisReview) {
+        const trimmed = inboxLimit.trim();
+        const limit = trimmed ? Number(trimmed) : NaN;
+        const requestLimit =
+          trimmed && Number.isFinite(limit) && limit > 0
+            ? Math.max(1, Math.floor(limit))
+            : currentMailView === "raw"
+              ? 50
+              : 25;
+
+        const endpoints =
+          currentMailView === "ai"
+            ? [
+                `${API_BASE}/classify?limit=${requestLimit}&bucket=${classifiedBucket}&mailbox=${encodeURIComponent(IMPORTANT_LABEL)}`,
+                `${API_BASE}/classify?limit=${requestLimit}&bucket=${classifiedBucket}&mailbox=${encodeURIComponent(UNIMPORTANT_LABEL)}`,
+              ]
+            : [
+                `${API_BASE}/emails?limit=${requestLimit}&mailbox=${encodeURIComponent(IMPORTANT_LABEL)}`,
+                `${API_BASE}/emails?limit=${requestLimit}&mailbox=${encodeURIComponent(UNIMPORTANT_LABEL)}`,
+              ];
+
+        const responses = await Promise.all(endpoints.map((endpoint) => fetch(endpoint)));
+        for (const response of responses) {
+          if (!response.ok) {
+            throw new Error(
+              await getErrorMessage(response, `Request failed with status ${response.status}`)
+            );
+          }
+        }
+
+        const payloads = await Promise.all(responses.map((response) => response.json()));
+        const normalized =
+          currentMailView === "ai"
+            ? payloads
+                .flatMap((items) => items as Array<{ email: Email; classification: Classification }>)
+                .map((item) => ({
+                  ...item.email,
+                  classification: item.classification,
+                }))
+            : payloads.flatMap((items) => (items as EmailPageResponse).items);
+
+        normalized.sort((a, b) => {
+          const aTime = parseCalendarDate(a.date)?.getTime() ?? 0;
+          const bTime = parseCalendarDate(b.date)?.getTime() ?? 0;
+          return bTime - aTime;
+        });
+
+        const deduped = Array.from(
+          new Map(normalized.map((email) => [email.id, email])).values()
+        );
+
+        setOverview(null);
+        setAgenda(null);
+        setEmails(deduped);
+        setRawPageToken(null);
+        setRawNextPageToken(null);
+        setRawPageHistory([]);
+        setCleanupSummary(null);
+        setCleanupJob(null);
+        syncSelectedId(deduped);
         return;
       }
 
@@ -1671,12 +1759,17 @@ export default function HomePage() {
 
   const fetchEmailsEffect = useEffectEvent(
     (
-      currentMode: "dashboard" | "tasks" | "journal" | "mail" | "news" | "overview" | "schedule" | "planning",
+      currentMode: "dashboard" | "tasks" | "journal" | "mail" | "news" | "overview" | "schedule" | "planning" | "settings",
       mailboxName?: string,
       currentMailView: "ai" | "raw" = mailView
     ) => {
       if (currentMode === "dashboard" || currentMode === "news") {
         void loadDashboard();
+        return;
+      }
+      if (currentMode === "settings") {
+        void loadLabels();
+        void loadClassificationGuidance();
         return;
       }
       if (currentMode === "tasks") {
@@ -2356,6 +2449,17 @@ export default function HomePage() {
   const mailboxLabels = useMemo(
     () => [
       {
+        id: JARVIS_REVIEW_MAILBOX,
+        name: JARVIS_REVIEW_MAILBOX,
+        type: "system" as const,
+        messages_total:
+          (labels.find((label) => label.name === IMPORTANT_LABEL)?.messages_total ?? 0) +
+          (labels.find((label) => label.name === UNIMPORTANT_LABEL)?.messages_total ?? 0),
+        messages_unread:
+          (labels.find((label) => label.name === IMPORTANT_LABEL)?.messages_unread ?? 0) +
+          (labels.find((label) => label.name === UNIMPORTANT_LABEL)?.messages_unread ?? 0),
+      },
+      {
         id: ALL_MAILBOX,
         name: ALL_MAILBOX,
         type: "system" as const,
@@ -2462,6 +2566,21 @@ export default function HomePage() {
   const rawHasPreviousPage = rawPageHistory.length > 0;
   const selectedThreadCount = selectedEmail ? threadCountByEmailId.get(selectedEmail.id) ?? 1 : 1;
   const guidanceDirty = classificationGuidance !== savedClassificationGuidance;
+
+  const setTopLevelMode = (
+    nextMode: "dashboard" | "tasks" | "journal" | "mail" | "news" | "overview" | "schedule" | "planning" | "settings"
+  ) => {
+    if (
+      nextMode === "overview" &&
+      (selectedMailbox === ALL_MAILBOX || selectedMailbox === JARVIS_REVIEW_MAILBOX)
+    ) {
+      setSelectedMailbox(IMPORTANT_LABEL);
+    }
+
+    setError("");
+    setMode(nextMode);
+    setMoreMenuOpen(false);
+  };
 
   const correctClassification = async (targetLabel: "important" | "unimportant") => {
     if (!selectedEmail) return;
@@ -2602,14 +2721,34 @@ export default function HomePage() {
                 <div className={`text-sm font-semibold ${task.completed ? "text-slate-400 line-through" : "text-slate-100"}`}>
                   {task.title}
                 </div>
+                <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                  <span className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-slate-300">
+                    {formatTaskSourceLabel(task.source)}
+                  </span>
+                  {task.due_text ? (
+                    <span className="rounded-full border border-cyan-300/20 bg-cyan-400/10 px-2.5 py-1 text-cyan-100">
+                      {formatDashboardTaskDueText(task) || task.due_text}
+                    </span>
+                  ) : null}
+                  {task.completed ? (
+                    <span className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-slate-400">
+                      Completed
+                    </span>
+                  ) : null}
+                </div>
                 {task.detail ? (
-                  <div className="mt-1 text-sm text-slate-300">{task.detail}</div>
-                ) : null}
-                {task.due_text ? (
-                  <div className="mt-1 text-xs text-slate-400">
-                    {formatDashboardTaskDueText(task) || task.due_text}
+                  <div className={`mt-2 text-sm ${compact ? "line-clamp-2 text-slate-400" : "text-slate-300"}`}>
+                    {task.detail}
                   </div>
-                ) : null}
+                ) : (
+                  <div className="mt-2 text-xs text-slate-500">
+                    {task.source === "calendar"
+                      ? "Calendar-derived task"
+                      : task.source === "mail"
+                        ? "Pulled forward from mail"
+                        : "Ready to work"}
+                  </div>
+                )}
               </div>
               <Badge
                 variant={
@@ -2824,7 +2963,7 @@ export default function HomePage() {
   return (
     <div className="min-h-screen p-4 text-slate-100 md:p-6">
       <div className="mx-auto max-w-[1500px] space-y-6">
-        <div className="relative overflow-hidden rounded-[2rem] border border-white/8 bg-[linear-gradient(135deg,rgba(34,36,58,0.94),rgba(17,19,34,0.92))] px-6 py-6 shadow-[0_24px_80px_rgba(6,7,14,0.48)] backdrop-blur-xl">
+        <div className="relative z-20 overflow-visible rounded-[2rem] border border-white/8 bg-[linear-gradient(135deg,rgba(34,36,58,0.94),rgba(17,19,34,0.92))] px-6 py-6 shadow-[0_24px_80px_rgba(6,7,14,0.48)] backdrop-blur-xl">
           <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(189,147,249,0.2),transparent_34%),radial-gradient(circle_at_bottom_right,rgba(139,233,253,0.16),transparent_30%)]" />
           <div className="relative flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div>
@@ -2843,6 +2982,8 @@ export default function HomePage() {
                 ? "Turn your goals for the day or week into a realistic schedule that fits around your calendar."
                 : mode === "news"
                 ? "Review the exact headlines feeding the dashboard so you can open the source coverage directly."
+                : mode === "settings"
+                ? "Manage Jarvis classification guidance and inbox cleanup tools away from the main review workspace."
                 : "Work through your inbox from one Mail tab, then switch between AI triage and raw Gmail controls whenever you need them."}
             </p>
           </div>
@@ -2851,87 +2992,107 @@ export default function HomePage() {
             <Button
               variant={mode === "dashboard" ? "default" : "outline"}
               className="rounded-2xl"
-              onClick={() => setMode("dashboard")}
+              onClick={() => setTopLevelMode("dashboard")}
             >
               <Sparkles className="mr-2 h-4 w-4" />
               Dashboard
             </Button>
 
             <Button
-              variant={mode === "tasks" ? "default" : "outline"}
-              className="rounded-2xl"
-              onClick={() => setMode("tasks")}
-            >
-              <ShieldCheck className="mr-2 h-4 w-4" />
-              Tasks
-            </Button>
-
-            <Button
-              variant={mode === "journal" ? "default" : "outline"}
-              className="rounded-2xl"
-              onClick={() => setMode("journal")}
-            >
-              <BookOpen className="mr-2 h-4 w-4" />
-              Journal
-            </Button>
-
-            <Button
               variant={mode === "mail" ? "default" : "outline"}
               className="rounded-2xl"
-              onClick={() => setMode("mail")}
+              onClick={() => setTopLevelMode("mail")}
             >
               <Inbox className="mr-2 h-4 w-4" />
               Mail
             </Button>
 
             <Button
-              variant={mode === "news" ? "default" : "outline"}
+              variant={mode === "journal" ? "default" : "outline"}
               className="rounded-2xl"
-              onClick={() => setMode("news")}
+              onClick={() => setTopLevelMode("journal")}
             >
-              <Newspaper className="mr-2 h-4 w-4" />
-              News
+              <BookOpen className="mr-2 h-4 w-4" />
+              Journal
             </Button>
 
             <Button
-              variant={mode === "overview" ? "default" : "outline"}
+              variant={mode === "tasks" ? "default" : "outline"}
               className="rounded-2xl"
-              onClick={() => {
-                if (selectedMailbox === ALL_MAILBOX) {
-                  setError("All Mail is browse-only. Pick a specific mailbox for AI overview.");
-                  return;
-                }
-                setMode("overview");
-              }}
+              onClick={() => setTopLevelMode("tasks")}
             >
               <ShieldCheck className="mr-2 h-4 w-4" />
-              Overview
+              Tasks
             </Button>
+
+            <div className="relative">
+              <Button
+                variant={["news", "overview", "schedule", "planning", "settings"].includes(mode) ? "default" : "outline"}
+                className="rounded-2xl"
+                onClick={() => setMoreMenuOpen((current) => !current)}
+              >
+                More
+                <ChevronDown className={`ml-2 h-4 w-4 transition ${moreMenuOpen ? "rotate-180" : ""}`} />
+              </Button>
+              {moreMenuOpen ? (
+                <div className="absolute right-0 top-[calc(100%+0.5rem)] z-50 w-56 rounded-[1.4rem] border border-white/8 bg-[rgba(17,19,34,0.96)] p-2 shadow-[0_18px_48px_rgba(6,7,14,0.42)] backdrop-blur-xl">
+                  <div className="grid gap-1">
+                    <Button
+                      variant="ghost"
+                      className="justify-start rounded-xl"
+                      onClick={() => setTopLevelMode("news")}
+                    >
+                      <Newspaper className="mr-2 h-4 w-4" />
+                      News
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      className="justify-start rounded-xl"
+                      onClick={() => setTopLevelMode("overview")}
+                    >
+                      <ShieldCheck className="mr-2 h-4 w-4" />
+                      Overview
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      className="justify-start rounded-xl"
+                      onClick={() => setTopLevelMode("schedule")}
+                    >
+                      <CalendarDays className="mr-2 h-4 w-4" />
+                      Schedule
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      className="justify-start rounded-xl"
+                      onClick={() => setTopLevelMode("planning")}
+                    >
+                      <Sparkles className="mr-2 h-4 w-4" />
+                      Planning
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      className="justify-start rounded-xl"
+                      onClick={() => setTopLevelMode("settings")}
+                    >
+                      <SlidersHorizontal className="mr-2 h-4 w-4" />
+                      Settings
+                    </Button>
+                    <Button
+                      asChild
+                      variant="ghost"
+                      className="justify-start rounded-xl"
+                    >
+                      <Link href="/mobile" onClick={() => setMoreMenuOpen(false)}>
+                        iPhone view
+                      </Link>
+                    </Button>
+                  </div>
+                </div>
+              ) : null}
+            </div>
 
             <Button
-              variant={mode === "schedule" ? "default" : "outline"}
-              className="rounded-2xl"
-              onClick={() => setMode("schedule")}
-            >
-              <CalendarDays className="mr-2 h-4 w-4" />
-              Schedule
-            </Button>
-
-            <Button asChild variant="outline" className="rounded-2xl">
-              <Link href="/mobile">iPhone view</Link>
-            </Button>
-
-            <Button
-              variant={mode === "planning" ? "default" : "outline"}
-              className="rounded-2xl"
-              onClick={() => setMode("planning")}
-            >
-              <Sparkles className="mr-2 h-4 w-4" />
-              Planning
-            </Button>
-
-            <Button
-              className="rounded-2xl"
+              className="rounded-2xl px-3"
               variant="outline"
               onClick={() => {
                 setRawPageToken(null);
@@ -2960,26 +3121,21 @@ export default function HomePage() {
                   void loadDashboard();
                   return;
                 }
+                if (mode === "settings") {
+                  void loadLabels();
+                  void loadClassificationGuidance();
+                  return;
+                }
                 void loadEmails(mode, selectedMailbox);
               }}
               disabled={loading || cleanupLoading || emailActionLoading || planningLoading}
+              aria-label="Refresh current page"
+              title="Refresh current page"
             >
               <RefreshCw
-                className={`mr-2 h-4 w-4 ${loading || labelsLoading || planningLoading ? "animate-spin" : ""}`}
+                className={`h-4 w-4 ${loading || labelsLoading || planningLoading ? "animate-spin" : ""}`}
               />
-              Refresh
             </Button>
-
-            {mode !== "planning" && mode !== "dashboard" && mode !== "tasks" && mode !== "journal" && mode !== "news" ? (
-              <Input
-                type="number"
-                min="1"
-                value={inboxLimit}
-                onChange={(e) => setInboxLimit(e.target.value)}
-                className="w-full rounded-2xl sm:w-36"
-                placeholder={isRawMailView ? "Page size" : "Summary cap"}
-              />
-            ) : null}
           </div>
         </div>
         </div>
@@ -3252,10 +3408,30 @@ export default function HomePage() {
                               {item.urgency}
                             </Badge>
                           </div>
-                          <div className="mt-3 text-sm leading-6 text-slate-200">{item.summary}</div>
-                          {item.deadline_hint ? (
-                            <div className="mt-2 text-xs text-cyan-100">{item.deadline_hint}</div>
+                          <div className="mt-3 rounded-[1rem] border border-cyan-300/16 bg-cyan-400/8 px-3 py-2 text-sm leading-6 text-slate-100">
+                            {item.summary}
+                          </div>
+                          {item.why_it_matters ? (
+                            <div className="mt-3 text-sm leading-6 text-slate-300">{item.why_it_matters}</div>
                           ) : null}
+                          <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+                            {item.needs_reply ? (
+                              <span className="rounded-full border border-fuchsia-300/25 bg-fuchsia-400/12 px-2.5 py-1 text-fuchsia-100">
+                                Needs reply
+                              </span>
+                            ) : null}
+                            {item.action_items.length ? (
+                              <span className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-slate-300">
+                                {item.action_items.length} action item{item.action_items.length === 1 ? "" : "s"}
+                              </span>
+                            ) : null}
+                            {item.deadline_hint ? (
+                              <span className="rounded-full border border-cyan-300/20 bg-cyan-400/10 px-2.5 py-1 text-cyan-100">
+                                {item.deadline_hint}
+                              </span>
+                            ) : null}
+                          </div>
+                          <div className="mt-3 text-xs text-cyan-100">Open focused detail</div>
                         </button>
                       ))
                     ) : (
@@ -3351,7 +3527,7 @@ export default function HomePage() {
                 <CardTitle className="text-lg">Articles used</CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="space-y-3">
+                <div className="space-y-3 px-2 pr-4">
                   {dashboard?.news_items?.length ? (
                     dashboard.news_items.map((item, index) => (
                       <div
@@ -3385,6 +3561,73 @@ export default function HomePage() {
                 </div>
               </CardContent>
             </Card>
+          </div>
+        ) : mode === "settings" ? (
+          <div className="grid gap-6 lg:grid-cols-[1.05fr_0.95fr]">
+            <Card className="rounded-[2rem] border border-white/8 bg-[rgba(17,19,34,0.82)] shadow-[0_16px_44px_rgba(6,7,14,0.36)] backdrop-blur-xl">
+              <CardHeader className="pb-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <CardTitle className="flex items-center gap-2 text-lg">
+                      <SlidersHorizontal className="h-5 w-5" />
+                      Classification guidance
+                    </CardTitle>
+                    <p className="mt-2 text-sm leading-6 text-slate-300">
+                      Teach Jarvis what should count as important, unimportant, or action-worthy without crowding the main mail workflow.
+                    </p>
+                  </div>
+                  {guidanceDirty ? (
+                    <Badge variant="outline" className="rounded-xl">
+                      Unsaved
+                    </Badge>
+                  ) : null}
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <textarea
+                  value={classificationGuidance}
+                  onChange={(e) => setClassificationGuidance(e.target.value)}
+                  placeholder="Example: Treat messages from professors, BYU admin, job opportunities, bills, deadlines, and personal messages as important. Treat newsletters, login alerts, and generic marketing as unimportant."
+                  className="min-h-[240px] w-full rounded-[1.2rem] border border-white/8 bg-[rgba(20,22,37,0.88)] px-4 py-3 text-sm leading-6 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-fuchsia-400/50"
+                />
+                <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-400">
+                  <span>
+                    Saved guidance is included in future AI classification prompts. Cached emails refresh as they are reclassified.
+                  </span>
+                  <span>
+                    {classificationGuidanceUpdatedAt
+                      ? `Updated ${new Date(classificationGuidanceUpdatedAt).toLocaleString()}`
+                      : "Not customized yet"}
+                  </span>
+                </div>
+                <div className="flex justify-end">
+                  <Button
+                    className="rounded-2xl"
+                    onClick={() => void saveClassificationGuidance()}
+                    disabled={guidanceLoading || guidanceSaving || !guidanceDirty}
+                  >
+                    {guidanceSaving ? "Saving..." : "Save guidance"}
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+
+            <div className="space-y-6">
+              {utilitiesPanel}
+              <Card className="rounded-[2rem] border border-white/8 bg-[rgba(17,19,34,0.82)] shadow-[0_16px_44px_rgba(6,7,14,0.36)] backdrop-blur-xl">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-lg">Why This Is Separate</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3 text-sm leading-6 text-slate-300">
+                  <p>
+                    Mail review stays faster when guidance-writing and inbox-wide maintenance are not competing for attention inside the same pane.
+                  </p>
+                  <p>
+                    This page is meant for configuration and bulk actions. Day-to-day triage can stay focused on reading, handling, and correcting individual conversations.
+                  </p>
+                </CardContent>
+              </Card>
+            </div>
           </div>
         ) : mode === "tasks" ? (
           <div className="grid gap-6 lg:grid-cols-[360px_1fr]">
@@ -4461,23 +4704,39 @@ export default function HomePage() {
         ) : (
         <div
           className={`grid gap-6 ${
-            mode === "schedule" ? "lg:grid-cols-[360px_1fr]" : "lg:grid-cols-[260px_360px_1fr]"
+            mode === "schedule"
+              ? "lg:grid-cols-[minmax(280px,360px)_minmax(0,1fr)]"
+              : mailSidebarOpen
+                ? "xl:grid-cols-[240px_minmax(300px,360px)_minmax(0,1fr)] lg:grid-cols-[220px_minmax(0,1fr)]"
+                : "lg:grid-cols-[minmax(300px,360px)_minmax(0,1fr)]"
           }`}
         >
-          {mode !== "schedule" ? (
-            <Card className="rounded-[2rem] border border-white/8 bg-[rgba(17,19,34,0.82)] shadow-[0_16px_44px_rgba(6,7,14,0.36)] backdrop-blur-xl">
+          {mode !== "schedule" && mailSidebarOpen ? (
+            <Card className="min-w-0 rounded-[2rem] border border-white/8 bg-[rgba(17,19,34,0.82)] shadow-[0_16px_44px_rgba(6,7,14,0.36)] backdrop-blur-xl">
               <CardHeader className="pb-3">
-                <CardTitle className="flex items-center gap-2 text-lg">
-                  <Mail className="h-5 w-5" />
-                  Mailboxes
-                </CardTitle>
-                <p className="text-sm leading-6 text-slate-300">
-                  {isRawMailView
-                    ? "Switch folders and labels like Gmail."
-                    : mode === "overview"
-                      ? "See saved AI insights for the selected mailbox without reclassifying everything."
-                      : "Pick a folder or label, review AI summaries, then correct any mistakes."}
-                </p>
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <CardTitle className="flex items-center gap-2 text-lg">
+                      <Mail className="h-5 w-5" />
+                      Mailboxes
+                    </CardTitle>
+                    <p className="mt-2 text-sm leading-6 text-slate-300">
+                      {isRawMailView
+                        ? "Switch folders and labels like Gmail."
+                        : mode === "overview"
+                          ? "See saved AI insights for the selected mailbox without reclassifying everything."
+                          : "Pick a folder or label, review AI summaries, then correct any mistakes."}
+                    </p>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="rounded-2xl"
+                    onClick={() => setMailSidebarOpen(false)}
+                  >
+                    Hide
+                  </Button>
+                </div>
               </CardHeader>
 
               <CardContent className="min-w-0 overflow-hidden">
@@ -4522,7 +4781,11 @@ export default function HomePage() {
                             }`}
                           >
                             <span className="truncate text-sm font-medium">
-                              {label.name === ALL_MAILBOX ? "All Mail" : label.name}
+                              {label.name === JARVIS_REVIEW_MAILBOX
+                                ? "Jarvis Review"
+                                : label.name === ALL_MAILBOX
+                                  ? "All Mail"
+                                  : label.name}
                             </span>
                             {visibleCount !== undefined ? (
                               <span
@@ -4589,7 +4852,11 @@ export default function HomePage() {
                             >
                               <Plus className="mr-2 h-4 w-4 shrink-0" />
                               <span className="min-w-0 truncate">
-                                {label.name === ALL_MAILBOX ? "All Mail" : label.name}
+                                {label.name === JARVIS_REVIEW_MAILBOX
+                                  ? "Jarvis Review"
+                                  : label.name === ALL_MAILBOX
+                                    ? "All Mail"
+                                    : label.name}
                               </span>
                             </Button>
                           ))}
@@ -4602,33 +4869,60 @@ export default function HomePage() {
             </Card>
           ) : null}
 
-          <Card className="rounded-[2rem] border border-white/8 bg-[rgba(17,19,34,0.82)] shadow-[0_16px_44px_rgba(6,7,14,0.36)] backdrop-blur-xl">
+          <Card className="min-w-0 rounded-[2rem] border border-white/8 bg-[rgba(17,19,34,0.82)] shadow-[0_16px_44px_rgba(6,7,14,0.36)] backdrop-blur-xl">
             <CardHeader className="pb-3">
-              <CardTitle className="flex items-center gap-2 text-lg">
-                <Mail className="h-5 w-5" />
-                {mode === "mail"
-                  ? selectedMailboxLabel?.name === ALL_MAILBOX
-                    ? "All Mail"
-                    : selectedMailboxLabel?.name || "Mailbox"
-                  : mode === "schedule"
-                    ? "Schedule"
-                  : mode === "overview"
-                    ? `${selectedMailboxLabel?.name || "Mailbox"} overview`
-                  : classifiedBucket === "important"
-                    ? "Important review"
-                    : classifiedBucket === "unimportant"
-                      ? "Unimportant review"
-                      : "AI overview"}
-              </CardTitle>
+              <div className="flex flex-col gap-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <CardTitle className="flex items-center gap-2 text-lg">
+                      <Mail className="h-5 w-5" />
+                      {mode === "mail"
+                        ? selectedMailboxLabel?.name === JARVIS_REVIEW_MAILBOX
+                          ? "Jarvis Review"
+                          : selectedMailboxLabel?.name === ALL_MAILBOX
+                            ? "All Mail"
+                            : selectedMailboxLabel?.name || "Mailbox"
+                        : mode === "schedule"
+                          ? "Schedule"
+                        : mode === "overview"
+                          ? `${selectedMailboxLabel?.name || "Mailbox"} overview`
+                        : classifiedBucket === "important"
+                          ? "Important review"
+                          : classifiedBucket === "unimportant"
+                            ? "Unimportant review"
+                            : "AI overview"}
+                    </CardTitle>
+                    {mode !== "schedule" ? (
+                      <p className="mt-2 text-sm leading-6 text-slate-300">
+                        {mode === "overview"
+                          ? "Saved AI trends and summaries for the selected mailbox."
+                          : isRawMailView
+                            ? "Browse loaded Gmail threads and adjust conversation state."
+                            : "Review conversations on the left, then work the selected item in focused detail."}
+                      </p>
+                    ) : null}
+                  </div>
+                  {mode !== "schedule" ? (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="rounded-2xl"
+                      onClick={() => setMailSidebarOpen((current) => !current)}
+                    >
+                      {mailSidebarOpen ? "Hide mailboxes" : "Show mailboxes"}
+                    </Button>
+                  ) : null}
+                </div>
 
-              <div className="relative">
-                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
-                <Input
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  placeholder="Search subject, sender, category..."
-                  className="rounded-2xl pl-9"
-                />
+                <div className="relative">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+                  <Input
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    placeholder="Search subject, sender, category..."
+                    className="rounded-2xl pl-9"
+                  />
+                </div>
               </div>
 
               {mode === "mail" ? (
@@ -4649,6 +4943,22 @@ export default function HomePage() {
                   >
                     Raw
                   </Button>
+                </div>
+              ) : null}
+
+              {(mode === "mail" || mode === "overview") ? (
+                <div className="flex items-center gap-2">
+                  <Input
+                    type="number"
+                    min="1"
+                    value={inboxLimit}
+                    onChange={(e) => setInboxLimit(e.target.value)}
+                    className="w-32 rounded-2xl"
+                    placeholder={mode === "mail" && isRawMailView ? "Page size" : "Summary cap"}
+                  />
+                  <div className="text-xs text-slate-400">
+                    {mode === "mail" && isRawMailView ? "Threads per page" : "Items to summarize"}
+                  </div>
                 </div>
               ) : null}
 
@@ -4705,7 +5015,7 @@ export default function HomePage() {
               ) : null}
             </CardHeader>
 
-            <CardContent>
+            <CardContent className="min-w-0 overflow-hidden">
               {error ? (
                 <div className="mb-4 flex items-start gap-3 rounded-[1.4rem] border border-rose-400/20 bg-rose-500/10 p-4 text-sm text-rose-200">
                   <AlertCircle className="mt-0.5 h-4 w-4" />
@@ -4713,8 +5023,8 @@ export default function HomePage() {
                 </div>
               ) : null}
 
-              <ScrollArea className="h-[65vh] pr-3">
-                <div className="space-y-3">
+              <ScrollArea className="h-[65vh] w-full min-w-0 overflow-hidden pr-3">
+                <div className="w-full min-w-0 max-w-full space-y-3 overflow-x-hidden">
                   {mode === "overview" ? (
                     overview ? (
                       <div className="space-y-4">
@@ -4908,7 +5218,7 @@ export default function HomePage() {
             </CardContent>
           </Card>
 
-          <Card className="rounded-[2rem] border border-white/8 bg-[rgba(17,19,34,0.82)] shadow-[0_16px_44px_rgba(6,7,14,0.36)] backdrop-blur-xl">
+          <Card className="min-w-0 rounded-[2rem] border border-white/8 bg-[rgba(17,19,34,0.82)] shadow-[0_16px_44px_rgba(6,7,14,0.36)] backdrop-blur-xl">
             <CardHeader>
               <CardTitle className="text-lg">
                 {mode === "overview"
@@ -4920,70 +5230,6 @@ export default function HomePage() {
             </CardHeader>
 
             <CardContent>
-              {mode !== "schedule" ? (
-                <div className="mb-6 rounded-[1.6rem] border border-white/6 bg-[rgba(35,37,58,0.7)] p-4">
-                  <button
-                    type="button"
-                    onClick={() => setGuidanceExpanded((current) => !current)}
-                    className="flex w-full items-start justify-between gap-3 text-left"
-                  >
-                    <div>
-                      <div className="text-xs uppercase tracking-wide text-slate-400">
-                        Classification guidance
-                      </div>
-                      <div className="mt-1 text-sm text-slate-300">
-                        Add notes about what should count as important, unimportant, or action-worthy.
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2 text-slate-400">
-                      {guidanceDirty ? (
-                        <Badge variant="outline" className="rounded-xl">
-                          Unsaved
-                        </Badge>
-                      ) : null}
-                      {guidanceExpanded ? (
-                        <ChevronDown className="h-4 w-4" />
-                      ) : (
-                        <ChevronRight className="h-4 w-4" />
-                      )}
-                    </div>
-                  </button>
-
-                  {guidanceExpanded ? (
-                    <div className="mt-4 space-y-3">
-                      <textarea
-                        value={classificationGuidance}
-                        onChange={(e) => setClassificationGuidance(e.target.value)}
-                        placeholder="Example: Treat messages from professors, BYU admin, job opportunities, bills, deadlines, and personal messages as important. Treat newsletters, login alerts, and generic marketing as unimportant."
-                        className="min-h-[140px] w-full rounded-[1.2rem] border border-white/8 bg-[rgba(20,22,37,0.88)] px-4 py-3 text-sm leading-6 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-fuchsia-400/50"
-                      />
-                      <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-400">
-                        <span>
-                          Saved guidance is included in future AI classification prompts. Cached emails refresh as they are reclassified.
-                        </span>
-                        <span>
-                          {classificationGuidanceUpdatedAt
-                            ? `Updated ${new Date(classificationGuidanceUpdatedAt).toLocaleString()}`
-                            : "Not customized yet"}
-                        </span>
-                      </div>
-                      <div className="flex justify-end">
-                        <Button
-                          className="rounded-2xl"
-                          size="sm"
-                          onClick={() => void saveClassificationGuidance()}
-                          disabled={guidanceLoading || guidanceSaving || !guidanceDirty}
-                        >
-                          {guidanceSaving ? "Saving..." : "Save guidance"}
-                        </Button>
-                      </div>
-                    </div>
-                  ) : null}
-                </div>
-              ) : null}
-
-              {isMailMode ? <div className="mb-6">{utilitiesPanel}</div> : null}
-
               {mode === "schedule" ? (
                 <div className="space-y-4">
                   <div className="rounded-[1.6rem] border border-white/6 bg-[rgba(35,37,58,0.7)] p-4 text-sm text-slate-300">
@@ -5185,30 +5431,162 @@ export default function HomePage() {
                 </div>
               ) : (
                 <div className="space-y-6">
-                  <div className="space-y-2">
-                    <h2 className="text-2xl font-semibold leading-tight">
+                  <div className="rounded-[1.8rem] border border-cyan-300/14 bg-[linear-gradient(135deg,rgba(56,189,248,0.12),rgba(35,37,58,0.92))] p-5">
+                    <div className="text-xs uppercase tracking-[0.2em] text-cyan-100/80">
+                      Message focus
+                    </div>
+                    <h2 className="mt-3 text-2xl font-semibold leading-tight text-slate-100">
                       {decodeHtmlEntities(selectedEmail.subject) || "(No subject)"}
                     </h2>
-                    {isByuEmail(selectedEmail) ? (
-                      <div className="flex flex-wrap gap-2">
-                        <Badge className="rounded-xl bg-sky-500/20 text-sky-100 hover:bg-sky-500/20">
+                    <div className="mt-4 flex flex-wrap items-center gap-2 text-xs">
+                      <span className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-slate-200">
+                        {decodeHtmlEntities(selectedEmail.sender) || "Unknown sender"}
+                      </span>
+                      {selectedEmail.date ? (
+                        <span className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-slate-300">
+                          {selectedEmail.date}
+                        </span>
+                      ) : null}
+                      {isByuEmail(selectedEmail) ? (
+                        <span className="rounded-full border border-sky-300/25 bg-sky-500/14 px-2.5 py-1 text-sky-100">
                           BYU forwarded mail
-                        </Badge>
-                      </div>
-                    ) : null}
-                    <div className="text-sm text-slate-300">
-                      From: {decodeHtmlEntities(selectedEmail.sender) || "Unknown sender"}
+                        </span>
+                      ) : null}
+                      {isRawMailView && selectedThreadCount > 1 ? (
+                        <span className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-slate-300">
+                          {selectedThreadCount} messages in loaded thread
+                        </span>
+                      ) : null}
                     </div>
-                    {selectedEmail.date ? (
-                      <div className="text-sm text-slate-400">{selectedEmail.date}</div>
-                    ) : null}
-                    {isRawMailView && selectedThreadCount > 1 ? (
-                      <div className="text-sm text-slate-400">
-                        This row represents {selectedThreadCount} loaded messages in the same
-                        thread.
-                      </div>
-                    ) : null}
                   </div>
+
+                  <div className="rounded-[1.6rem] border border-white/6 bg-[rgba(35,37,58,0.7)] p-4">
+                    <div className="mb-3 text-xs uppercase tracking-wide text-slate-400">
+                      Quick actions
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {canMarkHandled ? (
+                        <Button
+                          className="rounded-2xl"
+                          size="sm"
+                          onClick={() => void markHandled()}
+                          disabled={handleLoading}
+                        >
+                          {handleLoading ? "Marking..." : "Mark handled"}
+                        </Button>
+                      ) : null}
+                      {isAiMailView ? (
+                        <>
+                          <Button
+                            className="rounded-2xl"
+                            size="sm"
+                            variant="outline"
+                            onClick={() => void correctClassification("important")}
+                            disabled={emailActionLoading || !canMarkImportant}
+                          >
+                            Mark Jarvis Important
+                          </Button>
+                          <Button
+                            className="rounded-2xl"
+                            size="sm"
+                            variant="outline"
+                            onClick={() => void correctClassification("unimportant")}
+                            disabled={emailActionLoading || !canMarkUnimportant}
+                          >
+                            Mark Jarvis Unimportant
+                          </Button>
+                        </>
+                      ) : null}
+                      {!calendarPreview ? (
+                        <Button
+                          className="rounded-2xl"
+                          size="sm"
+                          variant="outline"
+                          onClick={() => void loadCalendarPreview(selectedEmail.id)}
+                          disabled={calendarLoading}
+                        >
+                          <CalendarDays className="mr-2 h-4 w-4" />
+                          {calendarLoading ? "Loading..." : "Generate calendar suggestion"}
+                        </Button>
+                      ) : (
+                        <Button
+                          className="rounded-2xl"
+                          size="sm"
+                          onClick={() => void createCalendarEvent()}
+                          disabled={calendarCreateLoading || !calendarPreview.start}
+                        >
+                          <CalendarDays className="mr-2 h-4 w-4" />
+                          {calendarCreateLoading ? "Creating..." : "Add to Calendar"}
+                        </Button>
+                      )}
+                    </div>
+                    <div className="mt-3 text-xs text-slate-400">
+                      {canMarkHandled
+                        ? "Handled marks the conversation reviewed and clears Jarvis importance labels."
+                        : calendarPreview
+                          ? "Quick actions now include calendar follow-through once a suggestion exists."
+                          : "Use quick actions to correct the Jarvis bucket or generate a calendar suggestion."}
+                    </div>
+                  </div>
+
+                  {selectedEmail.classification?.short_summary ||
+                  selectedEmail.classification?.why_it_matters ||
+                  selectedEmail.classification?.action_items?.length ||
+                  selectedEmail.classification?.deadline_hint ||
+                  selectedEmail.classification?.suggested_reply ? (
+                    <div className="rounded-[1.6rem] border border-white/6 bg-[rgba(35,37,58,0.7)] p-4">
+                      <div className="mb-3 text-xs uppercase tracking-wide text-slate-400">
+                        AI reading
+                      </div>
+                      {selectedEmail.classification?.short_summary ? (
+                        <div className="rounded-[1rem] border border-cyan-300/16 bg-cyan-400/8 px-4 py-3 text-sm leading-6 text-slate-100">
+                          {selectedEmail.classification.short_summary}
+                        </div>
+                      ) : null}
+                      {selectedEmail.classification?.why_it_matters ? (
+                        <div className="mt-3 text-sm leading-6 text-slate-300">
+                          {selectedEmail.classification.why_it_matters}
+                        </div>
+                      ) : null}
+                      {selectedEmail.classification?.action_items?.length ? (
+                        <div className="mt-4 space-y-2">
+                          {selectedEmail.classification.action_items.map((item) => (
+                            <div
+                              key={item}
+                              className="rounded-xl border border-white/6 bg-[rgba(20,22,37,0.82)] px-3 py-2 text-sm text-slate-200"
+                            >
+                              {item}
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
+                      {(selectedEmail.classification?.deadline_hint ||
+                        selectedEmail.classification?.suggested_reply) ? (
+                        <div className="mt-4 grid gap-3 md:grid-cols-2">
+                          {selectedEmail.classification?.deadline_hint ? (
+                            <div className="rounded-[1rem] border border-white/6 bg-[rgba(20,22,37,0.82)] px-3 py-3">
+                              <div className="text-xs uppercase tracking-wide text-slate-400">
+                                Deadline hint
+                              </div>
+                              <div className="mt-1 text-sm text-slate-100">
+                                {selectedEmail.classification.deadline_hint}
+                              </div>
+                            </div>
+                          ) : null}
+                          {selectedEmail.classification?.suggested_reply ? (
+                            <div className="rounded-[1rem] border border-white/6 bg-[rgba(20,22,37,0.82)] px-3 py-3">
+                              <div className="text-xs uppercase tracking-wide text-slate-400">
+                                Suggested reply
+                              </div>
+                              <div className="mt-1 text-sm text-slate-100">
+                                {selectedEmail.classification.suggested_reply}
+                              </div>
+                            </div>
+                          ) : null}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
 
                   {isRawMailView ? (
                     <div className="rounded-[1.6rem] border border-white/6 bg-[rgba(35,37,58,0.7)] p-4">
@@ -5242,82 +5620,9 @@ export default function HomePage() {
                     </div>
                   ) : null}
 
-                  {canMarkHandled ? (
-                    <div className="pt-2">
-                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                        <Button
-                          className="rounded-2xl"
-                          size="sm"
-                          onClick={() => void markHandled()}
-                          disabled={handleLoading}
-                        >
-                          {handleLoading ? "Marking..." : "Mark handled"}
-                        </Button>
-                        <span className="text-xs text-slate-400">
-                          Adds <span className="font-medium text-slate-100">Reviewed</span> and clears any Jarvis importance labels on this conversation.
-                        </span>
-                      </div>
-                    </div>
-                  ) : null}
-
-                  {isAiMailView ? (
-                    <div className="rounded-[1.6rem] border border-white/6 bg-[rgba(35,37,58,0.7)] p-4">
-                      <div className="mb-3 text-xs uppercase tracking-wide text-slate-400">
-                        Classification correction
-                      </div>
-                      <div className="mb-3 text-sm text-slate-300">
-                        Fix the Jarvis label on this conversation if the AI put it in the wrong bucket.
-                      </div>
-                      <div className="flex flex-wrap gap-2">
-                        <Button
-                          className="rounded-2xl"
-                          size="sm"
-                          variant="outline"
-                          onClick={() => void correctClassification("important")}
-                          disabled={emailActionLoading || !canMarkImportant}
-                        >
-                          Mark Jarvis Important
-                        </Button>
-                        <Button
-                          className="rounded-2xl"
-                          size="sm"
-                          variant="outline"
-                          onClick={() => void correctClassification("unimportant")}
-                          disabled={emailActionLoading || !canMarkUnimportant}
-                        >
-                          Mark Jarvis Unimportant
-                        </Button>
-                      </div>
-                    </div>
-                  ) : null}
-
                   {calendarLoading ? (
                     <div className="rounded-[1.6rem] border border-white/6 bg-[rgba(35,37,58,0.7)] p-4 text-sm text-slate-300">
                       Loading calendar suggestion...
-                    </div>
-                  ) : null}
-
-                  {!calendarPreview ? (
-                    <div className="rounded-[1.6rem] border border-white/6 bg-[rgba(35,37,58,0.7)] p-4">
-                      <div className="mb-3 flex items-center gap-2 text-xs uppercase tracking-wide text-slate-400">
-                        <CalendarDays className="h-4 w-4" />
-                        Calendar suggestion
-                      </div>
-                      <div className="text-sm text-slate-300">
-                        Generate a calendar suggestion only when you want one.
-                      </div>
-                      <div className="mt-4">
-                        <Button
-                          className="rounded-2xl"
-                          size="sm"
-                          variant="outline"
-                          onClick={() => void loadCalendarPreview(selectedEmail.id)}
-                          disabled={calendarLoading}
-                        >
-                          <CalendarDays className="mr-2 h-4 w-4" />
-                          Generate suggestion
-                        </Button>
-                      </div>
                     </div>
                   ) : null}
 
@@ -5381,109 +5686,78 @@ export default function HomePage() {
                     </div>
                   ) : null}
 
-                  {selectedEmail.classification?.short_summary ? (
-                    <div className="rounded-[1.6rem] border border-white/6 bg-[rgba(35,37,58,0.7)] p-4">
-                      <div className="mb-2 text-xs uppercase tracking-wide text-slate-400">
-                        AI summary
-                      </div>
-                      <div className="text-sm text-slate-200">
-                        {selectedEmail.classification.short_summary}
-                      </div>
-                    </div>
-                  ) : null}
-
-                  {selectedEmail.classification?.why_it_matters ? (
-                    <div className="rounded-[1.6rem] border border-white/6 bg-[rgba(35,37,58,0.7)] p-4">
-                      <div className="mb-2 text-xs uppercase tracking-wide text-slate-400">
-                        Why it matters
-                      </div>
-                      <div className="text-sm text-slate-200">
-                        {selectedEmail.classification.why_it_matters}
-                      </div>
-                    </div>
-                  ) : null}
-
-                  {(selectedEmail.classification?.action_items?.length ||
-                    selectedEmail.classification?.deadline_hint ||
-                    selectedEmail.classification?.suggested_reply) ? (
-                    <div className="rounded-[1.6rem] border border-white/6 bg-[rgba(35,37,58,0.7)] p-4">
-                      <div className="mb-3 text-xs uppercase tracking-wide text-slate-400">
-                        Action plan
-                      </div>
-                      {selectedEmail.classification?.action_items?.length ? (
-                        <div className="mb-4 space-y-2">
-                          {selectedEmail.classification.action_items.map((item) => (
-                            <div
-                              key={item}
-                              className="rounded-xl border border-white/6 bg-[rgba(20,22,37,0.82)] px-3 py-2 text-sm text-slate-200"
-                            >
-                              {item}
-                            </div>
-                          ))}
-                        </div>
-                      ) : null}
-                      {selectedEmail.classification?.deadline_hint ? (
-                        <div className="mb-3 text-sm text-slate-200">
-                          <span className="font-medium text-slate-100">Deadline:</span>{" "}
-                          {selectedEmail.classification.deadline_hint}
-                        </div>
-                      ) : null}
-                      {selectedEmail.classification?.suggested_reply ? (
-                        <div className="text-sm text-slate-200">
-                          <span className="font-medium text-slate-100">Suggested reply:</span>{" "}
-                          {selectedEmail.classification.suggested_reply}
-                        </div>
-                      ) : null}
-                    </div>
-                  ) : null}
-
                   {isRawMailView ? (
                     <div className="rounded-[1.6rem] border border-white/6 bg-[rgba(35,37,58,0.7)] p-4">
-                      <div className="mb-3 flex items-center gap-2 text-xs uppercase tracking-wide text-slate-400">
-                        <Tag className="h-4 w-4" />
-                        Labels
-                      </div>
-                      <div className="mb-4 flex flex-wrap gap-2">
-                        {editableLabels.map((label) => {
-                          const checked = labelDraft.includes(label.name);
-                          return (
-                            <label
-                              key={label.id}
-                              className={`inline-flex cursor-pointer items-center gap-2 rounded-xl border px-3 py-2 text-sm ${
-                                checked
-                                  ? "border-cyan-300/40 bg-[rgba(56,189,248,0.14)] text-slate-100"
-                                  : "border-white/8 bg-[rgba(20,22,37,0.82)] text-slate-300"
-                              }`}
-                            >
-                              <input
-                                type="checkbox"
-                                className="h-4 w-4"
-                                checked={checked}
-                                onChange={() => toggleDraftLabel(label.name)}
-                              />
-                              <span>{label.name}</span>
-                            </label>
-                          );
-                        })}
-                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setLabelSectionOpen((current) => !current)}
+                        className="flex w-full items-center justify-between gap-3 text-left"
+                      >
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2 text-xs uppercase tracking-wide text-slate-400">
+                            <Tag className="h-4 w-4" />
+                            Labels
+                          </div>
+                          <div className="mt-1 text-sm text-slate-300">
+                            Review or adjust Gmail labels for this conversation.
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2 text-slate-400">
+                          <Badge variant="outline" className="rounded-xl">
+                            {labelDraft.length}
+                          </Badge>
+                          {labelSectionOpen ? (
+                            <ChevronDown className="h-4 w-4" />
+                          ) : (
+                            <ChevronRight className="h-4 w-4" />
+                          )}
+                        </div>
+                      </button>
+                      {labelSectionOpen ? (
+                        <div className="mt-4">
+                          <div className="mb-4 flex flex-wrap gap-2">
+                            {editableLabels.map((label) => {
+                              const checked = labelDraft.includes(label.name);
+                              return (
+                                <label
+                                  key={label.id}
+                                  className={`inline-flex cursor-pointer items-center gap-2 rounded-xl border px-3 py-2 text-sm ${
+                                    checked
+                                      ? "border-cyan-300/40 bg-[rgba(56,189,248,0.14)] text-slate-100"
+                                      : "border-white/8 bg-[rgba(20,22,37,0.82)] text-slate-300"
+                                  }`}
+                                >
+                                  <input
+                                    type="checkbox"
+                                    className="h-4 w-4"
+                                    checked={checked}
+                                    onChange={() => toggleDraftLabel(label.name)}
+                                  />
+                                  <span>{label.name}</span>
+                                </label>
+                              );
+                            })}
+                          </div>
 
-                      <div className="flex flex-col gap-2 sm:flex-row">
-                        <Input
-                          value={newLabelName}
-                          onChange={(e) => setNewLabelName(e.target.value)}
-                          placeholder="Create and add a new label"
-                          className="rounded-2xl"
-                        />
-                        <Button
-                          className="rounded-2xl"
-                          size="sm"
-                          onClick={() => void applyLabelDraft()}
-                          disabled={emailActionLoading}
-                        >
-                          <Plus className="mr-2 h-4 w-4" />
-                          Apply labels
-                        </Button>
-                      </div>
+                          <div className="flex flex-col gap-2 sm:flex-row">
+                            <Input
+                              value={newLabelName}
+                              onChange={(e) => setNewLabelName(e.target.value)}
+                              placeholder="Create and add a new label"
+                              className="rounded-2xl"
+                            />
+                            <Button
+                              className="rounded-2xl"
+                              size="sm"
+                              onClick={() => void applyLabelDraft()}
+                              disabled={emailActionLoading}
+                            >
+                              <Plus className="mr-2 h-4 w-4" />
+                              Apply labels
+                            </Button>
+                          </div>
+                        </div>
+                      ) : null}
                     </div>
                   ) : null}
 
