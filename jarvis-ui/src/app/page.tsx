@@ -945,6 +945,7 @@ export default function HomePage() {
   const [calendarTaskLoadingId, setCalendarTaskLoadingId] = useState<string | null>(null);
   const [taskCreateLoading, setTaskCreateLoading] = useState(false);
   const [taskWindow, setTaskWindow] = useState<TaskWindow>("today");
+  const [dashboardQuickTaskTitle, setDashboardQuickTaskTitle] = useState("");
   const [newTaskTitle, setNewTaskTitle] = useState("");
   const [newTaskDetail, setNewTaskDetail] = useState("");
   const [newTaskDueAt, setNewTaskDueAt] = useState("");
@@ -1586,8 +1587,17 @@ export default function HomePage() {
     }
   };
 
-  const createTaskItem = async () => {
-    if (!newTaskTitle.trim()) return;
+  const createTaskItem = async (
+    overrides?: {
+      title: string;
+      detail?: string;
+      due_text?: string | null;
+      priority?: "high" | "medium" | "low";
+      onSuccess?: () => void;
+    }
+  ) => {
+    const title = (overrides?.title ?? newTaskTitle).trim();
+    if (!title) return;
 
     setTaskCreateLoading(true);
     setError("");
@@ -1598,10 +1608,10 @@ export default function HomePage() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          title: newTaskTitle,
-          detail: newTaskDetail,
-          due_text: newTaskDueAt || newTaskDueNote.trim() || null,
-          priority: newTaskPriority,
+          title,
+          detail: overrides?.detail ?? newTaskDetail,
+          due_text: overrides?.due_text ?? (newTaskDueAt || newTaskDueNote.trim() || null),
+          priority: overrides?.priority ?? newTaskPriority,
         }),
       });
       if (!response.ok) {
@@ -1616,11 +1626,15 @@ export default function HomePage() {
         ...current,
         [created.id]: buildTaskDraft(created),
       }));
-      setNewTaskTitle("");
-      setNewTaskDetail("");
-      setNewTaskDueAt("");
-      setNewTaskDueNote("");
-      setNewTaskPriority("medium");
+      if (overrides) {
+        overrides.onSuccess?.();
+      } else {
+        setNewTaskTitle("");
+        setNewTaskDetail("");
+        setNewTaskDueAt("");
+        setNewTaskDueNote("");
+        setNewTaskPriority("medium");
+      }
       if (mode === "dashboard") {
         await loadTasks(false);
       }
@@ -2998,13 +3012,64 @@ export default function HomePage() {
                       {dashboard?.overview || (loading ? "Building your dashboard..." : "Refresh to generate your daily overview.")}
                     </div>
                   </div>
+                  <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedMailbox(IMPORTANT_LABEL);
+                        setMailView("ai");
+                        setMode("mail");
+                      }}
+                      className="rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4 text-left transition hover:border-cyan-300/30 hover:bg-[rgba(42,45,72,0.9)]"
+                    >
+                      <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Important</div>
+                      <div className="mt-2 text-2xl font-semibold text-white">{dashboard?.important_emails.length || 0}</div>
+                      <div className="mt-2 text-xs text-cyan-100">Open mail triage</div>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setMode("tasks")}
+                      className="rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4 text-left transition hover:border-cyan-300/30 hover:bg-[rgba(42,45,72,0.9)]"
+                    >
+                      <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Open tasks</div>
+                      <div className="mt-2 text-2xl font-semibold text-white">{activeTasks.length}</div>
+                      <div className="mt-2 text-xs text-cyan-100">Review task list</div>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setMode("news")}
+                      className="rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4 text-left transition hover:border-cyan-300/30 hover:bg-[rgba(42,45,72,0.9)]"
+                    >
+                      <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Headlines</div>
+                      <div className="mt-2 text-2xl font-semibold text-white">{dashboard?.news_items.length || 0}</div>
+                      <div className="mt-2 text-xs text-cyan-100">Open article list</div>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setMode("schedule")}
+                      className="rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4 text-left transition hover:border-cyan-300/30 hover:bg-[rgba(42,45,72,0.9)]"
+                    >
+                      <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Calendar today</div>
+                      <div className="mt-2 text-2xl font-semibold text-white">{dashboard?.calendar_items.length || 0}</div>
+                      <div className="mt-2 text-xs text-cyan-100">Open schedule</div>
+                    </button>
+                  </div>
                   <div className="grid gap-4 md:grid-cols-3">
-                    <div className="rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedMailbox(IMPORTANT_LABEL);
+                        setMailView("ai");
+                        setMode("mail");
+                      }}
+                      className="rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4 text-left transition hover:border-cyan-300/30 hover:bg-[rgba(42,45,72,0.9)]"
+                    >
                       <div className="text-xs uppercase tracking-wide text-slate-400">Mail</div>
                       <div className="mt-2 text-sm leading-6 text-slate-200">
                         {dashboard?.mail_summary || "No mail summary yet."}
                       </div>
-                    </div>
+                      <div className="mt-3 text-xs text-cyan-100">Open important mail</div>
+                    </button>
                     <button
                       type="button"
                       onClick={() => setMode("news")}
@@ -3016,12 +3081,61 @@ export default function HomePage() {
                       </div>
                       <div className="mt-3 text-xs text-cyan-100">Open article list</div>
                     </button>
-                    <div className="rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4">
+                    <button
+                      type="button"
+                      onClick={() => setMode("tasks")}
+                      className="rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4 text-left transition hover:border-cyan-300/30 hover:bg-[rgba(42,45,72,0.9)]"
+                    >
                       <div className="text-xs uppercase tracking-wide text-slate-400">Tasks</div>
                       <div className="mt-2 text-sm leading-6 text-slate-200">
                         {dashboard?.tasks_summary || "No task summary yet."}
                       </div>
+                      <div className="mt-3 text-xs text-cyan-100">Open task manager</div>
+                    </button>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card className="rounded-[2rem] border border-white/8 bg-[rgba(17,19,34,0.82)] shadow-[0_16px_44px_rgba(6,7,14,0.36)] backdrop-blur-xl">
+                <CardHeader className="pb-3">
+                  <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+                    <div>
+                      <CardTitle className="flex items-center gap-2 text-lg">
+                        <Plus className="h-5 w-5" />
+                        Quick task capture
+                      </CardTitle>
+                      <p className="mt-2 text-sm leading-6 text-slate-300">
+                        Add something fast from the dashboard, then use the full task editor only when you need more detail.
+                      </p>
                     </div>
+                    <Button variant="outline" className="rounded-2xl" onClick={() => setMode("tasks")}>
+                      Open full task editor
+                    </Button>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <div className="flex flex-col gap-3 md:flex-row">
+                    <Input
+                      value={dashboardQuickTaskTitle}
+                      onChange={(e) => setDashboardQuickTaskTitle(e.target.value)}
+                      className="h-11 rounded-2xl"
+                      placeholder="Capture a task before it slips away"
+                    />
+                    <Button
+                      className="rounded-2xl md:px-6"
+                      onClick={() =>
+                        void createTaskItem({
+                          title: dashboardQuickTaskTitle,
+                          detail: "",
+                          due_text: null,
+                          priority: "medium",
+                          onSuccess: () => setDashboardQuickTaskTitle(""),
+                        })
+                      }
+                      disabled={taskCreateLoading || !dashboardQuickTaskTitle.trim()}
+                    >
+                      {taskCreateLoading ? "Adding..." : "Add task"}
+                    </Button>
                   </div>
                 </CardContent>
               </Card>

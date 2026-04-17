@@ -184,6 +184,10 @@ export default function MobileJournalDetailPage({
     reader.readAsDataURL(file);
   };
 
+  const displayedCalendarItems = editing
+    ? (draft?.calendar_items ?? [])
+    : (entry?.calendar_items ?? []);
+
   return (
     <div className="min-h-screen bg-[linear-gradient(180deg,#13162c_0%,#0c0e1c_100%)] px-4 pb-10 pt-4 text-slate-100">
       <div className="mx-auto max-w-md space-y-4">
@@ -243,7 +247,7 @@ export default function MobileJournalDetailPage({
               </div>
             </div>
 
-            {(editing ? draft?.calendar_items : entry?.calendar_items)?.length ? (
+            {displayedCalendarItems.length ? (
               <div className="rounded-[1.2rem] border border-white/8 bg-white/5 px-4 py-3">
                 <div className="flex items-center justify-between gap-3">
                   <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Events</div>
@@ -260,7 +264,7 @@ export default function MobileJournalDetailPage({
                   ) : null}
                 </div>
                 <div className="mt-2 space-y-2">
-                  {(editing ? draft?.calendar_items : entry?.calendar_items || [])
+                  {displayedCalendarItems
                     .filter((item) => editing || !item.removed)
                     .map((item, index) => (
                       <div key={`${item.event_id}-${index}`} className="rounded-xl border border-white/8 px-3 py-2">

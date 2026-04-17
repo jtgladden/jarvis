@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import React, { useEffect, useMemo, useState } from "react";
+import React, { Suspense, useEffect, useMemo, useState } from "react";
 import {
   BookOpen,
   CalendarDays,
@@ -193,7 +193,7 @@ function summarizeJournal(entry: JournalDayEntry) {
   );
 }
 
-export default function MobilePage() {
+function MobilePageContent() {
   const [activeTab, setActiveTab] = useState<MobileTab>("today");
   const [mailView, setMailView] = useState<MobileMailView>("ai");
   const [selectedMailbox, setSelectedMailbox] = useState<"Jarvis Important" | "Jarvis Unimportant">("Jarvis Important");
@@ -793,5 +793,25 @@ export default function MobilePage() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function MobilePage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen bg-[linear-gradient(180deg,#13162c_0%,#0c0e1c_100%)] px-4 pb-28 pt-safe">
+          <div className="mx-auto max-w-md space-y-4 pb-6 pt-4 text-slate-100">
+            <Card className="rounded-[1.8rem] border border-white/8 bg-[rgba(17,19,34,0.82)]">
+              <CardContent className="p-5 text-sm text-slate-300">
+                Loading phone view...
+              </CardContent>
+            </Card>
+          </div>
+        </div>
+      }
+    >
+      <MobilePageContent />
+    </Suspense>
   );
 }
