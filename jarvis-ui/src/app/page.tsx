@@ -669,7 +669,7 @@ function JournalPreviewBlock({
     <div className="space-y-2">
       <div className="text-xs uppercase tracking-wide text-slate-400">{label}</div>
       <div
-        className={`${compact ? "min-h-[88px]" : "min-h-[180px]"} rounded-[1.2rem] border px-4 py-3 text-sm leading-6 ${
+        className={`${compact ? "" : "min-h-[180px]"} rounded-[1.2rem] border px-4 py-3 text-sm leading-6 ${
           hasValue
             ? "border-white/8 bg-[rgba(20,22,37,0.72)] text-slate-100"
             : "border-dashed border-white/10 bg-[rgba(20,22,37,0.42)] text-slate-500"
