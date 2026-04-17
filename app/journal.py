@@ -655,6 +655,20 @@ def get_journal(
     )
 
 
+def get_journal_day(entry_date: str) -> JournalDayEntry:
+    user_id = get_default_user_context().user_id
+    day = date.fromisoformat(entry_date)
+    today_local = datetime.now(LOCAL_TIMEZONE).date()
+    saved_entries = list_journal_entries(user_id=user_id)
+    entries = _build_journal_entries(
+        day_keys=[day.isoformat()],
+        saved_entries=saved_entries,
+        user_id=user_id,
+        today_local=today_local,
+    )
+    return entries[0]
+
+
 def save_journal_day(
     entry_date: str,
     journal_entry: str,

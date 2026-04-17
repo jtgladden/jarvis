@@ -1,6 +1,8 @@
 "use client";
 
 import Image from "next/image";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 import React, { useEffect, useEffectEvent, useMemo, useState } from "react";
 import {
   AlertCircle,
@@ -11,6 +13,7 @@ import {
   ChevronRight,
   Inbox,
   Mail,
+  Newspaper,
   Plus,
   RefreshCw,
   Search,
@@ -507,6 +510,7 @@ type JournalDraft = {
 };
 
 type JournalSectionState = {
+  dayOpen: boolean;
   calendarOpen: boolean;
   articlesOpen: boolean;
 };
@@ -916,6 +920,7 @@ function taskMatchesWindow(task: DashboardTaskItem, window: TaskWindow) {
 }
 
 export default function HomePage() {
+  const router = useRouter();
   const [emails, setEmails] = useState<Email[]>([]);
   const [rawNextPageToken, setRawNextPageToken] = useState<string | null>(null);
   const [rawPageToken, setRawPageToken] = useState<string | null>(null);
@@ -929,7 +934,7 @@ export default function HomePage() {
   const [error, setError] = useState("");
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [mode, setMode] = useState<"dashboard" | "tasks" | "journal" | "mail" | "overview" | "schedule" | "planning">("dashboard");
+  const [mode, setMode] = useState<"dashboard" | "tasks" | "journal" | "mail" | "news" | "overview" | "schedule" | "planning">("dashboard");
   const [mailView, setMailView] = useState<"ai" | "raw">("ai");
   const [dashboard, setDashboard] = useState<DashboardResponse | null>(null);
   const [tasks, setTasks] = useState<DashboardTaskItem[]>([]);
@@ -993,6 +998,13 @@ export default function HomePage() {
   const [planningBulkCalendarLoading, setPlanningBulkCalendarLoading] = useState(false);
   const [planningBulkCalendarMessage, setPlanningBulkCalendarMessage] = useState("");
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (window.innerWidth <= 768) {
+      router.replace("/mobile");
+    }
+  }, [router]);
+
   const syncSelectedId = (nextEmails: Email[]) => {
     if (nextEmails.length > 0) {
       setSelectedId((prev) =>
@@ -1033,12 +1045,18 @@ export default function HomePage() {
   };
 
   const loadEmails = async (
-    currentMode: "dashboard" | "tasks" | "journal" | "mail" | "overview" | "schedule" | "planning" = mode,
+    currentMode: "dashboard" | "tasks" | "journal" | "mail" | "news" | "overview" | "schedule" | "planning" = mode,
     mailboxOverride?: string,
     pageTokenOverride?: string | null,
     currentMailView: "ai" | "raw" = mailView
   ) => {
-    if (currentMode === "planning" || currentMode === "dashboard" || currentMode === "tasks" || currentMode === "journal") {
+    if (
+      currentMode === "planning" ||
+      currentMode === "dashboard" ||
+      currentMode === "tasks" ||
+      currentMode === "journal" ||
+      currentMode === "news"
+    ) {
       return;
     }
 
@@ -1406,6 +1424,7 @@ export default function HomePage() {
     setJournalSectionState((current) => ({
       ...current,
       [entryDate]: {
+        dayOpen: current[entryDate]?.dayOpen ?? false,
         calendarOpen: current[entryDate]?.calendarOpen ?? false,
         articlesOpen: current[entryDate]?.articlesOpen ?? false,
         [key]: !(current[entryDate]?.[key] ?? false),
@@ -1420,22 +1439,24 @@ export default function HomePage() {
     const file = event.target.files?.[0];
     event.target.value = "";
     if (!file) return;
+    const currentDraft = journalDrafts[entryDate];
+    if (!currentDraft) return;
 
     const reader = new FileReader();
-    reader.onload = () => {
+    reader.onload = async () => {
       const result = typeof reader.result === "string" ? reader.result : null;
       if (!result) return;
+      const nextDraft: JournalDraft = {
+        ...currentDraft,
+        photo_data_url: result,
+      };
       setJournalDrafts((current) => {
-        const currentDraft = current[entryDate];
-        if (!currentDraft) return current;
         return {
           ...current,
-          [entryDate]: {
-            ...currentDraft,
-            photo_data_url: result,
-          },
+          [entryDate]: nextDraft,
         };
       });
+      await persistJournalDraft(entryDate, nextDraft);
     };
     reader.readAsDataURL(file);
   };
@@ -1636,11 +1657,11 @@ export default function HomePage() {
 
   const fetchEmailsEffect = useEffectEvent(
     (
-      currentMode: "dashboard" | "tasks" | "journal" | "mail" | "overview" | "schedule" | "planning",
+      currentMode: "dashboard" | "tasks" | "journal" | "mail" | "news" | "overview" | "schedule" | "planning",
       mailboxName?: string,
       currentMailView: "ai" | "raw" = mailView
     ) => {
-      if (currentMode === "dashboard") {
+      if (currentMode === "dashboard" || currentMode === "news") {
         void loadDashboard();
         return;
       }
@@ -2806,6 +2827,8 @@ export default function HomePage() {
                 ? "Keep a lightweight daily journal with calendar-based summaries, a world event snapshot, and room for your own reflection."
                 : mode === "planning"
                 ? "Turn your goals for the day or week into a realistic schedule that fits around your calendar."
+                : mode === "news"
+                ? "Review the exact headlines feeding the dashboard so you can open the source coverage directly."
                 : "Work through your inbox from one Mail tab, then switch between AI triage and raw Gmail controls whenever you need them."}
             </p>
           </div>
@@ -2848,6 +2871,15 @@ export default function HomePage() {
             </Button>
 
             <Button
+              variant={mode === "news" ? "default" : "outline"}
+              className="rounded-2xl"
+              onClick={() => setMode("news")}
+            >
+              <Newspaper className="mr-2 h-4 w-4" />
+              News
+            </Button>
+
+            <Button
               variant={mode === "overview" ? "default" : "outline"}
               className="rounded-2xl"
               onClick={() => {
@@ -2869,6 +2901,10 @@ export default function HomePage() {
             >
               <CalendarDays className="mr-2 h-4 w-4" />
               Schedule
+            </Button>
+
+            <Button asChild variant="outline" className="rounded-2xl">
+              <Link href="/mobile">iPhone view</Link>
             </Button>
 
             <Button
@@ -2906,6 +2942,10 @@ export default function HomePage() {
                   }
                   return;
                 }
+                if (mode === "news") {
+                  void loadDashboard();
+                  return;
+                }
                 void loadEmails(mode, selectedMailbox);
               }}
               disabled={loading || cleanupLoading || emailActionLoading || planningLoading}
@@ -2916,7 +2956,7 @@ export default function HomePage() {
               Refresh
             </Button>
 
-            {mode !== "planning" && mode !== "dashboard" && mode !== "tasks" && mode !== "journal" ? (
+            {mode !== "planning" && mode !== "dashboard" && mode !== "tasks" && mode !== "journal" && mode !== "news" ? (
               <Input
                 type="number"
                 min="1"
@@ -2965,12 +3005,17 @@ export default function HomePage() {
                         {dashboard?.mail_summary || "No mail summary yet."}
                       </div>
                     </div>
-                    <div className="rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4">
+                    <button
+                      type="button"
+                      onClick={() => setMode("news")}
+                      className="rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4 text-left transition hover:border-cyan-300/30 hover:bg-[rgba(42,45,72,0.9)]"
+                    >
                       <div className="text-xs uppercase tracking-wide text-slate-400">News</div>
                       <div className="mt-2 text-sm leading-6 text-slate-200">
                         {dashboard?.news_summary || "No news summary yet."}
                       </div>
-                    </div>
+                      <div className="mt-3 text-xs text-cyan-100">Open article list</div>
+                    </button>
                     <div className="rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4">
                       <div className="text-xs uppercase tracking-wide text-slate-400">Tasks</div>
                       <div className="mt-2 text-sm leading-6 text-slate-200">
@@ -3151,6 +3196,81 @@ export default function HomePage() {
                 </CardContent>
               </Card>
             </div>
+          </div>
+        ) : mode === "news" ? (
+          <div className="space-y-6">
+            <Card className="rounded-[2rem] border border-white/8 bg-[rgba(17,19,34,0.82)] shadow-[0_16px_44px_rgba(6,7,14,0.36)] backdrop-blur-xl">
+              <CardHeader className="pb-3">
+                <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+                  <div>
+                    <CardTitle className="flex items-center gap-2 text-lg">
+                      <Newspaper className="h-5 w-5" />
+                      News sources
+                    </CardTitle>
+                    <p className="mt-2 text-sm leading-6 text-slate-300">
+                      These are the headlines currently feeding the dashboard&apos;s news summary.
+                    </p>
+                  </div>
+                  <Button
+                    variant="outline"
+                    className="rounded-2xl"
+                    onClick={() => setMode("dashboard")}
+                  >
+                    Back to dashboard
+                  </Button>
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="rounded-[1.6rem] border border-cyan-300/15 bg-[linear-gradient(135deg,rgba(56,189,248,0.16),rgba(35,37,58,0.92))] p-5">
+                  <div className="text-xs uppercase tracking-[0.22em] text-cyan-100/80">
+                    Dashboard news summary
+                  </div>
+                  <div className="mt-3 text-sm leading-7 text-slate-100">
+                    {dashboard?.news_summary || (loading ? "Loading news summary..." : "No news summary yet.")}
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="rounded-[2rem] border border-white/8 bg-[rgba(17,19,34,0.82)] shadow-[0_16px_44px_rgba(6,7,14,0.36)] backdrop-blur-xl">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-lg">Articles used</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-3">
+                  {dashboard?.news_items?.length ? (
+                    dashboard.news_items.map((item, index) => (
+                      <div
+                        key={`${item.title}-${index}`}
+                        className="rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4"
+                      >
+                        <div className="text-sm font-semibold text-slate-100">{item.title}</div>
+                        <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-400">
+                          {item.source ? <span>{item.source}</span> : null}
+                          {item.published_at ? (
+                            <span>{formatScheduleDateTime(item.published_at)}</span>
+                          ) : null}
+                        </div>
+                        {item.link ? (
+                          <a
+                            href={item.link}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="mt-3 inline-block text-sm text-cyan-200 underline decoration-cyan-300/40 underline-offset-4"
+                          >
+                            Open article
+                          </a>
+                        ) : null}
+                      </div>
+                    ))
+                  ) : (
+                    <div className="rounded-[1.6rem] border border-dashed border-white/10 p-6 text-sm text-slate-400">
+                      {loading ? "Loading news..." : "No news items available right now."}
+                    </div>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
           </div>
         ) : mode === "tasks" ? (
           <div className="grid gap-6 lg:grid-cols-[360px_1fr]">
@@ -3403,6 +3523,7 @@ export default function HomePage() {
                   calendar_items: entry.calendar_items || [],
                 };
                 const sectionState = journalSectionState[entry.date] || {
+                  dayOpen: false,
                   calendarOpen: false,
                   articlesOpen: false,
                 };
@@ -3422,23 +3543,37 @@ export default function HomePage() {
                     className="rounded-[2rem] border border-white/8 bg-[rgba(17,19,34,0.82)] shadow-[0_16px_44px_rgba(6,7,14,0.36)] backdrop-blur-xl"
                   >
                     <CardHeader className="pb-3">
-                      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                      <button
+                        type="button"
+                        onClick={() => toggleJournalSection(entry.date, "dayOpen")}
+                        className="flex w-full flex-col gap-3 text-left md:flex-row md:items-center md:justify-between"
+                      >
                         <div>
                           <CardTitle className="flex items-center gap-2 text-lg">
                             <BookOpen className="h-5 w-5" />
                             <span>{dateLabel}</span>
                           </CardTitle>
                           <p className="mt-2 text-sm leading-6 text-slate-300">
-                            A quick memory capsule from your calendar plus one world event from the day.
+                            {sectionState.dayOpen
+                              ? "A quick memory capsule from your calendar plus one world event from the day."
+                              : entry.calendar_summary}
                           </p>
                         </div>
-                        {entry.updated_at ? (
-                          <div className="text-xs text-slate-400">
-                            Saved {new Date(entry.updated_at).toLocaleString()}
-                          </div>
-                        ) : null}
-                      </div>
+                        <div className="flex items-center gap-3 self-start md:self-auto">
+                          {entry.updated_at ? (
+                            <div className="text-xs text-slate-400">
+                              Saved {new Date(entry.updated_at).toLocaleString()}
+                            </div>
+                          ) : null}
+                          {sectionState.dayOpen ? (
+                            <ChevronDown className="h-4 w-4 text-slate-400" />
+                          ) : (
+                            <ChevronRight className="h-4 w-4 text-slate-400" />
+                          )}
+                        </div>
+                      </button>
                     </CardHeader>
+                    {sectionState.dayOpen ? (
                     <CardContent className="space-y-5">
                       <div className="grid items-start gap-4 lg:grid-cols-2">
                         <div className="space-y-4">
@@ -3927,6 +4062,7 @@ export default function HomePage() {
                         ) : null}
                       </div>
                     </CardContent>
+                    ) : null}
                   </Card>
                 );
               })

@@ -15,7 +15,7 @@ from app.classifier import IMPORTANT_LABEL, LEGACY_IMPORTANT_LABELS, LEGACY_UNIM
 from app.config import CORS_ALLOWED_ORIGINS, OPENAI_MAX_EMAILS_PER_RUN
 from app.dashboard import generate_dashboard, invalidate_dashboard_cache
 from app.gmail_client import cleanup_inbox, expire_stale_important_emails, get_all_inbox_emails, get_email_by_id, get_emails_by_any_label, get_mailbox_emails, get_mailbox_emails_page, get_new_inbox_emails, get_recent_inbox_emails, list_gmail_labels, mark_email_handled, process_new_inbox_emails, update_email
-from app.journal import get_journal, save_journal_day
+from app.journal import get_journal, get_journal_day, save_journal_day
 from app.journal_store import init_journal_store
 from app.planner import generate_schedule_plan
 from app.rules import classify_new_email_rule
@@ -315,6 +315,11 @@ def journal(
     query: str = Query(default=""),
 ):
     return get_journal(days=days, before=before, saved_only=saved_only, query=query)
+
+
+@api.get("/journal/{entry_date}", response_model=JournalDayEntry)
+def journal_day(entry_date: str):
+    return get_journal_day(entry_date)
 
 
 @api.put("/journal/{entry_date}", response_model=JournalDayEntry)
