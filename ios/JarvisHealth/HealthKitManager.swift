@@ -63,6 +63,7 @@ final class HealthKitManager: ObservableObject {
     @Published var errorMessage: String?
     @Published var todaySummary: String?
     @Published var syncMessage: String?
+    @Published var lastSuccessfulSyncBaseURL: String?
     @Published var serverMode: JarvisServerMode
     @Published var localBaseURL: String
     @Published var customBaseURL: String
@@ -257,9 +258,10 @@ final class HealthKitManager: ObservableObject {
 
         do {
             let snapshot = try await fetchTodaySnapshot()
-            try await postSnapshotToJarvis(snapshot)
+            let successfulBaseURL = try await postSnapshotToJarvis(snapshot)
             todaySummary = buildSummaryText(from: snapshot)
-            syncMessage = "Synced today's expanded Apple Health metrics to Jarvis."
+            lastSuccessfulSyncBaseURL = successfulBaseURL
+            syncMessage = "Synced today's expanded Apple Health metrics to Jarvis via \(successfulBaseURL)."
         } catch {
             errorMessage = "Jarvis sync failed: \(error.localizedDescription)"
         }
@@ -536,7 +538,7 @@ final class HealthKitManager: ObservableObject {
         }
     }
 
-    private func postSnapshotToJarvis(_ snapshot: TodayHealthSnapshot) async throws {
+    private func postSnapshotToJarvis(_ snapshot: TodayHealthSnapshot) async throws -> String {
         let candidateBaseURLs = resolvedBaseURLsForSync()
         guard !candidateBaseURLs.isEmpty else {
             throw URLError(.badURL)
@@ -554,17 +556,27 @@ final class HealthKitManager: ObservableObject {
         )
         let requestBody = try JSONEncoder().encode(payload)
         var lastError: Error = URLError(.cannotConnectToHost)
+        var attemptedBaseURLs: [String] = []
 
         for baseURL in candidateBaseURLs {
+            attemptedBaseURLs.append(baseURL)
             do {
                 try await postSnapshot(requestBody: requestBody, baseURL: baseURL)
-                return
+                return baseURL
             } catch {
                 lastError = error
             }
         }
 
-        throw lastError
+        let attemptedText = attemptedBaseURLs.joined(separator: ", ")
+        throw NSError(
+            domain: "JarvisHealthSync",
+            code: 1,
+            userInfo: [
+                NSLocalizedDescriptionKey:
+                    "\(lastError.localizedDescription) Attempted: \(attemptedText)"
+            ]
+        )
     }
 
     private func postSnapshot(requestBody: Data, baseURL: String) async throws {

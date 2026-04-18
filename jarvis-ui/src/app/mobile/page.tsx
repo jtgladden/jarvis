@@ -2,8 +2,9 @@
 
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import React, { Suspense, useEffect, useMemo, useState } from "react";
+import React, { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import {
+  Activity,
   BookOpen,
   CalendarDays,
   CheckCircle2,
@@ -22,7 +23,7 @@ import { Input } from "@/components/ui/input";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "/api";
 
-type MobileTab = "today" | "mail" | "tasks" | "journal" | "schedule";
+type MobileTab = "today" | "mail" | "tasks" | "journal" | "schedule" | "health";
 type MobileMailView = "ai" | "raw";
 
 type DashboardMailItem = {
@@ -66,6 +67,7 @@ type DashboardResponse = {
   mail_summary: string;
   news_summary: string;
   tasks_summary: string;
+  health_summary?: DashboardHealthSummary | null;
   calendar_items: CalendarAgendaItem[];
   important_emails: DashboardMailItem[];
   news_items: Array<{
@@ -75,6 +77,28 @@ type DashboardResponse = {
     published_at?: string | null;
   }>;
   tasks: DashboardTaskItem[];
+};
+
+type HealthDailyEntry = {
+  date: string;
+  source: string;
+  steps: number;
+  active_energy_kcal?: number | null;
+  sleep_hours?: number | null;
+  workouts: number;
+  resting_heart_rate?: number | null;
+  extra_metrics: Record<string, number | string | null>;
+  synced_at?: string | null;
+};
+
+type DashboardHealthSummary = {
+  latest_date?: string | null;
+  last_synced_at?: string | null;
+  today_entry?: HealthDailyEntry | null;
+  recent_entries: HealthDailyEntry[];
+  seven_day_avg_steps?: number | null;
+  seven_day_avg_sleep_hours?: number | null;
+  streak_days: number;
 };
 
 type TaskListResponse = {
@@ -185,6 +209,68 @@ function formatScheduleDateTime(value: string | null | undefined, isAllDay = fal
   ).format(parsed);
 }
 
+function formatHealthStat(value: number | null | undefined, digits = 0) {
+  if (value === null || value === undefined) return "--";
+  return value.toLocaleString(undefined, {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  });
+}
+
+function healthMetricLabel(key: string) {
+  const labels: Record<string, string> = {
+    walking_running_distance_km: "Distance",
+    flights_climbed: "Flights climbed",
+    exercise_minutes: "Exercise",
+    stand_minutes: "Stand",
+    basal_energy_kcal: "Basal energy",
+    avg_heart_rate_bpm: "Avg heart rate",
+    latest_heart_rate_bpm: "Latest heart rate",
+    walking_heart_rate_avg_bpm: "Walking HR avg",
+    respiratory_rate_bpm: "Respiratory rate",
+    oxygen_saturation_percent: "Oxygen saturation",
+    hrv_sdnn_ms: "HRV",
+    vo2_max: "VO2 max",
+    body_mass_kg: "Weight",
+    body_fat_percentage: "Body fat",
+    body_mass_index: "BMI",
+    water_intake_ml: "Water",
+  };
+
+  return labels[key] || key.replaceAll("_", " ");
+}
+
+function formatHealthMetricValue(key: string, value: number | string | null | undefined) {
+  if (value === null || value === undefined) return "--";
+  if (typeof value === "string") return value;
+
+  switch (key) {
+    case "walking_running_distance_km":
+      return `${formatHealthStat(value, 2)} km`;
+    case "exercise_minutes":
+    case "stand_minutes":
+      return `${formatHealthStat(value)} min`;
+    case "basal_energy_kcal":
+      return `${formatHealthStat(value)} kcal`;
+    case "avg_heart_rate_bpm":
+    case "latest_heart_rate_bpm":
+    case "walking_heart_rate_avg_bpm":
+    case "respiratory_rate_bpm":
+      return `${formatHealthStat(value)} bpm`;
+    case "oxygen_saturation_percent":
+    case "body_fat_percentage":
+      return `${formatHealthStat(value)}%`;
+    case "hrv_sdnn_ms":
+      return `${formatHealthStat(value)} ms`;
+    case "body_mass_kg":
+      return `${formatHealthStat(value, 1)} kg`;
+    case "water_intake_ml":
+      return `${formatHealthStat(value)} mL`;
+    default:
+      return formatHealthStat(value, key === "vo2_max" || key === "body_mass_index" ? 1 : 0);
+  }
+}
+
 function summarizeJournal(entry: JournalDayEntry) {
   return (
     entry.journal_entry.trim() ||
@@ -286,7 +372,7 @@ function MobilePageContent() {
     }
   };
 
-  const loadAll = async () => {
+  const loadAll = useCallback(async () => {
     setLoading(true);
     setError("");
 
@@ -320,11 +406,11 @@ function MobilePageContent() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [journalQuery]);
 
   useEffect(() => {
     void loadAll();
-  }, []);
+  }, [loadAll]);
 
   useEffect(() => {
     if (activeTab === "mail") {
@@ -345,7 +431,7 @@ function MobilePageContent() {
 
   useEffect(() => {
     const tab = searchParams.get("tab");
-    if (tab === "today" || tab === "mail" || tab === "tasks" || tab === "journal" || tab === "schedule") {
+    if (tab === "today" || tab === "mail" || tab === "tasks" || tab === "journal" || tab === "schedule" || tab === "health") {
       setActiveTab(tab);
     }
   }, [searchParams]);
@@ -448,6 +534,7 @@ function MobilePageContent() {
     { key: "today", label: "Today", icon: <House className="h-4 w-4" /> },
     { key: "mail", label: "Mail", icon: <Mail className="h-4 w-4" /> },
     { key: "tasks", label: "Tasks", icon: <CheckCircle2 className="h-4 w-4" /> },
+    { key: "health", label: "Health", icon: <Activity className="h-4 w-4" /> },
     { key: "journal", label: "Journal", icon: <BookOpen className="h-4 w-4" /> },
     { key: "schedule", label: "Schedule", icon: <CalendarDays className="h-4 w-4" /> },
   ];
@@ -489,6 +576,10 @@ function MobilePageContent() {
               <div className="rounded-[1.4rem] border border-white/8 bg-white/5 p-3">
                 <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Calendar today</div>
                 <div className="mt-2 text-2xl font-semibold text-white">{dashboard?.calendar_items.length || 0}</div>
+              </div>
+              <div className="rounded-[1.4rem] border border-white/8 bg-white/5 p-3">
+                <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Health today</div>
+                <div className="mt-2 text-2xl font-semibold text-white">{formatHealthStat(dashboard?.health_summary?.today_entry?.steps)}</div>
               </div>
             </div>
 
@@ -600,18 +691,26 @@ function MobilePageContent() {
 
             <Card className="rounded-[1.8rem] border border-white/8 bg-[rgba(17,19,34,0.82)]">
               <CardHeader className="pb-2">
-                <CardTitle className="text-lg">Important mail preview</CardTitle>
+                <CardTitle className="text-lg">Health preview</CardTitle>
               </CardHeader>
               <CardContent className="space-y-3">
-                {(dashboard?.important_emails || []).slice(0, 3).map((item) => (
-                  <div key={item.message_id} className="rounded-[1.2rem] border border-white/8 bg-white/5 px-4 py-3">
-                    <div className="text-sm font-medium text-white">{item.subject}</div>
-                    <div className="mt-1 text-xs text-slate-400">{item.sender}</div>
-                    <div className="mt-2 text-sm leading-6 text-slate-300">
-                      {item.summary || item.why_it_matters}
-                    </div>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab("health")}
+                  className="w-full rounded-[1.2rem] border border-white/8 bg-white/5 px-4 py-3 text-left"
+                >
+                  <div className="text-sm font-medium text-white">
+                    {formatHealthStat(dashboard?.health_summary?.today_entry?.steps)} steps today
                   </div>
-                ))}
+                  <div className="mt-1 text-xs text-slate-400">
+                    Sleep avg {formatHealthStat(dashboard?.health_summary?.seven_day_avg_sleep_hours, 1)} hr · Resting HR {formatHealthStat(dashboard?.health_summary?.today_entry?.resting_heart_rate)} bpm
+                  </div>
+                  <div className="mt-2 text-sm leading-6 text-slate-300">
+                    {dashboard?.health_summary
+                      ? `${dashboard.health_summary.streak_days} day movement streak and ${dashboard.health_summary.recent_entries.length} synced days.`
+                      : "No health data synced yet."}
+                  </div>
+                </button>
               </CardContent>
             </Card>
           </div>
@@ -800,6 +899,95 @@ function MobilePageContent() {
           </div>
         ) : null}
 
+        {activeTab === "health" ? (
+          <div className="space-y-4">
+            <Card className="rounded-[1.8rem] border border-white/8 bg-[rgba(17,19,34,0.82)]">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-lg">Health snapshot</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {dashboard?.health_summary ? (
+                  <>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="rounded-[1.2rem] border border-white/8 bg-white/5 p-3">
+                        <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Today&apos;s steps</div>
+                        <div className="mt-2 text-2xl font-semibold text-white">
+                          {formatHealthStat(dashboard.health_summary.today_entry?.steps)}
+                        </div>
+                        <div className="mt-2 text-xs text-slate-400">
+                          7-day avg {formatHealthStat(dashboard.health_summary.seven_day_avg_steps)}
+                        </div>
+                      </div>
+                      <div className="rounded-[1.2rem] border border-white/8 bg-white/5 p-3">
+                        <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Sleep average</div>
+                        <div className="mt-2 text-2xl font-semibold text-white">
+                          {formatHealthStat(dashboard.health_summary.seven_day_avg_sleep_hours, 1)} hr
+                        </div>
+                        <div className="mt-2 text-xs text-slate-400">
+                          Resting HR {formatHealthStat(dashboard.health_summary.today_entry?.resting_heart_rate)} bpm
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="rounded-[1.2rem] border border-cyan-300/18 bg-cyan-400/8 px-4 py-3 text-sm leading-6 text-slate-200">
+                      {dashboard.health_summary.streak_days} day movement streak, {formatHealthStat(dashboard.health_summary.today_entry?.workouts)} workouts today, latest sync {dashboard.health_summary.last_synced_at ? formatScheduleDateTime(dashboard.health_summary.last_synced_at) : "unknown"}.
+                    </div>
+
+                    {dashboard.health_summary.today_entry?.extra_metrics &&
+                    Object.keys(dashboard.health_summary.today_entry.extra_metrics).length ? (
+                      <div className="space-y-2">
+                        <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Expanded metrics</div>
+                        {Object.entries(dashboard.health_summary.today_entry.extra_metrics)
+                          .filter(([, value]) => value !== null && value !== undefined)
+                          .slice(0, 12)
+                          .map(([key, value]) => (
+                            <div
+                              key={key}
+                              className="rounded-[1.2rem] border border-white/8 bg-white/5 px-4 py-3"
+                            >
+                              <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">
+                                {healthMetricLabel(key)}
+                              </div>
+                              <div className="mt-1 text-sm font-medium text-white">
+                                {formatHealthMetricValue(key, value)}
+                              </div>
+                            </div>
+                          ))}
+                      </div>
+                    ) : null}
+
+                    <div className="space-y-2">
+                      <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Recent days</div>
+                      {dashboard.health_summary.recent_entries.slice().reverse().map((entry) => (
+                        <div
+                          key={entry.date}
+                          className="rounded-[1.2rem] border border-white/8 bg-white/5 px-4 py-3"
+                        >
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="text-sm font-medium text-white">{entry.date}</div>
+                            <div className="text-xs text-slate-400">
+                              {formatHealthStat(entry.sleep_hours, 1)} hr sleep
+                            </div>
+                          </div>
+                          <div className="mt-2 flex flex-wrap gap-3 text-xs text-slate-300">
+                            <span>{formatHealthStat(entry.steps)} steps</span>
+                            <span>{formatHealthStat(entry.active_energy_kcal)} kcal</span>
+                            <span>{formatHealthStat(entry.workouts)} workouts</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                ) : (
+                  <div className="rounded-[1.2rem] border border-dashed border-white/10 px-4 py-4 text-sm text-slate-400">
+                    No health data synced yet.
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+        ) : null}
+
         {activeTab === "journal" ? (
           <div className="space-y-4">
             <Card className="rounded-[1.8rem] border border-white/8 bg-[rgba(17,19,34,0.82)]">
@@ -898,7 +1086,7 @@ function MobilePageContent() {
       </div>
 
       <div className="fixed inset-x-0 bottom-0 z-30 border-t border-white/8 bg-[rgba(11,13,25,0.94)] px-4 pb-4 pt-3 backdrop-blur-xl">
-        <div className="mx-auto grid max-w-md grid-cols-5 gap-2">
+        <div className="mx-auto grid max-w-md grid-cols-6 gap-2">
           {navItems.map((item) => (
             <button
               key={item.key}

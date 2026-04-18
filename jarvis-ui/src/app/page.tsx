@@ -573,6 +573,150 @@ type DashboardResponse = {
   tasks: DashboardTaskItem[];
 };
 
+function HealthDetailPanel({
+  dashboard,
+  loading,
+  onBackToDashboard,
+}: {
+  dashboard: DashboardResponse | null;
+  loading: boolean;
+  onBackToDashboard?: () => void;
+}) {
+  return (
+    <div className="space-y-6">
+      <Card className="rounded-[2rem] border border-white/8 bg-[rgba(17,19,34,0.82)] shadow-[0_16px_44px_rgba(6,7,14,0.36)] backdrop-blur-xl">
+        <CardHeader className="pb-3">
+          <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+            <div>
+              <CardTitle className="flex items-center gap-2 text-lg">
+                <Activity className="h-5 w-5" />
+                Health trends
+              </CardTitle>
+              <p className="mt-2 text-sm leading-6 text-slate-300">
+                A deeper look at synced Apple Health metrics, recent daily history, and the expanded measurements coming from your phone.
+              </p>
+            </div>
+            {onBackToDashboard ? (
+              <Button variant="outline" className="rounded-2xl" onClick={onBackToDashboard}>
+                Back to dashboard
+              </Button>
+            ) : null}
+          </div>
+        </CardHeader>
+        <CardContent>
+          {dashboard?.health_summary ? (
+            <div className="space-y-4">
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                <div className="rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4">
+                  <div className="text-xs uppercase tracking-wide text-slate-400">Today&apos;s steps</div>
+                  <div className="mt-2 text-2xl font-semibold text-white">
+                    {formatHealthStat(dashboard.health_summary.today_entry?.steps)}
+                  </div>
+                  <div className="mt-2 text-xs text-slate-400">
+                    7-day avg {formatHealthStat(dashboard.health_summary.seven_day_avg_steps)}
+                  </div>
+                </div>
+                <div className="rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4">
+                  <div className="text-xs uppercase tracking-wide text-slate-400">Active energy</div>
+                  <div className="mt-2 text-2xl font-semibold text-white">
+                    {formatHealthStat(dashboard.health_summary.today_entry?.active_energy_kcal)} kcal
+                  </div>
+                  <div className="mt-2 text-xs text-slate-400">
+                    {dashboard.health_summary.streak_days} day movement streak
+                  </div>
+                </div>
+                <div className="rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4">
+                  <div className="text-xs uppercase tracking-wide text-slate-400">Sleep average</div>
+                  <div className="mt-2 text-2xl font-semibold text-white">
+                    {formatHealthStat(dashboard.health_summary.seven_day_avg_sleep_hours, 1)} hr
+                  </div>
+                  <div className="mt-2 text-xs text-slate-400">
+                    Workouts today {formatHealthStat(dashboard.health_summary.today_entry?.workouts)}
+                  </div>
+                </div>
+                <div className="rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4">
+                  <div className="text-xs uppercase tracking-wide text-slate-400">Resting heart rate</div>
+                  <div className="mt-2 text-2xl font-semibold text-white">
+                    {formatHealthStat(dashboard.health_summary.today_entry?.resting_heart_rate)} bpm
+                  </div>
+                  <div className="mt-2 text-xs text-slate-400">
+                    Latest sync {dashboard.health_summary.last_synced_at ? formatScheduleDateTime(dashboard.health_summary.last_synced_at) : "unknown"}
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded-[1.4rem] border border-cyan-300/15 bg-[linear-gradient(135deg,rgba(56,189,248,0.12),rgba(35,37,58,0.85))] p-4">
+                <div className="flex flex-wrap items-center gap-2 text-xs text-cyan-100">
+                  {dashboard.health_summary.latest_date ? (
+                    <span className="rounded-full border border-cyan-300/25 bg-cyan-400/10 px-2.5 py-1">
+                      Latest data date {dashboard.health_summary.latest_date}
+                    </span>
+                  ) : null}
+                  <span className="rounded-full border border-cyan-300/25 bg-cyan-400/10 px-2.5 py-1">
+                    {dashboard.health_summary.recent_entries.length} synced day{dashboard.health_summary.recent_entries.length === 1 ? "" : "s"}
+                  </span>
+                </div>
+              </div>
+
+              {dashboard.health_summary.today_entry?.extra_metrics &&
+              Object.keys(dashboard.health_summary.today_entry.extra_metrics).length ? (
+                <div className="rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4">
+                  <div className="text-xs uppercase tracking-wide text-slate-400">Expanded metrics</div>
+                  <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+                    {Object.entries(dashboard.health_summary.today_entry.extra_metrics)
+                      .filter(([, value]) => value !== null && value !== undefined)
+                      .map(([key, value]) => (
+                        <div
+                          key={key}
+                          className="rounded-[1rem] border border-white/6 bg-[rgba(17,19,34,0.45)] px-3 py-2"
+                        >
+                          <div className="text-xs uppercase tracking-wide text-slate-400">
+                            {healthMetricLabel(key)}
+                          </div>
+                          <div className="mt-1 text-sm font-medium text-slate-100">
+                            {formatHealthMetricValue(key, value)}
+                          </div>
+                        </div>
+                      ))}
+                  </div>
+                </div>
+              ) : null}
+
+              <Card className="rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] shadow-none">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-base">Recent history</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-2">
+                  {dashboard.health_summary.recent_entries.slice().reverse().map((entry) => (
+                    <div
+                      key={entry.date}
+                      className="flex items-center justify-between rounded-[1.2rem] border border-white/6 bg-[rgba(17,19,34,0.45)] px-4 py-3 text-sm"
+                    >
+                      <div className="text-slate-300">{entry.date}</div>
+                      <div className="flex flex-wrap items-center gap-3 text-slate-100">
+                        <span>{formatHealthStat(entry.steps)} steps</span>
+                        <span>{formatHealthStat(entry.active_energy_kcal)} kcal</span>
+                        <span>{formatHealthStat(entry.workouts)} workouts</span>
+                        <span>{formatHealthStat(entry.sleep_hours, 1)} hr sleep</span>
+                      </div>
+                    </div>
+                  ))}
+                </CardContent>
+              </Card>
+            </div>
+          ) : (
+            <div className="rounded-[1.6rem] border border-dashed border-white/10 p-6 text-sm text-slate-400">
+              {loading
+                ? "Loading health data..."
+                : "No synced health data yet. Use the iPhone app to send Apple Health data into Jarvis."}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
 type TaskListResponse = {
   generated_at: string;
   tasks: DashboardTaskItem[];
@@ -1049,7 +1193,7 @@ export default function HomePage() {
   const [error, setError] = useState("");
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [mode, setMode] = useState<"dashboard" | "tasks" | "journal" | "mail" | "news" | "overview" | "schedule" | "planning" | "settings">("dashboard");
+  const [mode, setMode] = useState<"dashboard" | "tasks" | "journal" | "mail" | "news" | "overview" | "schedule" | "planning" | "settings" | "health">("dashboard");
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const [mailView, setMailView] = useState<"ai" | "raw">("ai");
   const [dashboard, setDashboard] = useState<DashboardResponse | null>(null);
@@ -1164,7 +1308,7 @@ export default function HomePage() {
   };
 
   const loadEmails = async (
-    currentMode: "dashboard" | "tasks" | "journal" | "mail" | "news" | "overview" | "schedule" | "planning" | "settings" = mode,
+    currentMode: "dashboard" | "tasks" | "journal" | "mail" | "news" | "overview" | "schedule" | "planning" | "settings" | "health" = mode,
     mailboxOverride?: string,
     pageTokenOverride?: string | null,
     currentMailView: "ai" | "raw" = mailView
@@ -1175,7 +1319,8 @@ export default function HomePage() {
       currentMode === "tasks" ||
       currentMode === "journal" ||
       currentMode === "news"
-      || currentMode === "settings"
+      || currentMode === "settings" ||
+      currentMode === "health"
     ) {
       return;
     }
@@ -1854,7 +1999,7 @@ export default function HomePage() {
 
   const fetchEmailsEffect = useEffectEvent(
     (
-      currentMode: "dashboard" | "tasks" | "journal" | "mail" | "news" | "overview" | "schedule" | "planning" | "settings",
+      currentMode: "dashboard" | "tasks" | "journal" | "mail" | "news" | "overview" | "schedule" | "planning" | "settings" | "health",
       mailboxName?: string,
       currentMailView: "ai" | "raw" = mailView
     ) => {
@@ -1865,6 +2010,10 @@ export default function HomePage() {
       if (currentMode === "settings") {
         void loadLabels();
         void loadClassificationGuidance();
+        return;
+      }
+      if (currentMode === "health") {
+        void loadDashboard();
         return;
       }
       if (currentMode === "tasks") {
@@ -2605,7 +2754,7 @@ export default function HomePage() {
     setLabelDraft(
       (selectedEmail.labels || []).filter((labelName) => editableLabelNames.includes(labelName))
     );
-  }, [selectedEmail?.id, editableLabelNames.join("|")]);
+  }, [selectedEmail, editableLabelNames]);
 
   useEffect(() => {
     setCalendarCreateLink(null);
@@ -2613,7 +2762,7 @@ export default function HomePage() {
       setCalendarPreview(null);
       return;
     }
-  }, [selectedEmail?.id, mode]);
+  }, [selectedEmail, mode]);
 
   useEffect(() => {
     setPlanningCalendarLink(null);
@@ -2668,7 +2817,7 @@ export default function HomePage() {
   const guidanceDirty = classificationGuidance !== savedClassificationGuidance;
 
   const setTopLevelMode = (
-    nextMode: "dashboard" | "tasks" | "journal" | "mail" | "news" | "overview" | "schedule" | "planning" | "settings"
+    nextMode: "dashboard" | "tasks" | "journal" | "mail" | "news" | "overview" | "schedule" | "planning" | "settings" | "health"
   ) => {
     if (
       nextMode === "overview" &&
@@ -3082,6 +3231,8 @@ export default function HomePage() {
                 ? "Turn your goals for the day or week into a realistic schedule that fits around your calendar."
                 : mode === "news"
                 ? "Review the exact headlines feeding the dashboard so you can open the source coverage directly."
+                : mode === "health"
+                ? "Track your synced Apple Health data with a deeper view of daily history, heart metrics, movement, and other expanded measurements."
                 : mode === "settings"
                 ? "Manage Jarvis classification guidance and inbox cleanup tools away from the main review workspace."
                 : "Work through your inbox from one Mail tab, then switch between AI triage and raw Gmail controls whenever you need them."}
@@ -3123,6 +3274,15 @@ export default function HomePage() {
             >
               <ShieldCheck className="mr-2 h-4 w-4" />
               Tasks
+            </Button>
+
+            <Button
+              variant={mode === "health" ? "default" : "outline"}
+              className="rounded-2xl"
+              onClick={() => setTopLevelMode("health")}
+            >
+              <Activity className="mr-2 h-4 w-4" />
+              Health
             </Button>
 
             <div className="relative">
@@ -3224,6 +3384,10 @@ export default function HomePage() {
                 if (mode === "settings") {
                   void loadLabels();
                   void loadClassificationGuidance();
+                  return;
+                }
+                if (mode === "health") {
+                  void loadDashboard();
                   return;
                 }
                 void loadEmails(mode, selectedMailbox);
@@ -3484,7 +3648,7 @@ export default function HomePage() {
                 <CardHeader className="pb-3">
                   <CardTitle className="flex items-center gap-2 text-lg">
                     <Activity className="h-5 w-5" />
-                    Health snapshot
+                    Health preview
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
@@ -3501,70 +3665,26 @@ export default function HomePage() {
                           </div>
                         </div>
                         <div className="rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4">
-                          <div className="text-xs uppercase tracking-wide text-slate-400">Active energy</div>
+                          <div className="text-xs uppercase tracking-wide text-slate-400">Sleep and recovery</div>
                           <div className="mt-2 text-2xl font-semibold text-white">
-                            {formatHealthStat(dashboard.health_summary.today_entry?.active_energy_kcal)} kcal
+                            {formatHealthStat(dashboard.health_summary.seven_day_avg_sleep_hours, 1)} hr
                           </div>
                           <div className="mt-2 text-xs text-slate-400">
-                            {dashboard.health_summary.streak_days} day movement streak
+                            Resting HR {formatHealthStat(dashboard.health_summary.today_entry?.resting_heart_rate)} bpm
                           </div>
                         </div>
                       </div>
                       <div className="rounded-[1.4rem] border border-cyan-300/15 bg-[linear-gradient(135deg,rgba(56,189,248,0.12),rgba(35,37,58,0.85))] p-4">
-                        <div className="flex flex-wrap items-center gap-2 text-xs text-cyan-100">
-                          <span>
-                            Latest sync {dashboard.health_summary.last_synced_at ? formatScheduleDateTime(dashboard.health_summary.last_synced_at) : "unknown"}
-                          </span>
-                          {dashboard.health_summary.latest_date ? (
-                            <span className="rounded-full border border-cyan-300/25 bg-cyan-400/10 px-2.5 py-1">
-                              Data date {dashboard.health_summary.latest_date}
-                            </span>
-                          ) : null}
+                        <div className="text-sm leading-6 text-slate-100">
+                          {dashboard.health_summary.streak_days} day movement streak, {formatHealthStat(dashboard.health_summary.today_entry?.workouts)} workouts today, and {dashboard.health_summary.recent_entries.length} synced days available.
                         </div>
-                        <div className="mt-3 grid gap-2 text-sm text-slate-200 sm:grid-cols-3">
-                          <div>Sleep avg: {formatHealthStat(dashboard.health_summary.seven_day_avg_sleep_hours, 1)} hr</div>
-                          <div>Workouts today: {formatHealthStat(dashboard.health_summary.today_entry?.workouts)}</div>
-                          <div>Resting HR: {formatHealthStat(dashboard.health_summary.today_entry?.resting_heart_rate)} bpm</div>
-                        </div>
-                      </div>
-                      {dashboard.health_summary.today_entry?.extra_metrics &&
-                      Object.keys(dashboard.health_summary.today_entry.extra_metrics).length ? (
-                        <div className="rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4">
-                          <div className="text-xs uppercase tracking-wide text-slate-400">Expanded metrics</div>
-                          <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                            {Object.entries(dashboard.health_summary.today_entry.extra_metrics)
-                              .filter(([, value]) => value !== null && value !== undefined)
-                              .slice(0, 10)
-                              .map(([key, value]) => (
-                                <div
-                                  key={key}
-                                  className="rounded-[1rem] border border-white/6 bg-[rgba(17,19,34,0.45)] px-3 py-2"
-                                >
-                                  <div className="text-xs uppercase tracking-wide text-slate-400">
-                                    {healthMetricLabel(key)}
-                                  </div>
-                                  <div className="mt-1 text-sm font-medium text-slate-100">
-                                    {formatHealthMetricValue(key, value)}
-                                  </div>
-                                </div>
-                              ))}
-                          </div>
-                        </div>
-                      ) : null}
-                      <div className="space-y-2">
-                        {dashboard.health_summary.recent_entries.slice(-5).reverse().map((entry) => (
-                          <div
-                            key={entry.date}
-                            className="flex items-center justify-between rounded-[1.2rem] border border-white/6 bg-[rgba(35,37,58,0.72)] px-4 py-3 text-sm"
-                          >
-                            <div className="text-slate-300">{entry.date}</div>
-                            <div className="flex flex-wrap items-center gap-3 text-slate-100">
-                              <span>{formatHealthStat(entry.steps)} steps</span>
-                              <span>{formatHealthStat(entry.active_energy_kcal)} kcal</span>
-                              <span>{formatHealthStat(entry.workouts)} workouts</span>
-                            </div>
-                          </div>
-                        ))}
+                        <Button
+                          variant="outline"
+                          className="mt-4 rounded-2xl"
+                          onClick={() => setMode("health")}
+                        >
+                          Open full health view
+                        </Button>
                       </div>
                     </div>
                   ) : (
@@ -3689,6 +3809,12 @@ export default function HomePage() {
               </Card>
             </div>
           </div>
+        ) : mode === "health" ? (
+          <HealthDetailPanel
+            dashboard={dashboard}
+            loading={loading}
+            onBackToDashboard={() => setMode("dashboard")}
+          />
         ) : mode === "news" ? (
           <div className="space-y-6">
             <Card className="rounded-[2rem] border border-white/8 bg-[rgba(17,19,34,0.82)] shadow-[0_16px_44px_rgba(6,7,14,0.36)] backdrop-blur-xl">
