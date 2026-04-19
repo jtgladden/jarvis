@@ -412,6 +412,13 @@ class JournalNewsArticle(BaseModel):
     published_at: Optional[str] = None
 
 
+class JournalStudyLink(BaseModel):
+    label: str
+    url: str
+    confidence: Literal["exact", "likely"] = "exact"
+    matched_text: Optional[str] = None
+
+
 class JournalDayEntry(BaseModel):
     date: str
     date_label: str
@@ -425,6 +432,7 @@ class JournalDayEntry(BaseModel):
     gratitude_entry: str = ""
     scripture_study: str = ""
     spiritual_notes: str = ""
+    study_links: List[JournalStudyLink] = Field(default_factory=list)
     photo_data_url: Optional[str] = None
     calendar_items: List[CalendarAgendaItem] = Field(default_factory=list)
     updated_at: Optional[str] = None

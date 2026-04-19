@@ -35,6 +35,12 @@ type JournalDayEntry = {
   gratitude_entry: string;
   scripture_study: string;
   spiritual_notes: string;
+  study_links: Array<{
+    label: string;
+    url: string;
+    confidence: "exact" | "likely";
+    matched_text?: string | null;
+  }>;
   photo_data_url?: string | null;
   calendar_items: CalendarAgendaItem[];
   updated_at?: string | null;
@@ -57,6 +63,51 @@ function formatScheduleDateTime(value: string | null | undefined, isAllDay = fal
   ).format(parsed);
 }
 
+function escapeRegex(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function getStudyLinkPatterns(
+  links: Array<{ matched_text?: string | null; label?: string | null }> | null | undefined
+) {
+  if (!links?.length) return [];
+
+  return Array.from(
+    new Set(
+      links.flatMap((link) =>
+        [link.matched_text, link.label]
+          .map((value) => (value || "").trim())
+          .filter((value) => value.length >= 2)
+      )
+    )
+  ).sort((left, right) => right.length - left.length);
+}
+
+function highlightStudyLinkedText(
+  text: string | null | undefined,
+  links: Array<{ matched_text?: string | null; label?: string | null }> | null | undefined
+): React.ReactNode {
+  const value = text || "";
+  const patterns = getStudyLinkPatterns(links);
+  if (!value || !patterns.length) return value;
+
+  const matcher = new RegExp(`(${patterns.map(escapeRegex).join("|")})`, "gi");
+  const segments = value.split(matcher);
+
+  return segments.map((segment, index) =>
+    patterns.some((pattern) => segment.toLowerCase() === pattern.toLowerCase()) ? (
+      <mark
+        key={`${segment}-${index}`}
+        className="rounded-md bg-cyan-400/18 px-1 py-0.5 text-cyan-50 ring-1 ring-cyan-300/25"
+      >
+        {segment}
+      </mark>
+    ) : (
+      <React.Fragment key={`${segment}-${index}`}>{segment}</React.Fragment>
+    )
+  );
+}
+
 export default function MobileJournalDetailPage({
   params,
 }: {
@@ -67,6 +118,7 @@ export default function MobileJournalDetailPage({
   const [draft, setDraft] = useState<JournalDayEntry | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [extracting, setExtracting] = useState(false);
   const [editing, setEditing] = useState(false);
   const [error, setError] = useState("");
 
@@ -129,6 +181,39 @@ export default function MobileJournalDetailPage({
       setError(err instanceof Error ? err.message : "Failed to save journal day.");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const extractCitations = async () => {
+    if (!entryDate || !draft) return;
+    setExtracting(true);
+    setError("");
+    try {
+      const response = await fetch(`${API_BASE}/journal/${entryDate}/extract-citations`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          journal_entry: draft.journal_entry,
+          accomplishments: draft.accomplishments,
+          gratitude_entry: draft.gratitude_entry,
+          scripture_study: draft.scripture_study,
+          spiritual_notes: draft.spiritual_notes,
+          photo_data_url: draft.photo_data_url || null,
+          calendar_items: draft.calendar_items,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(`Citation extraction failed with status ${response.status}`);
+      }
+      const saved = (await response.json()) as JournalDayEntry;
+      setEntry(saved);
+      setDraft(saved);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to extract citations.");
+    } finally {
+      setExtracting(false);
     }
   };
 
@@ -199,6 +284,16 @@ export default function MobileJournalDetailPage({
             </Link>
           </Button>
           <div className="flex items-center gap-2">
+            {editing ? (
+              <Button
+                variant="outline"
+                className="rounded-2xl"
+                onClick={() => void extractCitations()}
+                disabled={saving || extracting || !draft}
+              >
+                {extracting ? "Extracting..." : "Extract citations"}
+              </Button>
+            ) : null}
             <Button
               variant={editing ? "default" : "outline"}
               className="rounded-2xl"
@@ -209,7 +304,7 @@ export default function MobileJournalDetailPage({
                 }
                 setEditing(true);
               }}
-              disabled={saving || !draft}
+              disabled={saving || extracting || !draft}
             >
               {saving ? "Saving..." : editing ? "Save" : "Edit"}
             </Button>
@@ -404,15 +499,53 @@ export default function MobileJournalDetailPage({
                 value && value.trim() ? (
                   <div key={label} className="rounded-[1.2rem] border border-white/8 bg-white/5 px-4 py-3">
                     <div className="text-xs uppercase tracking-[0.18em] text-slate-400">{label}</div>
-                    <div className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-200">{value}</div>
+                    <div className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-200">
+                      {label === "Study" || label === "Spiritual notes"
+                        ? highlightStudyLinkedText(value, entry?.study_links)
+                        : value}
+                    </div>
                   </div>
                 ) : null
               )
             )}
 
+            {entry?.study_links?.length ? (
+              <div className="rounded-[1.2rem] border border-white/8 bg-white/5 px-4 py-3">
+                <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Study links</div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {entry.study_links.map((link) => (
+                    <div
+                      key={`${link.label}-${link.url}`}
+                      className="inline-flex items-center gap-2 rounded-full border border-cyan-300/20 bg-cyan-400/10 px-3 py-1 text-xs text-cyan-100"
+                    >
+                      <a
+                        href={link.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="transition hover:text-cyan-50"
+                      >
+                        {link.label}
+                      </a>
+                      <span className="rounded-full border border-white/10 bg-white/8 px-2 py-0.5 text-[10px] uppercase tracking-[0.14em] text-slate-200">
+                        {link.confidence === "exact" ? "Exact match" : "Likely source"}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
             {editing ? (
-              <div className="flex justify-end">
-                <Button className="rounded-2xl" onClick={() => void saveEntry()} disabled={saving || !draft}>
+              <div className="flex justify-end gap-2">
+                <Button
+                  variant="outline"
+                  className="rounded-2xl"
+                  onClick={() => void extractCitations()}
+                  disabled={saving || extracting || !draft}
+                >
+                  {extracting ? "Extracting..." : "Extract citations"}
+                </Button>
+                <Button className="rounded-2xl" onClick={() => void saveEntry()} disabled={saving || extracting || !draft}>
                   {saving ? "Saving..." : "Save and close"}
                 </Button>
               </div>

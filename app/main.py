@@ -19,7 +19,7 @@ from app.dashboard import generate_dashboard, invalidate_dashboard_cache
 from app.gmail_client import cleanup_inbox, expire_stale_important_emails, get_all_inbox_emails, get_email_by_id, get_emails_by_any_label, get_mailbox_emails, get_mailbox_emails_page, get_new_inbox_emails, get_recent_inbox_emails, list_gmail_labels, mark_email_handled, process_new_inbox_emails, update_email
 from app.health import list_health_entries, sync_health_daily_entry
 from app.health_store import init_health_store
-from app.journal import get_journal, get_journal_day, save_journal_day
+from app.journal import extract_journal_day_citations, get_journal, get_journal_day, save_journal_day
 from app.journal_store import init_journal_store
 from app.movement import list_movement_entries, sync_movement_daily_entry
 from app.movement_store import init_movement_store
@@ -403,6 +403,20 @@ def journal_day(entry_date: str):
 @api.put("/journal/{entry_date}", response_model=JournalDayEntry)
 def journal_save(entry_date: str, payload: JournalDayNoteUpdateRequest):
     return save_journal_day(
+        entry_date=entry_date,
+        journal_entry=payload.journal_entry,
+        accomplishments=payload.accomplishments,
+        gratitude_entry=payload.gratitude_entry,
+        scripture_study=payload.scripture_study,
+        spiritual_notes=payload.spiritual_notes,
+        photo_data_url=payload.photo_data_url,
+        calendar_items=payload.calendar_items,
+    )
+
+
+@api.post("/journal/{entry_date}/extract-citations", response_model=JournalDayEntry)
+def journal_extract_citations(entry_date: str, payload: JournalDayNoteUpdateRequest):
+    return extract_journal_day_citations(
         entry_date=entry_date,
         journal_entry=payload.journal_entry,
         accomplishments=payload.accomplishments,

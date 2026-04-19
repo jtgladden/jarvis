@@ -36,6 +36,7 @@ def _ensure_journal_schema(connection: sqlite3.Connection) -> None:
             gratitude_entry TEXT NOT NULL DEFAULT '',
             scripture_study TEXT NOT NULL DEFAULT '',
             spiritual_notes TEXT NOT NULL DEFAULT '',
+            study_links_json TEXT NOT NULL DEFAULT '[]',
             photo_data_url TEXT,
             world_event_title TEXT,
             world_event_summary TEXT NOT NULL DEFAULT '',
@@ -70,6 +71,10 @@ def _ensure_journal_columns(connection: sqlite3.Connection) -> None:
     if "spiritual_notes" not in columns:
         connection.execute(
             "ALTER TABLE journal_entries ADD COLUMN spiritual_notes TEXT NOT NULL DEFAULT ''"
+        )
+    if "study_links_json" not in columns:
+        connection.execute(
+            "ALTER TABLE journal_entries ADD COLUMN study_links_json TEXT NOT NULL DEFAULT '[]'"
         )
     if "photo_data_url" not in columns:
         connection.execute("ALTER TABLE journal_entries ADD COLUMN photo_data_url TEXT")
@@ -118,6 +123,7 @@ def _migrate_legacy_journal_table(connection: sqlite3.Connection) -> None:
     has_gratitude_entry = "gratitude_entry" in legacy_columns
     has_scripture_study = "scripture_study" in legacy_columns
     has_spiritual_notes = "spiritual_notes" in legacy_columns
+    has_study_links_json = "study_links_json" in legacy_columns
     has_photo_data_url = "photo_data_url" in legacy_columns
     has_world_event_title = "world_event_title" in legacy_columns
     has_world_event_summary = "world_event_summary" in legacy_columns
@@ -132,6 +138,7 @@ def _migrate_legacy_journal_table(connection: sqlite3.Connection) -> None:
                {gratitude_entry} AS gratitude_entry,
                {scripture_study} AS scripture_study,
                {spiritual_notes} AS spiritual_notes,
+               {study_links_json} AS study_links_json,
                {photo_data_url} AS photo_data_url,
                {world_event_title} AS world_event_title,
                {world_event_summary} AS world_event_summary,
@@ -147,6 +154,7 @@ def _migrate_legacy_journal_table(connection: sqlite3.Connection) -> None:
         gratitude_entry="gratitude_entry" if has_gratitude_entry else "''",
         scripture_study="scripture_study" if has_scripture_study else "''",
         spiritual_notes="spiritual_notes" if has_spiritual_notes else "''",
+        study_links_json="study_links_json" if has_study_links_json else "'[]'",
         photo_data_url="photo_data_url" if has_photo_data_url else "NULL",
         world_event_title="world_event_title" if has_world_event_title else "NULL",
         world_event_summary="world_event_summary" if has_world_event_summary else "''",
@@ -162,7 +170,7 @@ def _migrate_legacy_journal_table(connection: sqlite3.Connection) -> None:
             """
             INSERT OR REPLACE INTO journal_entries (
                 user_id, entry_date, calendar_summary, journal_entry, accomplishments, gratitude_entry,
-                scripture_study, spiritual_notes, photo_data_url, world_event_title, world_event_summary, world_event_source,
+                scripture_study, spiritual_notes, study_links_json, photo_data_url, world_event_title, world_event_summary, world_event_source,
                 news_articles_json, news_updated_at, calendar_items_json, updated_at
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -176,6 +184,7 @@ def _migrate_legacy_journal_table(connection: sqlite3.Connection) -> None:
                 row["gratitude_entry"] or "",
                 row["scripture_study"] or "",
                 row["spiritual_notes"] or "",
+                row["study_links_json"] or "[]",
                 row["photo_data_url"],
                 row["world_event_title"],
                 row["world_event_summary"] or "",
@@ -207,7 +216,7 @@ def list_journal_entries(user_id: str = APP_DEFAULT_USER_ID) -> dict[str, dict[s
         rows = connection.execute(
             """
             SELECT entry_date, calendar_summary, journal_entry, accomplishments, gratitude_entry,
-                   scripture_study, spiritual_notes,
+                   scripture_study, spiritual_notes, study_links_json,
                    photo_data_url, world_event_title, world_event_summary, world_event_source,
                    news_articles_json, news_updated_at, calendar_items_json, updated_at
             FROM journal_entries
@@ -224,6 +233,7 @@ def list_journal_entries(user_id: str = APP_DEFAULT_USER_ID) -> dict[str, dict[s
             "gratitude_entry": row["gratitude_entry"],
             "scripture_study": row["scripture_study"],
             "spiritual_notes": row["spiritual_notes"],
+            "study_links_json": row["study_links_json"],
             "photo_data_url": row["photo_data_url"],
             "world_event_title": row["world_event_title"],
             "world_event_summary": row["world_event_summary"],
@@ -403,6 +413,7 @@ def upsert_journal_entry(
     gratitude_entry: str,
     scripture_study: str,
     spiritual_notes: str,
+    study_links_json: str,
     photo_data_url: str | None,
     calendar_items_json: str,
     user_id: str = APP_DEFAULT_USER_ID,
@@ -414,15 +425,16 @@ def upsert_journal_entry(
             """
             INSERT INTO journal_entries (
                 user_id, entry_date, calendar_summary, journal_entry, accomplishments, gratitude_entry,
-                scripture_study, spiritual_notes, photo_data_url, calendar_items_json, updated_at
+                scripture_study, spiritual_notes, study_links_json, photo_data_url, calendar_items_json, updated_at
             )
-            VALUES (?, ?, '', ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            VALUES (?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(user_id, entry_date) DO UPDATE SET
                 journal_entry = excluded.journal_entry,
                 accomplishments = excluded.accomplishments,
                 gratitude_entry = excluded.gratitude_entry,
                 scripture_study = excluded.scripture_study,
                 spiritual_notes = excluded.spiritual_notes,
+                study_links_json = excluded.study_links_json,
                 photo_data_url = excluded.photo_data_url,
                 calendar_items_json = excluded.calendar_items_json,
                 updated_at = CURRENT_TIMESTAMP
@@ -435,6 +447,7 @@ def upsert_journal_entry(
                 gratitude_entry,
                 scripture_study,
                 spiritual_notes,
+                study_links_json,
                 photo_data_url,
                 calendar_items_json,
             ),
@@ -442,7 +455,7 @@ def upsert_journal_entry(
         row = connection.execute(
             """
             SELECT entry_date, calendar_summary, journal_entry, accomplishments, gratitude_entry,
-                   scripture_study, spiritual_notes,
+                   scripture_study, spiritual_notes, study_links_json,
                    photo_data_url, world_event_title, world_event_summary, world_event_source,
                    news_articles_json, news_updated_at, calendar_items_json, updated_at
             FROM journal_entries
@@ -460,6 +473,7 @@ def upsert_journal_entry(
         "gratitude_entry": row["gratitude_entry"],
         "scripture_study": row["scripture_study"],
         "spiritual_notes": row["spiritual_notes"],
+        "study_links_json": row["study_links_json"],
         "photo_data_url": row["photo_data_url"],
         "world_event_title": row["world_event_title"],
         "world_event_summary": row["world_event_summary"],

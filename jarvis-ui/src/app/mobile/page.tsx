@@ -1462,17 +1462,17 @@ function MobilePageContent() {
                             </div>
                             <div>
                               <div className="text-2xl font-semibold text-white">
-                                {formatHealthStat(healthSummary.seven_day_avg_sleep_hours, 1)} hr
+                                {formatHealthStat(healthSummary?.seven_day_avg_sleep_hours, 1)} hr
                               </div>
                               <div className="mt-1 text-xs text-slate-300">sleep avg</div>
                             </div>
                           </div>
                           <div className="mt-3 flex flex-wrap gap-2 text-xs text-cyan-100">
                             <span className="rounded-full border border-cyan-300/25 bg-black/10 px-2.5 py-1">
-                              7-day avg {formatHealthStat(healthSummary.seven_day_avg_steps)}
+                              7-day avg {formatHealthStat(healthSummary?.seven_day_avg_steps)}
                             </span>
                             <span className="rounded-full border border-cyan-300/25 bg-black/10 px-2.5 py-1">
-                              {healthSummary.streak_days} day streak
+                              {healthSummary?.streak_days ?? 0} day streak
                             </span>
                           </div>
                         </div>
@@ -1495,7 +1495,7 @@ function MobilePageContent() {
                         </div>
 
                         <div className="rounded-[1.2rem] border border-cyan-300/18 bg-cyan-400/8 px-4 py-3 text-sm leading-6 text-slate-200">
-                          Latest sync {healthSummary.last_synced_at ? formatScheduleDateTime(healthSummary.last_synced_at) : "unknown"}.
+                          Latest sync {healthSummary?.last_synced_at ? formatScheduleDateTime(healthSummary.last_synced_at) : "unknown"}.
                         </div>
                       </>
                     ) : null}

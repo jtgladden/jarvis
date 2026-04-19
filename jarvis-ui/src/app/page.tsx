@@ -1348,6 +1348,12 @@ type JournalDayEntry = {
   gratitude_entry: string;
   scripture_study: string;
   spiritual_notes: string;
+  study_links: Array<{
+    label: string;
+    url: string;
+    confidence: "exact" | "likely";
+    matched_text?: string | null;
+  }>;
   photo_data_url?: string | null;
   calendar_items: CalendarAgendaItem[];
   updated_at?: string | null;
@@ -1483,6 +1489,22 @@ function getJournalSearchPatterns(query: string) {
   ).sort((left, right) => right.length - left.length);
 }
 
+function getStudyLinkPatterns(
+  links: Array<{ matched_text?: string | null; label?: string | null }> | null | undefined
+) {
+  if (!links?.length) return [];
+
+  return Array.from(
+    new Set(
+      links.flatMap((link) =>
+        [link.matched_text, link.label]
+          .map((value) => (value || "").trim())
+          .filter((value) => value.length >= 2)
+      )
+    )
+  ).sort((left, right) => right.length - left.length);
+}
+
 function textMatchesJournalQuery(text: string | null | undefined, query: string) {
   if (!text) return false;
   const haystack = text.toLowerCase();
@@ -1518,18 +1540,62 @@ function highlightJournalSearchText(
   );
 }
 
+function highlightJournalTextWithReferences(
+  text: string | null | undefined,
+  query: string,
+  links: Array<{ matched_text?: string | null; label?: string | null }> | null | undefined
+): React.ReactNode {
+  const value = text || "";
+  const searchPatterns = getJournalSearchPatterns(query);
+  const referencePatterns = getStudyLinkPatterns(links);
+  const patterns = Array.from(new Set([...searchPatterns, ...referencePatterns]))
+    .sort((left, right) => right.length - left.length);
+
+  if (!value || !patterns.length) {
+    return value;
+  }
+
+  const matcher = new RegExp(`(${patterns.map(escapeRegex).join("|")})`, "gi");
+  const segments = value.split(matcher);
+
+  return segments.map((segment, index) => {
+    const isReferenceMatch = referencePatterns.some(
+      (pattern) => segment.toLowerCase() === pattern.toLowerCase()
+    );
+    const isSearchMatch = searchPatterns.some(
+      (pattern) => segment.toLowerCase() === pattern.toLowerCase()
+    );
+
+    if (!isReferenceMatch && !isSearchMatch) {
+      return <React.Fragment key={`${segment}-${index}`}>{segment}</React.Fragment>;
+    }
+
+    const className = isReferenceMatch
+      ? "rounded-md bg-cyan-400/18 px-1 py-0.5 text-cyan-50 ring-1 ring-cyan-300/25"
+      : "rounded-md bg-fuchsia-400/20 px-1 py-0.5 text-fuchsia-100 ring-1 ring-fuchsia-300/25";
+
+    return (
+      <mark key={`${segment}-${index}`} className={className}>
+        {segment}
+      </mark>
+    );
+  });
+}
+
 function JournalPreviewBlock({
   label,
   value,
   query,
   placeholder,
   compact = false,
+  studyLinks,
 }: {
   label: string;
   value: string | null | undefined;
   query: string;
   placeholder: string;
   compact?: boolean;
+  studyLinks?: Array<{ matched_text?: string | null; label?: string | null }>;
 }) {
   const hasValue = Boolean((value || "").trim());
 
@@ -1544,7 +1610,7 @@ function JournalPreviewBlock({
         }`}
       >
         <div className="whitespace-pre-wrap break-words">
-          {hasValue ? highlightJournalSearchText(value, query) : placeholder}
+          {hasValue ? highlightJournalTextWithReferences(value, query, studyLinks) : placeholder}
         </div>
       </div>
     </div>
@@ -1828,6 +1894,7 @@ export default function HomePage() {
   const [journalDrafts, setJournalDrafts] = useState<Record<string, JournalDraft>>({});
   const [journalSectionState, setJournalSectionState] = useState<Record<string, JournalSectionState>>({});
   const [journalSavingDate, setJournalSavingDate] = useState<string | null>(null);
+  const [journalExtractingDate, setJournalExtractingDate] = useState<string | null>(null);
   const [journalEditingDate, setJournalEditingDate] = useState<string | null>(null);
   const [journalSearchInput, setJournalSearchInput] = useState("");
   const [journalQuery, setJournalQuery] = useState("");
@@ -2313,6 +2380,7 @@ export default function HomePage() {
                       gratitude_entry: saved.gratitude_entry,
                       scripture_study: saved.scripture_study,
                       spiritual_notes: saved.spiritual_notes,
+                      study_links: saved.study_links,
                       photo_data_url: saved.photo_data_url,
                       calendar_items: saved.calendar_items,
                       updated_at: saved.updated_at,
@@ -2334,6 +2402,61 @@ export default function HomePage() {
     } finally {
       setJournalSavingDate(null);
       setJournalEditingDate(null);
+    }
+  };
+
+  const extractJournalCitations = async (entryDate: string, draft: JournalDraft) => {
+    setJournalExtractingDate(entryDate);
+    setError("");
+    try {
+      const response = await fetch(`${API_BASE}/journal/${entryDate}/extract-citations`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(draft),
+      });
+      if (!response.ok) {
+        throw new Error(
+          await getErrorMessage(response, `Citation extraction failed with status ${response.status}`)
+        );
+      }
+
+      const saved: JournalDayEntry = await response.json();
+      setJournal((current) =>
+        current
+          ? {
+              ...current,
+              entries: current.entries.map((entry) =>
+                entry.date === entryDate
+                  ? {
+                      ...entry,
+                      journal_entry: saved.journal_entry,
+                      accomplishments: saved.accomplishments,
+                      gratitude_entry: saved.gratitude_entry,
+                      scripture_study: saved.scripture_study,
+                      spiritual_notes: saved.spiritual_notes,
+                      study_links: saved.study_links,
+                      photo_data_url: saved.photo_data_url,
+                      calendar_items: saved.calendar_items,
+                      updated_at: saved.updated_at,
+                    }
+                  : entry
+              ),
+            }
+          : current
+      );
+      await loadJournal({
+        before: journalBefore,
+        query: journalQuery,
+        savedOnly: journalSavedOnly,
+        history: journalHistory,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to extract citations.";
+      setError(message);
+    } finally {
+      setJournalExtractingDate(null);
     }
   };
 
@@ -5181,25 +5304,42 @@ export default function HomePage() {
                             <div className="text-xs uppercase tracking-wide text-slate-400">
                               Scripture / spiritual study
                             </div>
-                            <Button
-                              size="sm"
-                              variant={isEditingJournalEntry ? "default" : "outline"}
-                              className="rounded-xl"
-                              onClick={() => {
-                                if (isEditingJournalEntry) {
-                                  void saveJournalEntry(entry.date);
-                                  return;
-                                }
-                                setJournalEditingDate(entry.date);
-                              }}
-                              disabled={journalSavingDate === entry.date}
-                            >
-                              {journalSavingDate === entry.date
-                                ? "Saving..."
-                                : isEditingJournalEntry
-                                  ? "Save and close"
-                                  : "Edit notes"}
-                            </Button>
+                            <div className="flex items-center gap-2">
+                              {isEditingJournalEntry ? (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="rounded-xl"
+                                  onClick={() => {
+                                    const draft = journalDrafts[entry.date];
+                                    if (!draft) return;
+                                    void extractJournalCitations(entry.date, draft);
+                                  }}
+                                  disabled={journalSavingDate === entry.date || journalExtractingDate === entry.date}
+                                >
+                                  {journalExtractingDate === entry.date ? "Extracting..." : "Extract citations"}
+                                </Button>
+                              ) : null}
+                              <Button
+                                size="sm"
+                                variant={isEditingJournalEntry ? "default" : "outline"}
+                                className="rounded-xl"
+                                onClick={() => {
+                                  if (isEditingJournalEntry) {
+                                    void saveJournalEntry(entry.date);
+                                    return;
+                                  }
+                                  setJournalEditingDate(entry.date);
+                                }}
+                                disabled={journalSavingDate === entry.date || journalExtractingDate === entry.date}
+                              >
+                                {journalSavingDate === entry.date
+                                  ? "Saving..."
+                                  : isEditingJournalEntry
+                                    ? "Save and close"
+                                    : "Edit notes"}
+                              </Button>
+                            </div>
                           </div>
                           <div className="mt-3 space-y-3">
                             {isEditingJournalEntry ? (
@@ -5241,7 +5381,35 @@ export default function HomePage() {
                                   query={journalQuery}
                                   placeholder="No study saved for this day yet."
                                   compact
+                                  studyLinks={entry.study_links}
                                 />
+                                {entry.study_links.length ? (
+                                  <div className="space-y-2">
+                                    <div className="text-xs uppercase tracking-wide text-slate-400">
+                                      Study links
+                                    </div>
+                                    <div className="flex flex-wrap gap-2">
+                                      {entry.study_links.map((link) => (
+                                        <div
+                                          key={`${link.label}-${link.url}`}
+                                          className="inline-flex items-center gap-2 rounded-full border border-cyan-300/20 bg-cyan-400/10 px-3 py-1 text-xs text-cyan-100"
+                                        >
+                                          <a
+                                            href={link.url}
+                                            target="_blank"
+                                            rel="noreferrer"
+                                            className="transition hover:text-cyan-50"
+                                          >
+                                            {link.label}
+                                          </a>
+                                          <span className="rounded-full border border-white/10 bg-white/8 px-2 py-0.5 text-[10px] uppercase tracking-[0.14em] text-slate-200">
+                                            {link.confidence === "exact" ? "Exact match" : "Likely source"}
+                                          </span>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                ) : null}
                                 <div className="space-y-2">
                                   <div className="text-xs uppercase tracking-wide text-slate-400">
                                     Spiritual notes
@@ -5253,7 +5421,11 @@ export default function HomePage() {
                                   }`}>
                                     <div className="whitespace-pre-wrap break-words">
                                       {draft.spiritual_notes.trim()
-                                        ? highlightJournalSearchText(draft.spiritual_notes, journalQuery)
+                                        ? highlightJournalTextWithReferences(
+                                            draft.spiritual_notes,
+                                            journalQuery,
+                                            entry.study_links
+                                          )
                                         : "No spiritual notes saved for this day yet."}
                                     </div>
                                   </div>
@@ -5495,13 +5667,27 @@ export default function HomePage() {
 
                       <div className="flex justify-end">
                         {isEditingJournalEntry ? (
-                          <Button
-                            className="rounded-2xl"
-                            onClick={() => void saveJournalEntry(entry.date)}
-                            disabled={journalSavingDate === entry.date}
-                          >
-                            {journalSavingDate === entry.date ? "Saving..." : "Save entry"}
-                          </Button>
+                          <div className="flex items-center gap-2">
+                            <Button
+                              variant="outline"
+                              className="rounded-2xl"
+                              onClick={() => {
+                                const draft = journalDrafts[entry.date];
+                                if (!draft) return;
+                                void extractJournalCitations(entry.date, draft);
+                              }}
+                              disabled={journalSavingDate === entry.date || journalExtractingDate === entry.date}
+                            >
+                              {journalExtractingDate === entry.date ? "Extracting..." : "Extract citations"}
+                            </Button>
+                            <Button
+                              className="rounded-2xl"
+                              onClick={() => void saveJournalEntry(entry.date)}
+                              disabled={journalSavingDate === entry.date || journalExtractingDate === entry.date}
+                            >
+                              {journalSavingDate === entry.date ? "Saving..." : "Save entry"}
+                            </Button>
+                          </div>
                         ) : null}
                       </div>
                     </CardContent>
