@@ -514,3 +514,60 @@ class MovementDailySyncResponse(BaseModel):
 
 class MovementListResponse(BaseModel):
     entries: List[MovementDailyEntry] = Field(default_factory=list)
+
+
+class AssistantChatMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = ""
+
+
+class AssistantStoredMessage(BaseModel):
+    id: str
+    role: Literal["user", "assistant"]
+    content: str = ""
+    bullets: List[str] = Field(default_factory=list)
+    follow_ups: List[str] = Field(default_factory=list)
+    sources: List["AssistantSource"] = Field(default_factory=list)
+    created_at: Optional[str] = None
+
+
+class AssistantAskRequest(BaseModel):
+    question: str = ""
+    chat_id: Optional[str] = None
+    history: List[AssistantChatMessage] = Field(default_factory=list)
+
+
+class AssistantSource(BaseModel):
+    id: str
+    label: str
+    kind: Literal["dashboard", "mail", "tasks", "calendar", "health", "movement", "journal", "news", "system"] = "system"
+    detail: Optional[str] = None
+
+
+class AssistantAskResponse(BaseModel):
+    chat_id: str
+    answer: str = ""
+    bullets: List[str] = Field(default_factory=list)
+    follow_ups: List[str] = Field(default_factory=list)
+    sources: List[AssistantSource] = Field(default_factory=list)
+    context_summary: str = ""
+    model: Optional[str] = None
+
+
+class AssistantChatSummary(BaseModel):
+    id: str
+    title: str = ""
+    preview: str = ""
+    message_count: int = 0
+    updated_at: Optional[str] = None
+
+
+class AssistantChatListResponse(BaseModel):
+    chats: List[AssistantChatSummary] = Field(default_factory=list)
+
+
+class AssistantChatThread(BaseModel):
+    id: str
+    title: str = ""
+    messages: List[AssistantStoredMessage] = Field(default_factory=list)
+    updated_at: Optional[str] = None

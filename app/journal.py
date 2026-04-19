@@ -3,6 +3,7 @@ import logging
 import xml.etree.ElementTree as ET
 from datetime import date, datetime, time, timedelta
 from email.utils import parsedate_to_datetime
+from time import monotonic
 from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 from typing import Any
@@ -16,6 +17,7 @@ from app.journal_store import (
     get_oldest_journal_entry_date,
     list_journal_entries,
     list_journal_entry_dates,
+    upsert_journal_calendar,
     upsert_journal_entry,
     upsert_journal_news,
 )
@@ -30,14 +32,24 @@ NEWS_FEEDS = [
     ("New York Times", "https://rss.nytimes.com/services/xml/rss/nyt/World.xml"),
     ("Wall Street Journal", "https://feeds.a.dj.com/rss/RSSWorldNews.xml"),
 ]
+NEWS_CACHE_TTL_SECONDS = 900
+_recent_news_cache: list[dict[str, Any]] = []
+_recent_news_cache_loaded_at = 0.0
 
 
 def _fetch_recent_news() -> list[dict[str, Any]]:
+    global _recent_news_cache, _recent_news_cache_loaded_at
+
+    if _recent_news_cache and (monotonic() - _recent_news_cache_loaded_at) < NEWS_CACHE_TTL_SECONDS:
+        return list(_recent_news_cache)
+
     items: list[dict[str, Any]] = []
     for source_name, rss_url in NEWS_FEEDS:
         items.extend(_fetch_feed_items(source_name, rss_url))
     items.sort(key=lambda item: item["published_at"], reverse=True)
-    return items
+    _recent_news_cache = items
+    _recent_news_cache_loaded_at = monotonic()
+    return list(items)
 
 
 def _fetch_feed_items(source_name: str, rss_url: str) -> list[dict[str, Any]]:
@@ -541,12 +553,17 @@ def _build_journal_entries(
             events_by_day.get(day_key, []),
             saved.get("calendar_items_json"),
         )
+        calendar_payload = [_calendar_payload_for_day(item) for item in calendar_items if not item.removed]
+        calendar_items_json = json.dumps(calendar_payload, ensure_ascii=True)
         base_entries.append(
             {
                 "date": day_key,
                 "date_label": _date_label_from_key(day_key),
-                "calendar_items": [_calendar_payload_for_day(item) for item in calendar_items if not item.removed],
+                "calendar_items": calendar_payload,
+                "calendar_items_json": calendar_items_json,
                 "calendar_items_full": calendar_items,
+                "saved_calendar_summary": str(saved.get("calendar_summary") or "").strip(),
+                "saved_calendar_items_json": str(saved.get("calendar_items_json") or "").strip() or "[]",
                 "world_event_title": saved.get("world_event_title"),
                 "world_event_source": saved.get("world_event_source"),
                 "world_event_summary": str(saved.get("world_event_summary") or "").strip()
@@ -555,16 +572,46 @@ def _build_journal_entries(
             }
         )
 
-    ai_summaries = _ai_calendar_summaries(base_entries)
+    missing_calendar_summary_entries = [
+        entry
+        for entry in base_entries
+        if date.fromisoformat(entry["date"]) < today_local
+        and (
+            not entry["saved_calendar_summary"]
+            or entry["saved_calendar_items_json"] != entry["calendar_items_json"]
+        )
+    ]
+
+    persisted_calendar_summaries: dict[str, str] = {}
+    if missing_calendar_summary_entries:
+        ai_summaries = _ai_calendar_summaries(missing_calendar_summary_entries)
+        for entry in missing_calendar_summary_entries:
+            summary = str(
+                (ai_summaries.get(entry["date"]) or {}).get("calendar_summary") or ""
+            ).strip() or _fallback_calendar_summary(entry["calendar_items"])
+            persisted = upsert_journal_calendar(
+                entry_date=entry["date"],
+                calendar_summary=summary,
+                calendar_items_json=entry["calendar_items_json"],
+                user_id=user_id,
+            )
+            persisted_summary = str(persisted.get("calendar_summary") or "").strip()
+            persisted_calendar_summaries[entry["date"]] = persisted_summary
+            saved_entries.setdefault(entry["date"], {}).update(persisted)
+
     entries: list[JournalDayEntry] = []
     for entry in base_entries:
         saved = saved_entries.get(entry["date"], {})
-        summaries = ai_summaries.get(entry["date"], {})
+        calendar_summary = (
+            persisted_calendar_summaries.get(entry["date"])
+            or str(saved.get("calendar_summary") or "").strip()
+            or _fallback_calendar_summary(entry["calendar_items"])
+        )
         entries.append(
             JournalDayEntry(
                 date=entry["date"],
                 date_label=entry["date_label"],
-                calendar_summary=summaries.get("calendar_summary") or _fallback_calendar_summary(entry["calendar_items"]),
+                calendar_summary=calendar_summary,
                 world_event_title=entry["world_event_title"],
                 world_event_source=entry["world_event_source"],
                 world_event_summary=entry["world_event_summary"],
@@ -695,6 +742,8 @@ def save_journal_day(
     return JournalDayEntry(
         date=entry_date,
         date_label=_format_date_label(day),
+        calendar_summary=str(saved.get("calendar_summary") or "").strip()
+        or _fallback_calendar_summary([item.model_dump() for item in calendar_items]),
         journal_entry=saved["journal_entry"],
         accomplishments=saved["accomplishments"],
         gratitude_entry=saved["gratitude_entry"],

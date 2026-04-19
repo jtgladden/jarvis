@@ -8,3 +8,4 @@ data/journal_entries.db
 data/tasks.db
 data/health.db
 data/movement.db
+data/assistant_chat.db

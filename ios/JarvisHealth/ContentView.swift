@@ -246,8 +246,29 @@ struct ContentView: View {
                     .disabled(healthKitManager.isSyncInFlight)
                 }
 
+                Button {
+                    Task {
+                        await healthKitManager.syncAllAvailableHistoryToJarvis()
+                    }
+                } label: {
+                    HStack {
+                        if healthKitManager.isHistorySyncInFlight {
+                            ProgressView()
+                        }
+                        Text(healthKitManager.isHistorySyncInFlight ? "Syncing Full History..." : "Sync All Available Health History")
+                    }
+                }
+                .buttonStyle(.bordered)
+                .disabled(healthKitManager.isSyncInFlight || healthKitManager.isHistorySyncInFlight)
+
                 if let summary = healthKitManager.todaySummary {
                     Text(summary)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+
+                if let progress = healthKitManager.historySyncProgress {
+                    Text(progress)
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }

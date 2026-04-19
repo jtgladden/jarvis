@@ -64,6 +64,8 @@ final class HealthKitManager: ObservableObject {
     @Published var todaySummary: String?
     @Published var syncMessage: String?
     @Published var lastSuccessfulSyncBaseURL: String?
+    @Published var isHistorySyncInFlight = false
+    @Published var historySyncProgress: String?
     @Published var serverMode: JarvisServerMode
     @Published var localBaseURL: String
     @Published var customBaseURL: String
@@ -269,6 +271,77 @@ final class HealthKitManager: ObservableObject {
         isSyncInFlight = false
     }
 
+    func syncAllAvailableHistoryToJarvis() async {
+        guard hasRequestedAuthorization else {
+            syncMessage = nil
+            errorMessage = "Connect Apple Health before syncing history to Jarvis."
+            return
+        }
+
+        isHistorySyncInFlight = true
+        errorMessage = nil
+        syncMessage = nil
+        historySyncProgress = "Looking for the oldest available Health data..."
+
+        do {
+            guard let oldestSampleDate = try await fetchOldestSampleDate() else {
+                historySyncProgress = nil
+                syncMessage = "No historical Apple Health samples were found to backfill."
+                isHistorySyncInFlight = false
+                return
+            }
+
+            let calendar = Calendar.current
+            let todayStart = calendar.startOfDay(for: Date())
+            let firstDay = calendar.startOfDay(for: oldestSampleDate)
+            let totalDays = max(1, calendar.dateComponents([.day], from: firstDay, to: todayStart).day ?? 0 + 1)
+            let candidateBaseURLs = resolvedBaseURLsForSync()
+
+            var syncedDays = 0
+            var daysWithData = 0
+            var successfulBaseURL: String?
+            var currentDay = firstDay
+            var dayIndex = 0
+
+            while currentDay <= todayStart {
+                dayIndex += 1
+                historySyncProgress = "Syncing health history day \(dayIndex) of \(totalDays)..."
+
+                guard let nextDay = calendar.date(byAdding: .day, value: 1, to: currentDay) else {
+                    break
+                }
+
+                let snapshot = try await fetchSnapshot(
+                    startDate: currentDay,
+                    endDate: nextDay,
+                    includeLatestValuesFromEntireStore: false
+                )
+
+                if snapshotHasMeaningfulData(snapshot) {
+                    daysWithData += 1
+                    successfulBaseURL = try await postSnapshotToJarvis(snapshot, candidateBaseURLs: candidateBaseURLs)
+                    syncedDays += 1
+                }
+
+                currentDay = nextDay
+            }
+
+            historySyncProgress = nil
+            lastSuccessfulSyncBaseURL = successfulBaseURL
+            if let successfulBaseURL {
+                syncMessage = "Backfilled \(syncedDays) Health days from \(Self.isoDateString(for: firstDay)) through \(Self.isoDateString(for: todayStart)) via \(successfulBaseURL)."
+            } else {
+                syncMessage = "Scanned \(totalDays) days of Health history but did not find any days with data to sync."
+            }
+            todaySummary = "Historical sync scanned \(totalDays) days and found \(daysWithData) days with Apple Health data."
+        } catch {
+            historySyncProgress = nil
+            errorMessage = "Jarvis history sync failed: \(error.localizedDescription)"
+        }
+
+        isHistorySyncInFlight = false
+    }
+
     private var requestedObjectTypes: Set<HKObjectType> {
         var objectTypes: Set<HKObjectType> = []
 
@@ -292,9 +365,27 @@ final class HealthKitManager: ObservableObject {
     }
 
     private func fetchTodaySnapshot() async throws -> TodayHealthSnapshot {
-        async let metricMap = fetchRequestedMetrics()
-        async let sleepHours = fetchSleepHoursIfAvailable()
-        async let workouts = fetchTodayWorkoutCount()
+        let now = Date()
+        let startOfDay = Calendar.current.startOfDay(for: now)
+        return try await fetchSnapshot(
+            startDate: startOfDay,
+            endDate: now,
+            includeLatestValuesFromEntireStore: true
+        )
+    }
+
+    private func fetchSnapshot(
+        startDate: Date,
+        endDate: Date,
+        includeLatestValuesFromEntireStore: Bool
+    ) async throws -> TodayHealthSnapshot {
+        async let metricMap = fetchRequestedMetrics(
+            startDate: startDate,
+            endDate: endDate,
+            includeLatestValuesFromEntireStore: includeLatestValuesFromEntireStore
+        )
+        async let sleepHours = fetchSleepHoursIfAvailable(startDate: startDate, endDate: endDate)
+        async let workouts = fetchWorkoutCount(startDate: startDate, endDate: endDate)
 
         let resolvedMetricMap = try await metricMap
         let resolvedSleepHours = await sleepHours
@@ -302,7 +393,7 @@ final class HealthKitManager: ObservableObject {
         let resolvedSteps = (resolvedMetricMap["steps"] ?? nil) ?? 0
 
         return TodayHealthSnapshot(
-            date: Self.isoDateString(for: Date()),
+            date: Self.isoDateString(for: startDate),
             steps: resolvedSteps,
             activeEnergy: resolvedMetricMap["active_energy_kcal"] ?? nil,
             sleepHours: resolvedSleepHours,
@@ -330,8 +421,13 @@ final class HealthKitManager: ObservableObject {
         return "Today so far: " + fragments.joined(separator: ", ") + "."
     }
 
-    private func fetchRequestedMetrics() async throws -> [String: Double?] {
+    private func fetchRequestedMetrics(
+        startDate: Date,
+        endDate: Date,
+        includeLatestValuesFromEntireStore: Bool
+    ) async throws -> [String: Double?] {
         var results: [String: Double?] = [:]
+        let dayPredicate = Self.samplePredicate(startDate: startDate, endDate: endDate)
 
         for metric in quantityMetrics {
             switch metric {
@@ -339,19 +435,22 @@ final class HealthKitManager: ObservableObject {
                 results[key] = await fetchQuantityMetricIfAvailable(
                     identifier: identifier,
                     unit: unit,
-                    mode: .cumulative
+                    mode: .cumulative,
+                    predicate: dayPredicate
                 )
             case .average(let identifier, let unit, let key):
                 results[key] = await fetchQuantityMetricIfAvailable(
                     identifier: identifier,
                     unit: unit,
-                    mode: .average
+                    mode: .average,
+                    predicate: dayPredicate
                 )
             case .latest(let identifier, let unit, let key):
                 results[key] = await fetchQuantityMetricIfAvailable(
                     identifier: identifier,
                     unit: unit,
-                    mode: .latest
+                    mode: .latest,
+                    predicate: includeLatestValuesFromEntireStore ? nil : dayPredicate
                 )
             }
         }
@@ -368,16 +467,17 @@ final class HealthKitManager: ObservableObject {
     private func fetchQuantityMetricIfAvailable(
         identifier: HKQuantityTypeIdentifier,
         unit: HKUnit,
-        mode: QuantityFetchMode
+        mode: QuantityFetchMode,
+        predicate: NSPredicate?
     ) async -> Double? {
         do {
             switch mode {
             case .cumulative:
-                return try await fetchCumulativeQuantity(identifier: identifier, unit: unit)
+                return try await fetchCumulativeQuantity(identifier: identifier, unit: unit, predicate: predicate)
             case .average:
-                return try await fetchAverageQuantity(identifier: identifier, unit: unit)
+                return try await fetchAverageQuantity(identifier: identifier, unit: unit, predicate: predicate)
             case .latest:
-                return try await fetchLatestQuantity(identifier: identifier, unit: unit)
+                return try await fetchLatestQuantity(identifier: identifier, unit: unit, predicate: predicate)
             }
         } catch {
             return nil
@@ -386,7 +486,8 @@ final class HealthKitManager: ObservableObject {
 
     private func fetchCumulativeQuantity(
         identifier: HKQuantityTypeIdentifier,
-        unit: HKUnit
+        unit: HKUnit,
+        predicate: NSPredicate?
     ) async throws -> Double? {
         guard let type = HKObjectType.quantityType(forIdentifier: identifier) else {
             return nil
@@ -395,7 +496,7 @@ final class HealthKitManager: ObservableObject {
         let quantity: HKQuantity? = try await withCheckedThrowingContinuation { continuation in
             let query = HKStatisticsQuery(
                 quantityType: type,
-                quantitySamplePredicate: Self.todayPredicate,
+                quantitySamplePredicate: predicate,
                 options: .cumulativeSum
             ) { _, statistics, error in
                 if let error {
@@ -414,7 +515,8 @@ final class HealthKitManager: ObservableObject {
 
     private func fetchAverageQuantity(
         identifier: HKQuantityTypeIdentifier,
-        unit: HKUnit
+        unit: HKUnit,
+        predicate: NSPredicate?
     ) async throws -> Double? {
         guard let type = HKObjectType.quantityType(forIdentifier: identifier) else {
             return nil
@@ -423,7 +525,7 @@ final class HealthKitManager: ObservableObject {
         let quantity: HKQuantity? = try await withCheckedThrowingContinuation { continuation in
             let query = HKStatisticsQuery(
                 quantityType: type,
-                quantitySamplePredicate: Self.todayPredicate,
+                quantitySamplePredicate: predicate,
                 options: .discreteAverage
             ) { _, statistics, error in
                 if let error {
@@ -442,7 +544,8 @@ final class HealthKitManager: ObservableObject {
 
     private func fetchLatestQuantity(
         identifier: HKQuantityTypeIdentifier,
-        unit: HKUnit
+        unit: HKUnit,
+        predicate: NSPredicate?
     ) async throws -> Double? {
         guard let type = HKObjectType.quantityType(forIdentifier: identifier) else {
             return nil
@@ -452,7 +555,7 @@ final class HealthKitManager: ObservableObject {
             let sortDescriptors = [NSSortDescriptor(key: HKSampleSortIdentifierEndDate, ascending: false)]
             let query = HKSampleQuery(
                 sampleType: type,
-                predicate: nil,
+                predicate: predicate,
                 limit: 1,
                 sortDescriptors: sortDescriptors
             ) { _, samples, error in
@@ -469,7 +572,7 @@ final class HealthKitManager: ObservableObject {
         }
     }
 
-    private func fetchSleepHoursIfAvailable() async -> Double? {
+    private func fetchSleepHoursIfAvailable(startDate: Date, endDate: Date) async -> Double? {
         guard let type = HKObjectType.categoryType(forIdentifier: .sleepAnalysis) else {
             return nil
         }
@@ -478,7 +581,7 @@ final class HealthKitManager: ObservableObject {
             let samples: [HKCategorySample] = try await withCheckedThrowingContinuation { continuation in
                 let query = HKSampleQuery(
                     sampleType: type,
-                    predicate: Self.todayPredicate,
+                    predicate: Self.samplePredicate(startDate: startDate, endDate: endDate),
                     limit: HKObjectQueryNoLimit,
                     sortDescriptors: nil
                 ) { _, samples, error in
@@ -518,11 +621,11 @@ final class HealthKitManager: ObservableObject {
         }
     }
 
-    private func fetchTodayWorkoutCount() async throws -> Int {
+    private func fetchWorkoutCount(startDate: Date, endDate: Date) async throws -> Int {
         try await withCheckedThrowingContinuation { continuation in
             let query = HKSampleQuery(
                 sampleType: HKObjectType.workoutType(),
-                predicate: Self.todayPredicate,
+                predicate: Self.samplePredicate(startDate: startDate, endDate: endDate),
                 limit: HKObjectQueryNoLimit,
                 sortDescriptors: nil
             ) { _, samples, error in
@@ -538,8 +641,11 @@ final class HealthKitManager: ObservableObject {
         }
     }
 
-    private func postSnapshotToJarvis(_ snapshot: TodayHealthSnapshot) async throws -> String {
-        let candidateBaseURLs = resolvedBaseURLsForSync()
+    private func postSnapshotToJarvis(
+        _ snapshot: TodayHealthSnapshot,
+        candidateBaseURLs: [String]? = nil
+    ) async throws -> String {
+        let candidateBaseURLs = candidateBaseURLs ?? resolvedBaseURLsForSync()
         guard !candidateBaseURLs.isEmpty else {
             throw URLError(.badURL)
         }
@@ -624,9 +730,16 @@ final class HealthKitManager: ObservableObject {
     }
 
     private static var todayPredicate: NSPredicate {
+        samplePredicate(
+            startDate: Calendar.current.startOfDay(for: Date()),
+            endDate: Date()
+        )
+    }
+
+    private static func samplePredicate(startDate: Date, endDate: Date) -> NSPredicate {
         HKQuery.predicateForSamples(
-            withStart: Calendar.current.startOfDay(for: Date()),
-            end: Date(),
+            withStart: startDate,
+            end: endDate,
             options: .strictStartDate
         )
     }
@@ -658,5 +771,73 @@ final class HealthKitManager: ObservableObject {
 
     private func normalizedBaseURL(_ value: String) -> String {
         value.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    }
+
+    private func snapshotHasMeaningfulData(_ snapshot: TodayHealthSnapshot) -> Bool {
+        if snapshot.steps > 0 || snapshot.workouts > 0 {
+            return true
+        }
+        if let activeEnergy = snapshot.activeEnergy, activeEnergy > 0 {
+            return true
+        }
+        if let sleepHours = snapshot.sleepHours, sleepHours > 0 {
+            return true
+        }
+        if snapshot.restingHeartRate != nil {
+            return true
+        }
+        return snapshot.extraMetrics.contains { key, value in
+            guard let value else { return false }
+            if key == "steps" || key == "active_energy_kcal" || key == "resting_heart_rate_bpm" {
+                return false
+            }
+            return value != 0
+        }
+    }
+
+    private func fetchOldestSampleDate() async throws -> Date? {
+        var oldestDate: Date?
+
+        for objectType in requestedObjectTypes {
+            guard let sampleType = objectType as? HKSampleType else {
+                continue
+            }
+
+            let candidate = try await fetchOldestSampleDate(for: sampleType)
+            guard let candidate else {
+                continue
+            }
+
+            if let currentOldestDate = oldestDate {
+                if candidate < currentOldestDate {
+                    oldestDate = candidate
+                }
+            } else {
+                oldestDate = candidate
+            }
+        }
+
+        return oldestDate
+    }
+
+    private func fetchOldestSampleDate(for sampleType: HKSampleType) async throws -> Date? {
+        try await withCheckedThrowingContinuation { continuation in
+            let sortDescriptors = [NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: true)]
+            let query = HKSampleQuery(
+                sampleType: sampleType,
+                predicate: nil,
+                limit: 1,
+                sortDescriptors: sortDescriptors
+            ) { _, samples, error in
+                if let error {
+                    continuation.resume(throwing: error)
+                    return
+                }
+
+                continuation.resume(returning: samples?.first?.startDate)
+            }
+
+            healthStore.execute(query)
+        }
     }
 }

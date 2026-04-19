@@ -30,6 +30,7 @@ def _ensure_journal_schema(connection: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS journal_entries (
             user_id TEXT NOT NULL,
             entry_date TEXT NOT NULL,
+            calendar_summary TEXT NOT NULL DEFAULT '',
             journal_entry TEXT NOT NULL DEFAULT '',
             accomplishments TEXT NOT NULL DEFAULT '',
             gratitude_entry TEXT NOT NULL DEFAULT '',
@@ -57,6 +58,10 @@ def _ensure_journal_columns(connection: sqlite3.Connection) -> None:
     if "gratitude_entry" not in columns:
         connection.execute(
             "ALTER TABLE journal_entries ADD COLUMN gratitude_entry TEXT NOT NULL DEFAULT ''"
+        )
+    if "calendar_summary" not in columns:
+        connection.execute(
+            "ALTER TABLE journal_entries ADD COLUMN calendar_summary TEXT NOT NULL DEFAULT ''"
         )
     if "scripture_study" not in columns:
         connection.execute(
@@ -123,6 +128,7 @@ def _migrate_legacy_journal_table(connection: sqlite3.Connection) -> None:
     select_sql = (
         """
         SELECT entry_date, journal_entry, accomplishments,
+               {calendar_summary} AS calendar_summary,
                {gratitude_entry} AS gratitude_entry,
                {scripture_study} AS scripture_study,
                {spiritual_notes} AS spiritual_notes,
@@ -137,6 +143,7 @@ def _migrate_legacy_journal_table(connection: sqlite3.Connection) -> None:
         FROM journal_entries_legacy
         """
     ).format(
+        calendar_summary="calendar_summary" if "calendar_summary" in legacy_columns else "''",
         gratitude_entry="gratitude_entry" if has_gratitude_entry else "''",
         scripture_study="scripture_study" if has_scripture_study else "''",
         spiritual_notes="spiritual_notes" if has_spiritual_notes else "''",
@@ -154,15 +161,16 @@ def _migrate_legacy_journal_table(connection: sqlite3.Connection) -> None:
         connection.execute(
             """
             INSERT OR REPLACE INTO journal_entries (
-                user_id, entry_date, journal_entry, accomplishments, gratitude_entry,
+                user_id, entry_date, calendar_summary, journal_entry, accomplishments, gratitude_entry,
                 scripture_study, spiritual_notes, photo_data_url, world_event_title, world_event_summary, world_event_source,
                 news_articles_json, news_updated_at, calendar_items_json, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 APP_DEFAULT_USER_ID,
                 row["entry_date"],
+                row["calendar_summary"] or "",
                 row["journal_entry"],
                 row["accomplishments"],
                 row["gratitude_entry"] or "",
@@ -198,7 +206,7 @@ def list_journal_entries(user_id: str = APP_DEFAULT_USER_ID) -> dict[str, dict[s
         _ensure_journal_columns(connection)
         rows = connection.execute(
             """
-            SELECT entry_date, journal_entry, accomplishments, gratitude_entry,
+            SELECT entry_date, calendar_summary, journal_entry, accomplishments, gratitude_entry,
                    scripture_study, spiritual_notes,
                    photo_data_url, world_event_title, world_event_summary, world_event_source,
                    news_articles_json, news_updated_at, calendar_items_json, updated_at
@@ -210,6 +218,7 @@ def list_journal_entries(user_id: str = APP_DEFAULT_USER_ID) -> dict[str, dict[s
 
     return {
         row["entry_date"]: {
+            "calendar_summary": row["calendar_summary"],
             "journal_entry": row["journal_entry"],
             "accomplishments": row["accomplishments"],
             "gratitude_entry": row["gratitude_entry"],
@@ -234,6 +243,7 @@ def _journal_search_clause(query: str) -> tuple[str, list[str]]:
     clause_parts = [
         "entry_date LIKE ?",
         "journal_entry LIKE ?",
+        "calendar_summary LIKE ?",
         "accomplishments LIKE ?",
         "gratitude_entry LIKE ?",
         "scripture_study LIKE ?",
@@ -403,10 +413,10 @@ def upsert_journal_entry(
         connection.execute(
             """
             INSERT INTO journal_entries (
-                user_id, entry_date, journal_entry, accomplishments, gratitude_entry,
+                user_id, entry_date, calendar_summary, journal_entry, accomplishments, gratitude_entry,
                 scripture_study, spiritual_notes, photo_data_url, calendar_items_json, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            VALUES (?, ?, '', ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(user_id, entry_date) DO UPDATE SET
                 journal_entry = excluded.journal_entry,
                 accomplishments = excluded.accomplishments,
@@ -431,7 +441,7 @@ def upsert_journal_entry(
         )
         row = connection.execute(
             """
-            SELECT entry_date, journal_entry, accomplishments, gratitude_entry,
+            SELECT entry_date, calendar_summary, journal_entry, accomplishments, gratitude_entry,
                    scripture_study, spiritual_notes,
                    photo_data_url, world_event_title, world_event_summary, world_event_source,
                    news_articles_json, news_updated_at, calendar_items_json, updated_at
@@ -444,6 +454,7 @@ def upsert_journal_entry(
 
     return {
         "entry_date": row["entry_date"],
+        "calendar_summary": row["calendar_summary"],
         "journal_entry": row["journal_entry"],
         "accomplishments": row["accomplishments"],
         "gratitude_entry": row["gratitude_entry"],
@@ -512,4 +523,47 @@ def upsert_journal_news(
         "world_event_source": row["world_event_source"],
         "news_articles_json": row["news_articles_json"],
         "news_updated_at": row["news_updated_at"],
+    }
+
+
+def upsert_journal_calendar(
+    entry_date: str,
+    calendar_summary: str,
+    calendar_items_json: str,
+    user_id: str = APP_DEFAULT_USER_ID,
+) -> dict[str, str | None]:
+    with _db_lock, closing(_connect()) as connection:
+        _ensure_journal_schema(connection)
+        _ensure_journal_columns(connection)
+        connection.execute(
+            """
+            INSERT INTO journal_entries (
+                user_id, entry_date, calendar_summary, calendar_items_json
+            )
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(user_id, entry_date) DO UPDATE SET
+                calendar_summary = excluded.calendar_summary,
+                calendar_items_json = excluded.calendar_items_json
+            """,
+            (
+                user_id,
+                entry_date,
+                calendar_summary,
+                calendar_items_json,
+            ),
+        )
+        row = connection.execute(
+            """
+            SELECT entry_date, calendar_summary, calendar_items_json
+            FROM journal_entries
+            WHERE user_id = ? AND entry_date = ?
+            """,
+            (user_id, entry_date),
+        ).fetchone()
+        connection.commit()
+
+    return {
+        "entry_date": row["entry_date"],
+        "calendar_summary": row["calendar_summary"],
+        "calendar_items_json": row["calendar_items_json"],
     }

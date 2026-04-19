@@ -2,20 +2,24 @@
 
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import React, { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   BookOpen,
   CalendarDays,
   CheckCircle2,
+  Ellipsis,
   ChevronRight,
   House,
   Mail,
   Plus,
   RefreshCw,
   Search,
+  Sparkles,
   Smartphone,
 } from "lucide-react";
+import { AssistantPanel } from "@/components/assistant-panel";
+import { MovementMap } from "@/components/movement-map";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -23,7 +27,7 @@ import { Input } from "@/components/ui/input";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "/api";
 
-type MobileTab = "today" | "mail" | "tasks" | "journal" | "schedule" | "health";
+type MobileTab = "today" | "assistant" | "mail" | "tasks" | "journal" | "schedule" | "health" | "more";
 type MobileMailView = "ai" | "raw";
 
 type DashboardMailItem = {
@@ -275,6 +279,70 @@ function formatMovementWindow(start: string | null | undefined, end: string | nu
   return "No commute markers";
 }
 
+function formatTimeOnly(value: string | null | undefined) {
+  if (!value) return null;
+  const parsed = parseCalendarDate(value);
+  if (!parsed) return null;
+  return new Intl.DateTimeFormat(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(parsed);
+}
+
+function minutesBetween(start: string | null | undefined, end: string | null | undefined) {
+  const startDate = parseCalendarDate(start);
+  const endDate = parseCalendarDate(end);
+  if (!startDate || !endDate) return null;
+  const minutes = Math.max(0, Math.round((endDate.getTime() - startDate.getTime()) / 60000));
+  return Number.isFinite(minutes) ? minutes : null;
+}
+
+function buildMovementStoryboard(entry: MovementDailyEntry) {
+  const items = entry.visits.slice(0, 6).map((visit, index) => {
+    const arrivalText = formatTimeOnly(visit.arrival);
+    const departureText = formatTimeOnly(visit.departure);
+    const stayMinutes = minutesBetween(visit.arrival, visit.departure);
+
+    return {
+      id: `${visit.latitude}-${visit.longitude}-${index}`,
+      title: visit.label || `Stop ${index + 1}`,
+      detail:
+        arrivalText && departureText
+          ? `${arrivalText} to ${departureText}`
+          : arrivalText
+          ? `Arrived ${arrivalText}`
+          : departureText
+          ? `Departed ${departureText}`
+          : "Visit detected",
+      meta: stayMinutes ? `${formatMinutes(stayMinutes)} there` : null,
+    };
+  });
+
+  if (entry.commute_start || entry.commute_end) {
+    items.unshift({
+      id: "commute-window",
+      title: "Commute window",
+      detail: formatMovementWindow(entry.commute_start, entry.commute_end),
+      meta: null,
+    });
+  }
+
+  return items;
+}
+
+function buildMovementRibbonSegments(entry: MovementDailyEntry) {
+  const total = Math.max(entry.visited_places_count, 1);
+  if (!entry.visits.length) {
+    return [{ id: "movement", width: 100, label: "Movement" }];
+  }
+
+  return entry.visits.slice(0, 5).map((visit, index) => ({
+    id: `${visit.latitude}-${visit.longitude}-${index}`,
+    width: Math.max(100 / total, 16),
+    label: visit.label || `Stop ${index + 1}`,
+  }));
+}
+
 function healthMetricLabel(key: string) {
   const labels: Record<string, string> = {
     walking_running_distance_km: "Distance",
@@ -405,8 +473,16 @@ function MobilePageContent() {
   const [newTaskDetail, setNewTaskDetail] = useState("");
   const searchParams = useSearchParams();
   const healthSummary = dashboard?.health_summary ?? null;
+  const hasLoadedJournalRef = useRef(false);
+  const hasLoadedScheduleRef = useRef(false);
+  const latestMovementEntry = movementEntries[0] ?? null;
+  const movementStoryboard = latestMovementEntry ? buildMovementStoryboard(latestMovementEntry) : [];
+  const movementRibbonSegments = latestMovementEntry ? buildMovementRibbonSegments(latestMovementEntry) : [];
+  const hasMovementMap = Boolean(
+    latestMovementEntry && (latestMovementEntry.route_points.length || latestMovementEntry.visits.length)
+  );
 
-  const loadJournal = async (query = "") => {
+  const loadJournal = useCallback(async (query = "") => {
     setLoading(true);
     setError("");
 
@@ -426,55 +502,76 @@ function MobilePageContent() {
       setJournal(data.entries);
       setJournalQuery(query.trim());
       setJournalSearchInput(query);
+      hasLoadedJournalRef.current = true;
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load journal.");
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
+
+  const loadSchedule = useCallback(async () => {
+    setLoading(true);
+    setError("");
+
+    try {
+      const response = await fetch(`${API_BASE}/calendar/schedule?days=7&max_results=24`);
+      if (!response.ok) {
+        throw new Error(`Schedule request failed with status ${response.status}`);
+      }
+
+      const data = (await response.json()) as CalendarAgendaResponse;
+      setSchedule(data.items);
+      hasLoadedScheduleRef.current = true;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load schedule.");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   const loadAll = useCallback(async () => {
     setLoading(true);
     setError("");
 
     try {
-      const [dashboardResponse, tasksResponse, journalResponse, scheduleResponse, movementResponse] = await Promise.all([
+      const [dashboardResponse, tasksResponse, movementResponse, journalResponse] = await Promise.all([
         fetch(`${API_BASE}/dashboard`),
         fetch(`${API_BASE}/tasks?include_completed=true`),
-        fetch(`${API_BASE}/journal?days=${journalQuery ? "20" : "10"}${journalQuery ? `&query=${encodeURIComponent(journalQuery)}` : ""}`),
-        fetch(`${API_BASE}/calendar/schedule?days=7&max_results=24`),
         fetch(`${API_BASE}/movement?days=14`),
+        fetch(`${API_BASE}/journal?days=3`),
       ]);
 
-      for (const response of [dashboardResponse, tasksResponse, journalResponse, scheduleResponse]) {
+      for (const response of [dashboardResponse, tasksResponse]) {
         if (!response.ok) {
           throw new Error(`Mobile page request failed with status ${response.status}`);
         }
       }
 
-      const [dashboardData, tasksData, journalData, scheduleData] = await Promise.all([
+      const [dashboardData, tasksData] = await Promise.all([
         dashboardResponse.json() as Promise<DashboardResponse>,
         tasksResponse.json() as Promise<TaskListResponse>,
-        journalResponse.json() as Promise<JournalResponse>,
-        scheduleResponse.json() as Promise<CalendarAgendaResponse>,
       ]);
 
       setDashboard(dashboardData);
       setTasks(tasksData.tasks);
-      setJournal(journalData.entries);
-      setSchedule(scheduleData.items);
       if (movementResponse.ok) {
         const movementData = (await movementResponse.json()) as MovementListResponse;
         setMovementEntries(movementData.entries);
       } else {
         setMovementEntries([]);
       }
+      if (journalResponse.ok) {
+        const journalData = (await journalResponse.json()) as JournalResponse;
+        setJournal(journalData.entries);
+        hasLoadedJournalRef.current = true;
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load mobile view.");
     } finally {
       setLoading(false);
     }
-  }, [journalQuery]);
+  }, []);
 
   useEffect(() => {
     void loadAll();
@@ -498,6 +595,18 @@ function MobilePageContent() {
   }, [activeTab, mailView, selectedMailbox]);
 
   useEffect(() => {
+    if (activeTab === "journal" && !hasLoadedJournalRef.current) {
+      void loadJournal(journalQuery);
+    }
+  }, [activeTab, journalQuery, loadJournal]);
+
+  useEffect(() => {
+    if (activeTab === "schedule" && !hasLoadedScheduleRef.current) {
+      void loadSchedule();
+    }
+  }, [activeTab, loadSchedule]);
+
+  useEffect(() => {
     const tab = searchParams.get("tab");
     if (tab === "today" || tab === "mail" || tab === "tasks" || tab === "journal" || tab === "schedule" || tab === "health") {
       setActiveTab(tab);
@@ -512,6 +621,30 @@ function MobilePageContent() {
     () => tasks.filter((task) => task.completed).slice(0, 8),
     [tasks]
   );
+  const featuredMail = useMemo(
+    () => dashboard?.important_emails[0] ?? null,
+    [dashboard]
+  );
+  const nextCalendarItem = useMemo(
+    () => dashboard?.calendar_items[0] ?? null,
+    [dashboard]
+  );
+  const topFocusTasks = useMemo(
+    () => activeTasks.slice(0, 3),
+    [activeTasks]
+  );
+  const featuredJournalEntry = useMemo(
+    () => journal[0] ?? null,
+    [journal]
+  );
+  const todayStepCount = healthSummary?.today_entry?.steps ?? null;
+  const todaySleepHours = healthSummary?.today_entry?.sleep_hours ?? healthSummary?.seven_day_avg_sleep_hours ?? null;
+  const todayDistanceKm = latestMovementEntry?.total_distance_km ?? null;
+  const attentionItems = [
+    featuredMail ? "mail" : null,
+    nextCalendarItem ? "calendar" : null,
+    topFocusTasks[0] ? "task" : null,
+  ].filter(Boolean).length;
 
   const toggleTask = async (task: DashboardTaskItem) => {
     setSavingTaskId(task.id);
@@ -598,13 +731,13 @@ function MobilePageContent() {
     await loadJournal("");
   };
 
-  const navItems: Array<{ key: MobileTab; label: string; icon: React.ReactNode }> = [
+  const primaryNavItems: Array<{ key: MobileTab; label: string; icon: React.ReactNode }> = [
     { key: "today", label: "Today", icon: <House className="h-4 w-4" /> },
+    { key: "assistant", label: "Ask", icon: <Sparkles className="h-4 w-4" /> },
     { key: "mail", label: "Mail", icon: <Mail className="h-4 w-4" /> },
     { key: "tasks", label: "Tasks", icon: <CheckCircle2 className="h-4 w-4" /> },
     { key: "health", label: "Health", icon: <Activity className="h-4 w-4" /> },
-    { key: "journal", label: "Journal", icon: <BookOpen className="h-4 w-4" /> },
-    { key: "schedule", label: "Schedule", icon: <CalendarDays className="h-4 w-4" /> },
+    { key: "more", label: "More", icon: <Ellipsis className="h-4 w-4" /> },
   ];
 
   return (
@@ -618,9 +751,11 @@ function MobilePageContent() {
                   <Smartphone className="h-3.5 w-3.5" />
                   Jarvis Pocket
                 </div>
-                <h1 className="mt-3 text-3xl font-semibold tracking-tight text-white">Phone view</h1>
+                <h1 className="mt-3 text-3xl font-semibold tracking-tight text-white">
+                  {dashboard?.date_label || "Today"}, with signal first
+                </h1>
                 <p className="mt-2 text-sm leading-6 text-slate-300">
-                  Fast thumb-friendly access to today, important mail, tasks, and recent journal entries.
+                  {dashboard?.overview || "A tighter mobile home built around what needs attention next."}
                 </p>
               </div>
               <Button asChild variant="outline" className="rounded-2xl">
@@ -628,32 +763,39 @@ function MobilePageContent() {
               </Button>
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-3 gap-2">
               <div className="rounded-[1.4rem] border border-white/8 bg-white/5 p-3">
-                <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Important</div>
-                <div className="mt-2 text-2xl font-semibold text-white">{dashboard?.important_emails.length || 0}</div>
+                <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Needs attention</div>
+                <div className="mt-2 text-2xl font-semibold text-white">{attentionItems}</div>
               </div>
               <div className="rounded-[1.4rem] border border-white/8 bg-white/5 p-3">
-                <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Open tasks</div>
-                <div className="mt-2 text-2xl font-semibold text-white">{activeTasks.length}</div>
+                <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Steps</div>
+                <div className="mt-2 text-2xl font-semibold text-white">{formatHealthStat(todayStepCount)}</div>
               </div>
               <div className="rounded-[1.4rem] border border-white/8 bg-white/5 p-3">
-                <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Journal days</div>
-                <div className="mt-2 text-2xl font-semibold text-white">{journal.length}</div>
+                <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Distance</div>
+                <div className="mt-2 text-2xl font-semibold text-white">{todayDistanceKm != null ? `${formatHealthStat(todayDistanceKm, 1)} km` : "--"}</div>
               </div>
-              <div className="rounded-[1.4rem] border border-white/8 bg-white/5 p-3">
-                <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Calendar today</div>
-                <div className="mt-2 text-2xl font-semibold text-white">{dashboard?.calendar_items.length || 0}</div>
-              </div>
-              <div className="rounded-[1.4rem] border border-white/8 bg-white/5 p-3">
-                <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Health today</div>
-                <div className="mt-2 text-2xl font-semibold text-white">{formatHealthStat(dashboard?.health_summary?.today_entry?.steps)}</div>
-              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              <Button className="h-12 rounded-2xl" onClick={() => setActiveTab("assistant")}>
+                <Sparkles className="mr-2 h-4 w-4" />
+                Ask Jarvis
+              </Button>
+              <Button variant="outline" className="h-12 rounded-2xl" onClick={() => setActiveTab("tasks")}>
+                <CheckCircle2 className="mr-2 h-4 w-4" />
+                Focus list
+              </Button>
             </div>
 
             <div className="flex items-center justify-between gap-3">
               <div className="text-sm text-slate-300">
-                {dashboard?.date_label || "Today"} on one screen.
+                {featuredMail?.needs_reply
+                  ? "You have at least one message that likely needs a reply."
+                  : nextCalendarItem
+                    ? "Your next event is already queued below."
+                    : "This view stays focused on what you can act on quickly."}
               </div>
               <Button
                 variant="outline"
@@ -675,7 +817,7 @@ function MobilePageContent() {
         ) : null}
 
         <div className="grid grid-cols-3 gap-2">
-          {navItems.map((item) => (
+          {primaryNavItems.map((item) => (
             <Button
               key={item.key}
               variant={activeTab === item.key ? "default" : "outline"}
@@ -692,27 +834,159 @@ function MobilePageContent() {
           <div className="space-y-4">
             <Card className="rounded-[1.8rem] border border-white/8 bg-[rgba(17,19,34,0.82)]">
               <CardHeader className="pb-2">
-                <CardTitle className="text-lg">Today at a glance</CardTitle>
+                <CardTitle className="text-lg">What matters now</CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
-                <p className="text-sm leading-6 text-slate-200">
-                  {dashboard?.overview || (loading ? "Loading your mobile overview..." : "No overview yet.")}
-                </p>
                 <div className="space-y-3">
-                  {(dashboard?.calendar_items || []).slice(0, 4).map((item) => (
-                    <div key={item.event_id} className="rounded-[1.2rem] border border-cyan-300/18 bg-cyan-400/8 px-4 py-3">
-                      <div className="text-sm font-medium text-white">{item.title}</div>
-                      <div className="mt-1 text-xs text-cyan-100">
-                        {formatScheduleDateTime(item.start, item.is_all_day)}
+                  {featuredMail ? (
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab("mail")}
+                      className="w-full rounded-[1.2rem] border border-fuchsia-300/18 bg-fuchsia-400/8 px-4 py-4 text-left transition hover:border-fuchsia-200/30 hover:bg-fuchsia-400/12"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="text-[11px] uppercase tracking-[0.18em] text-fuchsia-100/80">Important mail</div>
+                          <div className="mt-2 text-sm font-semibold text-white">{featuredMail.subject || "Untitled message"}</div>
+                          <div className="mt-1 text-xs text-fuchsia-100">{featuredMail.sender}</div>
+                        </div>
+                        <Badge className="rounded-xl border border-fuchsia-300/30 bg-black/10 text-fuchsia-50">
+                          {featuredMail.needs_reply ? "Reply" : featuredMail.urgency}
+                        </Badge>
                       </div>
-                    </div>
-                  ))}
-                  {!dashboard?.calendar_items?.length && !loading ? (
+                      <div className="mt-3 text-sm leading-6 text-slate-200">
+                        {featuredMail.summary || featuredMail.why_it_matters || "Open mail to review the top thread."}
+                      </div>
+                    </button>
+                  ) : null}
+
+                  {nextCalendarItem ? (
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab("schedule")}
+                      className="w-full rounded-[1.2rem] border border-cyan-300/18 bg-cyan-400/8 px-4 py-4 text-left transition hover:border-cyan-200/30 hover:bg-cyan-400/12"
+                    >
+                      <div className="text-[11px] uppercase tracking-[0.18em] text-cyan-100/80">Next on your calendar</div>
+                      <div className="mt-2 text-sm font-semibold text-white">{nextCalendarItem.title}</div>
+                      <div className="mt-1 text-xs text-cyan-100">
+                        {formatScheduleDateTime(nextCalendarItem.start, nextCalendarItem.is_all_day)}
+                      </div>
+                    </button>
+                  ) : null}
+
+                  {topFocusTasks[0] ? (
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab("tasks")}
+                      className="w-full rounded-[1.2rem] border border-emerald-300/18 bg-emerald-400/8 px-4 py-4 text-left transition hover:border-emerald-200/30 hover:bg-emerald-400/12"
+                    >
+                      <div className="text-[11px] uppercase tracking-[0.18em] text-emerald-100/80">Top task</div>
+                      <div className="mt-2 text-sm font-semibold text-white">{topFocusTasks[0].title}</div>
+                      <div className="mt-1 text-xs text-emerald-100">
+                        {topFocusTasks[0].due_text || `${activeTasks.length} open tasks in queue`}
+                      </div>
+                      {topFocusTasks[0].detail ? (
+                        <div className="mt-3 text-sm leading-6 text-slate-200">{topFocusTasks[0].detail}</div>
+                      ) : null}
+                    </button>
+                  ) : null}
+
+                  {!featuredMail && !nextCalendarItem && !topFocusTasks[0] && !loading ? (
                     <div className="rounded-[1.2rem] border border-dashed border-white/10 px-4 py-4 text-sm text-slate-400">
-                      No calendar items surfaced for today.
+                      Nothing urgent is surfaced right now. Use Ask for a broader scan.
                     </div>
                   ) : null}
                 </div>
+              </CardContent>
+            </Card>
+
+            <Card className="rounded-[1.8rem] border border-white/8 bg-[rgba(17,19,34,0.82)]">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-lg">Focus lane</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {topFocusTasks.map((task) => (
+                  <button
+                    key={task.id}
+                    onClick={() => void toggleTask(task)}
+                    className="flex w-full items-start gap-3 rounded-[1.2rem] border border-white/8 bg-white/5 px-4 py-3 text-left"
+                  >
+                    <div className="mt-0.5">
+                      <CheckCircle2 className="h-4 w-4 text-cyan-200" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-sm font-medium text-white">{task.title}</div>
+                      {task.detail ? <div className="mt-1 text-xs text-slate-400">{task.detail}</div> : null}
+                    </div>
+                  </button>
+                ))}
+                <div className="grid grid-cols-2 gap-2">
+                  <Button variant="outline" className="rounded-2xl" onClick={() => setActiveTab("assistant")}>
+                    Ask what to do
+                  </Button>
+                  <Button variant="outline" className="rounded-2xl" onClick={() => setActiveTab("tasks")}>
+                    Open tasks
+                  </Button>
+                </div>
+                {!activeTasks.length && !loading ? (
+                  <div className="rounded-[1.2rem] border border-dashed border-white/10 px-4 py-4 text-sm text-slate-400">
+                    No open tasks right now.
+                  </div>
+                ) : null}
+              </CardContent>
+            </Card>
+
+            <Card className="rounded-[1.8rem] border border-white/8 bg-[rgba(17,19,34,0.82)]">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-lg">Body and movement</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <button
+                  type="button"
+                  onClick={() => setActiveTab("health")}
+                  className="w-full rounded-[1.2rem] border border-white/8 bg-white/5 px-4 py-3 text-left"
+                >
+                  <div className="text-sm font-medium text-white">
+                    {formatHealthStat(todayStepCount)} steps · {todayDistanceKm != null ? `${formatHealthStat(todayDistanceKm, 1)} km` : "--"}
+                  </div>
+                  <div className="mt-1 text-xs text-slate-400">
+                    Sleep {formatHealthStat(todaySleepHours, 1)} hr · Resting HR {formatHealthStat(dashboard?.health_summary?.today_entry?.resting_heart_rate)} bpm
+                  </div>
+                  <div className="mt-2 text-sm leading-6 text-slate-300">
+                    {movementEntries[0]?.movement_story
+                      ? movementEntries[0].movement_story
+                      : dashboard?.health_summary
+                      ? `${dashboard.health_summary.streak_days} day movement streak and ${dashboard.health_summary.recent_entries.length} synced days.`
+                      : "No health data synced yet."}
+                  </div>
+                </button>
+              </CardContent>
+            </Card>
+
+            <Card className="rounded-[1.8rem] border border-white/8 bg-[rgba(17,19,34,0.82)]">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-lg">Reflection and context</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {featuredJournalEntry ? (
+                  <Link
+                    href={`/mobile/journal/${featuredJournalEntry.date}`}
+                    className="block rounded-[1.2rem] border border-amber-300/18 bg-amber-400/8 px-4 py-4 transition hover:border-amber-200/30 hover:bg-amber-400/12"
+                  >
+                    <div className="text-[11px] uppercase tracking-[0.18em] text-amber-100/80">Recent journal</div>
+                    <div className="mt-2 text-sm font-semibold text-white">{featuredJournalEntry.date_label}</div>
+                    <div className="mt-2 text-sm leading-6 text-slate-200">{summarizeJournal(featuredJournalEntry)}</div>
+                  </Link>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab("journal")}
+                    className="w-full rounded-[1.2rem] border border-dashed border-white/10 px-4 py-4 text-left text-sm text-slate-400"
+                  >
+                    Open journal to load recent days and reflections.
+                  </button>
+                )}
+
                 <Link
                   href="/mobile/news"
                   className="block rounded-[1.2rem] border border-white/8 bg-white/5 px-4 py-3 transition hover:border-cyan-300/30 hover:bg-[rgba(42,45,72,0.9)]"
@@ -728,65 +1002,30 @@ function MobilePageContent() {
                 </Link>
               </CardContent>
             </Card>
-
-            <Card className="rounded-[1.8rem] border border-white/8 bg-[rgba(17,19,34,0.82)]">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-lg">Next actions</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                {activeTasks.slice(0, 5).map((task) => (
-                  <button
-                    key={task.id}
-                    onClick={() => void toggleTask(task)}
-                    className="flex w-full items-start gap-3 rounded-[1.2rem] border border-white/8 bg-white/5 px-4 py-3 text-left"
-                  >
-                    <div className="mt-0.5">
-                      <CheckCircle2 className="h-4 w-4 text-cyan-200" />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="text-sm font-medium text-white">{task.title}</div>
-                      {task.detail ? <div className="mt-1 text-xs text-slate-400">{task.detail}</div> : null}
-                    </div>
-                  </button>
-                ))}
-                {!activeTasks.length && !loading ? (
-                  <div className="rounded-[1.2rem] border border-dashed border-white/10 px-4 py-4 text-sm text-slate-400">
-                    No open tasks right now.
-                  </div>
-                ) : null}
-              </CardContent>
-            </Card>
-
-            <Card className="rounded-[1.8rem] border border-white/8 bg-[rgba(17,19,34,0.82)]">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-lg">Health preview</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                <button
-                  type="button"
-                  onClick={() => setActiveTab("health")}
-                  className="w-full rounded-[1.2rem] border border-white/8 bg-white/5 px-4 py-3 text-left"
-                >
-                  <div className="text-sm font-medium text-white">
-                    {formatHealthStat(dashboard?.health_summary?.today_entry?.steps)} steps · {movementEntries[0] ? `${formatHealthStat(movementEntries[0].total_distance_km, 1)} km` : "--"}
-                  </div>
-                  <div className="mt-1 text-xs text-slate-400">
-                    Sleep avg {formatHealthStat(dashboard?.health_summary?.seven_day_avg_sleep_hours, 1)} hr · Resting HR {formatHealthStat(dashboard?.health_summary?.today_entry?.resting_heart_rate)} bpm
-                  </div>
-                  <div className="mt-2 text-sm leading-6 text-slate-300">
-                    {movementEntries[0]?.movement_story
-                      ? movementEntries[0].movement_story
-                      : dashboard?.health_summary
-                      ? `${dashboard.health_summary.streak_days} day movement streak and ${dashboard.health_summary.recent_entries.length} synced days.`
-                      : "No health data synced yet."}
-                  </div>
-                </button>
-              </CardContent>
-            </Card>
           </div>
         ) : null}
 
-        {activeTab === "mail" ? (
+        {activeTab === "assistant" ? (
+          <Card className="rounded-[1.8rem] border border-white/8 bg-[rgba(17,19,34,0.82)]">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-lg">Ask Jarvis</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <p className="text-sm leading-6 text-slate-300">
+                Ask about priorities, overdue threads, health trends, recent movement, journal patterns, or what deserves your attention next.
+              </p>
+              <AssistantPanel
+                apiBase={API_BASE}
+                compact
+                starterPrompts={[
+                  "What should I focus on today?",
+                  "What stands out in my recent movement and health data?",
+                  "What looks neglected across my tasks, mail, and journal?",
+                ]}
+              />
+            </CardContent>
+          </Card>
+        ) : activeTab === "mail" ? (
           <div className="space-y-4">
             <Card className="rounded-[1.8rem] border border-white/8 bg-[rgba(17,19,34,0.82)]">
               <CardContent className="space-y-3 p-4">
@@ -1009,16 +1248,33 @@ function MobilePageContent() {
 
                     <div className="rounded-[1.2rem] border border-emerald-300/18 bg-emerald-400/8 px-4 py-3">
                       <div className="text-[11px] uppercase tracking-[0.18em] text-emerald-100/80">Movement today</div>
-                      {movementEntries[0] ? (
+                      {latestMovementEntry ? (
                         <>
-                          <div className="mt-2 text-sm font-medium text-white">
-                            {formatHealthStat(movementEntries[0].total_distance_km, 1)} km traveled
+                          <div className="mt-2 text-base font-semibold text-white">
+                            {latestMovementEntry.movement_story || "No movement story generated yet."}
                           </div>
-                          <div className="mt-1 text-xs text-slate-300">
-                            {movementEntries[0].visited_places_count} visits · {formatMinutes(movementEntries[0].time_away_minutes)} away · {formatMovementWindow(movementEntries[0].commute_start, movementEntries[0].commute_end)}
+                          <div className="mt-3 grid grid-cols-3 gap-2 text-center">
+                            <div className="rounded-[0.9rem] border border-white/10 bg-black/10 px-2 py-2">
+                              <div className="text-[10px] uppercase tracking-[0.16em] text-slate-300">Distance</div>
+                              <div className="mt-1 text-sm font-semibold text-white">
+                                {formatHealthStat(latestMovementEntry.total_distance_km, 1)} km
+                              </div>
+                            </div>
+                            <div className="rounded-[0.9rem] border border-white/10 bg-black/10 px-2 py-2">
+                              <div className="text-[10px] uppercase tracking-[0.16em] text-slate-300">Away</div>
+                              <div className="mt-1 text-sm font-semibold text-white">
+                                {formatMinutes(latestMovementEntry.time_away_minutes)}
+                              </div>
+                            </div>
+                            <div className="rounded-[0.9rem] border border-white/10 bg-black/10 px-2 py-2">
+                              <div className="text-[10px] uppercase tracking-[0.16em] text-slate-300">Stops</div>
+                              <div className="mt-1 text-sm font-semibold text-white">
+                                {latestMovementEntry.visited_places_count}
+                              </div>
+                            </div>
                           </div>
-                          <div className="mt-3 text-sm leading-6 text-slate-100">
-                            {movementEntries[0].movement_story || "No movement story generated yet."}
+                          <div className="mt-3 text-xs text-slate-200">
+                            {formatMovementWindow(latestMovementEntry.commute_start, latestMovementEntry.commute_end)}
                           </div>
                         </>
                       ) : (
@@ -1027,6 +1283,55 @@ function MobilePageContent() {
                         </div>
                       )}
                     </div>
+
+                    {latestMovementEntry ? (
+                      <div className="rounded-[1.2rem] border border-white/8 bg-white/5 px-4 py-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <div>
+                            <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Day ribbon</div>
+                            <div className="mt-1 text-xs text-slate-500">A compact view of how the day flowed.</div>
+                          </div>
+                          <div className="text-[11px] text-slate-400">{latestMovementEntry.route_points.length} pts</div>
+                        </div>
+                        <div className="mt-3 flex h-3 overflow-hidden rounded-full border border-white/8 bg-[rgba(8,10,18,0.9)]">
+                          {movementRibbonSegments.map((segment, index) => (
+                            <div
+                              key={segment.id}
+                              className={index % 2 === 0 ? "bg-emerald-400/70" : "bg-cyan-400/70"}
+                              style={{ width: `${segment.width}%` }}
+                              title={segment.label}
+                            />
+                          ))}
+                        </div>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          {movementRibbonSegments.map((segment, index) => (
+                            <span
+                              key={`${segment.id}-label`}
+                              className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] text-slate-300"
+                            >
+                              {index + 1}. {segment.label}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {hasMovementMap && latestMovementEntry ? (
+                      <div className="rounded-[1.2rem] border border-white/8 bg-white/5 px-4 py-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <div>
+                            <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Route postcard</div>
+                            <div className="mt-1 text-xs text-slate-500">A subtle geographic sketch of today&apos;s path.</div>
+                          </div>
+                          <div className="text-[11px] text-slate-400">
+                            {latestMovementEntry.route_points.length || latestMovementEntry.visits.length} pts
+                          </div>
+                        </div>
+                        <div className="mt-3 overflow-hidden rounded-[1rem] border border-white/8 bg-[radial-gradient(circle_at_top_left,rgba(16,185,129,0.14),transparent_32%),linear-gradient(180deg,rgba(9,12,22,0.96),rgba(15,18,28,0.96))]">
+                          <MovementMap entry={latestMovementEntry} className="h-[380px] min-h-[380px]" />
+                        </div>
+                      </div>
+                    ) : null}
 
                     {healthSummary?.today_entry?.extra_metrics &&
                     Object.keys(healthSummary.today_entry.extra_metrics).length ? (
@@ -1087,6 +1392,33 @@ function MobilePageContent() {
                           </div>
                         </div>
                       ))}
+                    </div>
+
+                    <div className="space-y-2">
+                      <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Movement storyboard</div>
+                      {movementStoryboard.length ? (
+                        movementStoryboard.map((item, index) => (
+                          <div
+                            key={item.id}
+                            className="flex gap-3 rounded-[1.2rem] border border-white/8 bg-white/5 px-4 py-3"
+                          >
+                            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-emerald-400/15 text-xs font-semibold text-emerald-100">
+                              {index + 1}
+                            </div>
+                            <div className="min-w-0">
+                              <div className="text-sm font-medium text-white">{item.title}</div>
+                              <div className="mt-1 text-xs text-slate-300">{item.detail}</div>
+                              {item.meta ? (
+                                <div className="mt-1 text-[11px] text-slate-500">{item.meta}</div>
+                              ) : null}
+                            </div>
+                          </div>
+                        ))
+                      ) : (
+                        <div className="rounded-[1.2rem] border border-dashed border-white/10 px-4 py-4 text-sm text-slate-400">
+                          No movement storyboard yet.
+                        </div>
+                      )}
                     </div>
 
                     <div className="space-y-2">
@@ -1223,23 +1555,72 @@ function MobilePageContent() {
             ) : null}
           </div>
         ) : null}
+
+        {activeTab === "more" ? (
+          <div className="space-y-4">
+            <Card className="rounded-[1.8rem] border border-white/8 bg-[rgba(17,19,34,0.82)]">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-lg">More</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <button
+                  type="button"
+                  onClick={() => setActiveTab("journal")}
+                  className="flex w-full items-center justify-between rounded-[1.2rem] border border-white/8 bg-white/5 px-4 py-4 text-left transition hover:border-cyan-300/30 hover:bg-[rgba(42,45,72,0.9)]"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="rounded-full border border-white/10 bg-white/5 p-2 text-slate-200">
+                      <BookOpen className="h-4 w-4" />
+                    </div>
+                    <div>
+                      <div className="text-sm font-medium text-white">Journal</div>
+                      <div className="mt-1 text-xs text-slate-400">
+                        Search reflections, gratitude, and world-event notes.
+                      </div>
+                    </div>
+                  </div>
+                  <ChevronRight className="h-4 w-4 text-slate-500" />
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setActiveTab("schedule")}
+                  className="flex w-full items-center justify-between rounded-[1.2rem] border border-white/8 bg-white/5 px-4 py-4 text-left transition hover:border-cyan-300/30 hover:bg-[rgba(42,45,72,0.9)]"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="rounded-full border border-white/10 bg-white/5 p-2 text-slate-200">
+                      <CalendarDays className="h-4 w-4" />
+                    </div>
+                    <div>
+                      <div className="text-sm font-medium text-white">Schedule</div>
+                      <div className="mt-1 text-xs text-slate-400">
+                        Review upcoming events and today&apos;s calendar flow.
+                      </div>
+                    </div>
+                  </div>
+                  <ChevronRight className="h-4 w-4 text-slate-500" />
+                </button>
+              </CardContent>
+            </Card>
+          </div>
+        ) : null}
       </div>
 
       <div className="fixed inset-x-0 bottom-0 z-30 border-t border-white/8 bg-[rgba(11,13,25,0.94)] px-4 pb-4 pt-3 backdrop-blur-xl">
         <div className="mx-auto grid max-w-md grid-cols-6 gap-2">
-          {navItems.map((item) => (
+          {primaryNavItems.map((item) => (
             <button
               key={item.key}
               type="button"
               onClick={() => setActiveTab(item.key)}
               className={`flex flex-col items-center justify-center gap-1 rounded-[1.2rem] px-2 py-2.5 text-[11px] font-medium transition ${
                 activeTab === item.key
-                  ? "bg-fuchsia-400/18 text-fuchsia-100"
+                  ? "bg-fuchsia-400/18 text-fuchsia-100 shadow-[0_10px_24px_rgba(192,132,252,0.12)]"
                   : "text-slate-400"
               }`}
             >
               {item.icon}
-              <span>{item.label}</span>
+              <span className="whitespace-nowrap">{item.label}</span>
             </button>
           ))}
         </div>

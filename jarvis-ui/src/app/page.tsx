@@ -25,6 +25,8 @@ import {
   Tag,
   Trash2,
 } from "lucide-react";
+import { AssistantPanel } from "@/components/assistant-panel";
+import { MovementMap } from "@/components/movement-map";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -359,6 +361,81 @@ function formatMovementWindow(start: string | null | undefined, end: string | nu
   return "No commute markers";
 }
 
+function formatTimeOnly(value: string | null | undefined) {
+  if (!value) return null;
+  const parsed = parseCalendarDate(value);
+  if (!parsed) return null;
+  return new Intl.DateTimeFormat(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(parsed);
+}
+
+function minutesBetween(start: string | null | undefined, end: string | null | undefined) {
+  const startDate = parseCalendarDate(start);
+  const endDate = parseCalendarDate(end);
+  if (!startDate || !endDate) return null;
+  const minutes = Math.max(0, Math.round((endDate.getTime() - startDate.getTime()) / 60000));
+  return Number.isFinite(minutes) ? minutes : null;
+}
+
+function buildMovementStoryboard(entry: MovementDailyEntry) {
+  const items = entry.visits
+    .slice(0, 8)
+    .map((visit, index) => {
+      const arrivalText = formatTimeOnly(visit.arrival);
+      const departureText = formatTimeOnly(visit.departure);
+      const stayMinutes = minutesBetween(visit.arrival, visit.departure);
+      const title = visit.label || `Stop ${index + 1}`;
+      let detail = "Visit detected";
+      if (arrivalText && departureText) {
+        detail = `${arrivalText} to ${departureText}`;
+      } else if (arrivalText) {
+        detail = `Arrived ${arrivalText}`;
+      } else if (departureText) {
+        detail = `Departed ${departureText}`;
+      }
+
+      const meta = stayMinutes ? `${formatMinutes(stayMinutes)} there` : null;
+      return {
+        id: `${visit.latitude}-${visit.longitude}-${visit.arrival ?? visit.departure ?? index}`,
+        title,
+        detail,
+        meta,
+      };
+    });
+
+  if (entry.commute_start || entry.commute_end) {
+    items.unshift({
+      id: "commute-window",
+      title: "Commute window",
+      detail: formatMovementWindow(entry.commute_start, entry.commute_end),
+      meta: null,
+    });
+  }
+
+  return items;
+}
+
+function buildMovementRibbonSegments(entry: MovementDailyEntry) {
+  const total = Math.max(entry.visited_places_count, 1);
+  if (!entry.visits.length) {
+    return [
+      {
+        id: "movement",
+        width: 100,
+        label: "Movement",
+      },
+    ];
+  }
+
+  return entry.visits.slice(0, 6).map((visit, index) => ({
+    id: `${visit.latitude}-${visit.longitude}-${index}`,
+    width: Math.max(100 / total, 12),
+    label: visit.label || `Stop ${index + 1}`,
+  }));
+}
+
 function formatScheduleTimeRange(item: {
   start: string;
   end?: string | null;
@@ -657,6 +734,11 @@ function HealthDetailPanel({
   const healthSummary = dashboard?.health_summary ?? null;
   const latestMovementEntry = movementEntries[0] ?? null;
   const [expandedMetricsOpen, setExpandedMetricsOpen] = useState(false);
+  const movementStoryboard = latestMovementEntry ? buildMovementStoryboard(latestMovementEntry) : [];
+  const movementRibbonSegments = latestMovementEntry ? buildMovementRibbonSegments(latestMovementEntry) : [];
+  const hasMovementMap = Boolean(
+    latestMovementEntry && (latestMovementEntry.route_points.length || latestMovementEntry.visits.length)
+  );
 
   return (
     <div className="space-y-6">
@@ -804,12 +886,93 @@ function HealthDetailPanel({
                 <CardHeader className="pb-2">
                   <CardTitle className="text-base">Movement journal</CardTitle>
                   <p className="text-sm leading-6 text-slate-300">
-                    Distance, away time, commute windows, and the day-by-day movement story synced from your phone.
+                    A more narrative look at your day: where you went, how the day flowed, and the shape of your movement.
                   </p>
                 </CardHeader>
                 <CardContent className="space-y-4">
                   {latestMovementEntry ? (
                     <>
+                      <div className="rounded-[1.5rem] border border-emerald-300/15 bg-[linear-gradient(135deg,rgba(16,185,129,0.16),rgba(14,18,30,0.92))] p-5">
+                        <div className="text-xs uppercase tracking-[0.22em] text-emerald-100/80">Today&apos;s movement story</div>
+                        <div className="mt-3 text-lg font-semibold text-white">
+                          {latestMovementEntry.movement_story || "No movement story generated yet."}
+                        </div>
+                        <div className="mt-4 grid gap-3 md:grid-cols-3">
+                          <div className="rounded-[1.1rem] border border-white/8 bg-black/10 px-4 py-3">
+                            <div className="text-[11px] uppercase tracking-[0.18em] text-slate-300">Distance</div>
+                            <div className="mt-1 text-xl font-semibold text-white">
+                              {formatHealthStat(latestMovementEntry.total_distance_km, 1)} km
+                            </div>
+                          </div>
+                          <div className="rounded-[1.1rem] border border-white/8 bg-black/10 px-4 py-3">
+                            <div className="text-[11px] uppercase tracking-[0.18em] text-slate-300">Away from home</div>
+                            <div className="mt-1 text-xl font-semibold text-white">
+                              {formatMinutes(latestMovementEntry.time_away_minutes)}
+                            </div>
+                          </div>
+                          <div className="rounded-[1.1rem] border border-white/8 bg-black/10 px-4 py-3">
+                            <div className="text-[11px] uppercase tracking-[0.18em] text-slate-300">Visited places</div>
+                            <div className="mt-1 text-xl font-semibold text-white">
+                              {latestMovementEntry.visited_places_count}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="rounded-[1.3rem] border border-white/6 bg-[rgba(17,19,34,0.45)] p-4">
+                        <div className="flex items-center justify-between gap-3">
+                          <div>
+                            <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Day ribbon</div>
+                            <div className="mt-1 text-sm text-slate-300">A compact visual rhythm of your stops and movement.</div>
+                          </div>
+                          <div className="text-xs text-slate-400">
+                            {formatMovementWindow(latestMovementEntry.commute_start, latestMovementEntry.commute_end)}
+                          </div>
+                        </div>
+                        <div className="mt-4 flex h-4 overflow-hidden rounded-full border border-white/8 bg-[rgba(8,10,18,0.9)]">
+                          {movementRibbonSegments.map((segment, index) => (
+                            <div
+                              key={segment.id}
+                              className={index % 2 === 0 ? "bg-emerald-400/70" : "bg-cyan-400/70"}
+                              style={{ width: `${segment.width}%` }}
+                              title={segment.label}
+                            />
+                          ))}
+                        </div>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          {movementRibbonSegments.map((segment, index) => (
+                            <span
+                              key={`${segment.id}-label`}
+                              className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-slate-300"
+                            >
+                              {index + 1}. {segment.label}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+
+                      {hasMovementMap && latestMovementEntry ? (
+                        <div className="rounded-[1.3rem] border border-white/6 bg-[rgba(17,19,34,0.45)] p-4">
+                          <div className="flex items-center justify-between gap-3">
+                            <div>
+                              <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Route postcard</div>
+                              <div className="mt-1 text-sm text-slate-300">A quiet geographic view of today&apos;s movement path.</div>
+                            </div>
+                            <div className="text-xs text-slate-400">
+                              {latestMovementEntry.route_points.length || latestMovementEntry.visits.length} points
+                            </div>
+                          </div>
+                          <div className="mt-4 overflow-hidden rounded-[1.2rem] border border-white/8 bg-[radial-gradient(circle_at_top_left,rgba(16,185,129,0.14),transparent_32%),linear-gradient(180deg,rgba(9,12,22,0.96),rgba(15,18,28,0.96))]">
+                            <MovementMap entry={latestMovementEntry} className="h-[460px] xl:h-[520px]" />
+                          </div>
+                          <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-300">
+                            <span className="rounded-full border border-emerald-300/20 bg-emerald-400/10 px-3 py-1">Start</span>
+                            <span className="rounded-full border border-cyan-300/20 bg-cyan-400/10 px-3 py-1">End</span>
+                            <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1">{latestMovementEntry.place_labels.length} labeled places</span>
+                          </div>
+                        </div>
+                      ) : null}
+
                       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
                         <div className="rounded-[1.2rem] border border-white/6 bg-[rgba(17,19,34,0.45)] p-4">
                           <div className="text-xs uppercase tracking-wide text-slate-400">Travel</div>
@@ -849,13 +1012,6 @@ function HealthDetailPanel({
                         </div>
                       </div>
 
-                      <div className="rounded-[1.2rem] border border-emerald-300/15 bg-[linear-gradient(135deg,rgba(16,185,129,0.12),rgba(17,19,34,0.82))] p-4">
-                        <div className="text-xs uppercase tracking-[0.18em] text-emerald-100/80">Today&apos;s movement story</div>
-                        <div className="mt-3 text-sm leading-7 text-slate-100">
-                          {latestMovementEntry.movement_story || "No movement story generated yet."}
-                        </div>
-                      </div>
-
                       {latestMovementEntry.place_labels.length ? (
                         <div className="flex flex-wrap gap-2">
                           {latestMovementEntry.place_labels.map((label) => (
@@ -868,6 +1024,33 @@ function HealthDetailPanel({
                           ))}
                         </div>
                       ) : null}
+
+                      <div className="rounded-[1.3rem] border border-white/6 bg-[rgba(17,19,34,0.45)] p-4">
+                        <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Movement storyboard</div>
+                        <div className="mt-3 space-y-3">
+                          {movementStoryboard.length ? movementStoryboard.map((item, index) => (
+                            <div
+                              key={item.id}
+                              className="flex gap-3 rounded-[1rem] border border-white/6 bg-[rgba(255,255,255,0.03)] px-4 py-3"
+                            >
+                              <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-emerald-400/15 text-xs font-semibold text-emerald-100">
+                                {index + 1}
+                              </div>
+                              <div className="min-w-0">
+                                <div className="text-sm font-medium text-slate-100">{item.title}</div>
+                                <div className="mt-1 text-sm text-slate-300">{item.detail}</div>
+                                {item.meta ? (
+                                  <div className="mt-1 text-xs text-slate-500">{item.meta}</div>
+                                ) : null}
+                              </div>
+                            </div>
+                          )) : (
+                            <div className="rounded-[1rem] border border-dashed border-white/10 px-4 py-3 text-sm text-slate-400">
+                              No visits have been turned into a movement storyboard yet.
+                            </div>
+                          )}
+                        </div>
+                      </div>
 
                       <div className="space-y-2">
                         <div className="text-xs uppercase tracking-wide text-slate-400">Recent movement days</div>
@@ -1394,7 +1577,7 @@ export default function HomePage() {
   const [error, setError] = useState("");
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [mode, setMode] = useState<"dashboard" | "tasks" | "journal" | "mail" | "news" | "overview" | "schedule" | "planning" | "settings" | "health">("dashboard");
+  const [mode, setMode] = useState<"dashboard" | "assistant" | "tasks" | "journal" | "mail" | "news" | "overview" | "schedule" | "planning" | "settings" | "health">("dashboard");
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const [mailView, setMailView] = useState<"ai" | "raw">("ai");
   const [dashboard, setDashboard] = useState<DashboardResponse | null>(null);
@@ -1463,6 +1646,9 @@ export default function HomePage() {
   const [planningBulkCalendarLoading, setPlanningBulkCalendarLoading] = useState(false);
   const [planningBulkCalendarMessage, setPlanningBulkCalendarMessage] = useState("");
   const activePlanningJobIdRef = useRef<string | null>(null);
+  const hasLoadedDashboardRef = useRef(false);
+  const hasLoadedTasksRef = useRef(false);
+  const hasLoadedJournalRef = useRef(false);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -1511,13 +1697,14 @@ export default function HomePage() {
   };
 
   const loadEmails = async (
-    currentMode: "dashboard" | "tasks" | "journal" | "mail" | "news" | "overview" | "schedule" | "planning" | "settings" | "health" = mode,
+    currentMode: "dashboard" | "assistant" | "tasks" | "journal" | "mail" | "news" | "overview" | "schedule" | "planning" | "settings" | "health" = mode,
     mailboxOverride?: string,
     pageTokenOverride?: string | null,
     currentMailView: "ai" | "raw" = mailView
   ) => {
     if (
       currentMode === "planning" ||
+      currentMode === "assistant" ||
       currentMode === "dashboard" ||
       currentMode === "tasks" ||
       currentMode === "journal" ||
@@ -1730,6 +1917,7 @@ export default function HomePage() {
 
       const data: DashboardResponse = await dashboardResponse.json();
       setDashboard(data);
+      hasLoadedDashboardRef.current = true;
 
       if (movementResponse.ok) {
         const movementData: MovementListResponse = await movementResponse.json();
@@ -1773,6 +1961,7 @@ export default function HomePage() {
       const data: TaskListResponse = await response.json();
       setTasks(data.tasks);
       syncTaskDrafts(data.tasks);
+      hasLoadedTasksRef.current = true;
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to load tasks.";
       setError(message);
@@ -1812,6 +2001,7 @@ export default function HomePage() {
 
       const data: JournalResponse = await response.json();
       setJournal(data);
+      hasLoadedJournalRef.current = true;
       setJournalDrafts((current) => ({
         ...current,
         ...Object.fromEntries(
@@ -2216,12 +2406,14 @@ export default function HomePage() {
 
   const fetchEmailsEffect = useEffectEvent(
     (
-      currentMode: "dashboard" | "tasks" | "journal" | "mail" | "news" | "overview" | "schedule" | "planning" | "settings" | "health",
+      currentMode: "dashboard" | "assistant" | "tasks" | "journal" | "mail" | "news" | "overview" | "schedule" | "planning" | "settings" | "health",
       mailboxName?: string,
       currentMailView: "ai" | "raw" = mailView
     ) => {
       if (currentMode === "dashboard" || currentMode === "news") {
-        void loadDashboard();
+        if (!hasLoadedDashboardRef.current) {
+          void loadDashboard();
+        }
         return;
       }
       if (currentMode === "settings") {
@@ -2230,15 +2422,21 @@ export default function HomePage() {
         return;
       }
       if (currentMode === "health") {
-        void loadDashboard();
+        if (!hasLoadedDashboardRef.current) {
+          void loadDashboard();
+        }
         return;
       }
       if (currentMode === "tasks") {
-        void loadTasks(true, true);
+        if (!hasLoadedTasksRef.current) {
+          void loadTasks(true, true);
+        }
         return;
       }
       if (currentMode === "journal") {
-        void loadJournal();
+        if (!hasLoadedJournalRef.current) {
+          void loadJournal();
+        }
         return;
       }
       if (currentMode === "planning") {
@@ -2391,9 +2589,10 @@ export default function HomePage() {
 
     setHandleLoading(true);
     setError("");
+    const handledEmailId = selectedEmail.id;
 
     try {
-      const response = await fetch(`${API_BASE}/emails/${selectedEmail.id}/handle`, {
+      const response = await fetch(`${API_BASE}/emails/${handledEmailId}/handle`, {
         method: "POST",
       });
 
@@ -2404,12 +2603,15 @@ export default function HomePage() {
       }
 
       setEmails((currentEmails) => {
-        const nextEmails = currentEmails.filter((email) => email.id !== selectedEmail.id);
+        const nextEmails = currentEmails.filter((email) => email.id !== handledEmailId);
         syncSelectedId(nextEmails);
         return nextEmails;
       });
       await loadLabels();
-      if (dashboard) {
+
+      if (mode === "mail") {
+        await loadEmails("mail", selectedMailbox, undefined, mailView);
+      } else if (dashboard) {
         await loadDashboard();
       }
     } catch (err) {
@@ -3034,7 +3236,7 @@ export default function HomePage() {
   const guidanceDirty = classificationGuidance !== savedClassificationGuidance;
 
   const setTopLevelMode = (
-    nextMode: "dashboard" | "tasks" | "journal" | "mail" | "news" | "overview" | "schedule" | "planning" | "settings" | "health"
+    nextMode: "dashboard" | "assistant" | "tasks" | "journal" | "mail" | "news" | "overview" | "schedule" | "planning" | "settings" | "health"
   ) => {
     if (
       nextMode === "overview" &&
@@ -3440,6 +3642,8 @@ export default function HomePage() {
             <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-300">
               {mode === "dashboard"
                 ? "Start here for a centralized briefing with your day, important mail, current headlines, and a focused task list."
+                : mode === "assistant"
+                ? "Ask Jarvis questions in plain English and get grounded answers using your dashboard, tasks, journal, health, movement, calendar, and important mail context."
                 : mode === "tasks"
                 ? "Review, edit, complete, and add tasks from one place."
                 : mode === "journal"
@@ -3464,6 +3668,15 @@ export default function HomePage() {
             >
               <Sparkles className="mr-2 h-4 w-4" />
               Dashboard
+            </Button>
+
+            <Button
+              variant={mode === "assistant" ? "default" : "outline"}
+              className="rounded-2xl"
+              onClick={() => setTopLevelMode("assistant")}
+            >
+              <Sparkles className="mr-2 h-4 w-4" />
+              Ask
             </Button>
 
             <Button
@@ -3605,6 +3818,9 @@ export default function HomePage() {
                 }
                 if (mode === "health") {
                   void loadDashboard();
+                  return;
+                }
+                if (mode === "assistant") {
                   return;
                 }
                 void loadEmails(mode, selectedMailbox);
@@ -4038,6 +4254,34 @@ export default function HomePage() {
                 </CardContent>
               </Card>
             </div>
+          </div>
+        ) : mode === "assistant" ? (
+          <div className="space-y-6">
+            <Card className="rounded-[2rem] border border-white/8 bg-[rgba(17,19,34,0.82)] shadow-[0_16px_44px_rgba(6,7,14,0.36)] backdrop-blur-xl">
+              <CardHeader className="pb-3">
+                <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+                  <div>
+                    <CardTitle className="flex items-center gap-2 text-lg">
+                      <Sparkles className="h-5 w-5" />
+                      Ask Jarvis
+                    </CardTitle>
+                    <p className="mt-2 text-sm leading-6 text-slate-300">
+                      Ask questions across the data Jarvis already knows about you, including important mail, tasks, calendar, journal notes, health syncs, and movement history.
+                    </p>
+                  </div>
+                  <Button
+                    variant="outline"
+                    className="rounded-2xl"
+                    onClick={() => setMode("dashboard")}
+                  >
+                    Back to dashboard
+                  </Button>
+                </div>
+              </CardHeader>
+              <CardContent>
+                <AssistantPanel apiBase={API_BASE} />
+              </CardContent>
+            </Card>
           </div>
         ) : mode === "health" ? (
           <HealthDetailPanel
