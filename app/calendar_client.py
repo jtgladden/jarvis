@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
 import os.path
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -10,6 +11,8 @@ from googleapiclient.errors import HttpError
 
 from app.config import DEFAULT_TIMEZONE, GMAIL_CREDENTIALS_FILE, GMAIL_TOKEN_FILE, GOOGLE_SCOPES
 from app.schemas import CalendarAgendaItem, CalendarAgendaResponse, CalendarEventCreateResponse, CalendarEventPreview, EmailClassification, EmailSummary, PlanningCalendarBulkCreateResponse, PlanningCalendarCreateResponse, PlanningItem
+
+LOCAL_TIMEZONE = ZoneInfo(DEFAULT_TIMEZONE)
 
 
 def _has_required_scopes(creds: Optional[Credentials]) -> bool:
@@ -163,8 +166,10 @@ def create_calendar_events_from_plan_items(items: list[PlanningItem]) -> Plannin
 
 
 def list_upcoming_events(days: int = 7, max_results: int = 25) -> CalendarAgendaResponse:
-    now = datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
-    time_max = (datetime.utcnow() + timedelta(days=days)).replace(microsecond=0).isoformat() + "Z"
+    now_local = datetime.now(LOCAL_TIMEZONE).replace(microsecond=0)
+    time_max_local = (now_local + timedelta(days=days)).replace(microsecond=0)
+    now = now_local.isoformat()
+    time_max = time_max_local.isoformat()
     response = (
         get_calendar_service()
         .events()
@@ -172,6 +177,7 @@ def list_upcoming_events(days: int = 7, max_results: int = 25) -> CalendarAgenda
             calendarId="primary",
             timeMin=now,
             timeMax=time_max,
+            timeZone=DEFAULT_TIMEZONE,
             singleEvents=True,
             orderBy="startTime",
             maxResults=max_results,

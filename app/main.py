@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.assistant import ask_jarvis_assistant
-from app.assistant_chat_store import get_chat_thread, init_assistant_chat_store, list_chats
+from app.assistant_chat_store import archive_chat, delete_chat, get_chat_thread, init_assistant_chat_store, list_chats
 from app.calendar_client import build_calendar_preview, create_calendar_event_from_plan_item, create_calendar_events_from_plan_items, create_calendar_event_from_preview, list_upcoming_events
 from app.calendar_quick_add import create_calendar_event_from_description
 from app.classification_cache import get_cached_classification, init_classification_cache, save_classification, summarize_cached_classifications
@@ -25,10 +25,12 @@ from app.movement import list_movement_entries, sync_movement_daily_entry
 from app.movement_store import init_movement_store
 from app.planner import generate_schedule_plan
 from app.rules import classify_new_email_rule
-from app.schemas import AssistantAskRequest, AssistantAskResponse, AssistantChatListResponse, AssistantChatThread, CalendarAgendaResponse, CalendarEventCreateResponse, CalendarEventPreview, CalendarQuickAddRequest, CalendarQuickAddResponse, ClassifiedEmailResponse, ClassificationGuidanceRequest, ClassificationGuidanceResponse, ClassificationOverviewResponse, CleanupJobStartResponse, CleanupJobStatus, CleanupResponse, DashboardResponse, DashboardTaskItem, EmailPageResponse, EmailSummary, EmailUpdateRequest, EmailUpdateResponse, GmailLabel, HandleEmailResponse, HealthDailySyncRequest, HealthDailySyncResponse, HealthListResponse, JournalDayEntry, JournalDayNoteUpdateRequest, JournalResponse, MovementDailySyncRequest, MovementDailySyncResponse, MovementListResponse, PlanningCalendarBulkCreateRequest, PlanningCalendarBulkCreateResponse, PlanningCalendarCreateRequest, PlanningCalendarCreateResponse, PlanningJobStartResponse, PlanningJobStatus, PlanningRequest, PlanningResponse, RuleProcessResponse, TaskCreateRequest, TaskListResponse, TaskUpdateRequest
+from app.schemas import AssistantAskRequest, AssistantAskResponse, AssistantChatListResponse, AssistantChatThread, CalendarAgendaResponse, CalendarEventCreateResponse, CalendarEventPreview, CalendarQuickAddRequest, CalendarQuickAddResponse, ClassifiedEmailResponse, ClassificationGuidanceRequest, ClassificationGuidanceResponse, ClassificationOverviewResponse, CleanupJobStartResponse, CleanupJobStatus, CleanupResponse, DashboardResponse, DashboardTaskItem, EmailPageResponse, EmailSummary, EmailUpdateRequest, EmailUpdateResponse, GmailLabel, HandleEmailResponse, HealthDailySyncRequest, HealthDailySyncResponse, HealthListResponse, JournalDayEntry, JournalDayNoteUpdateRequest, JournalResponse, MovementDailySyncRequest, MovementDailySyncResponse, MovementListResponse, PlanningCalendarBulkCreateRequest, PlanningCalendarBulkCreateResponse, PlanningCalendarCreateRequest, PlanningCalendarCreateResponse, PlanningJobStartResponse, PlanningJobStatus, PlanningRequest, PlanningResponse, RuleProcessResponse, TaskCreateRequest, TaskListResponse, TaskUpdateRequest, WorkoutBatchSyncRequest, WorkoutBatchSyncResponse, WorkoutListResponse
 from app.task_service import create_task, delete_task, list_tasks, update_task
 from app.task_store import init_task_store
 from app.user_context import get_default_user_context
+from app.workout import list_workout_entries, sync_workout_batch
+from app.workout_store import init_workout_store
 
 app = FastAPI(title="Mail AI", version="0.1.0")
 api = APIRouter(prefix="/api")
@@ -182,6 +184,7 @@ def start_background_new_mail_sorter() -> None:
     init_task_store()
     init_health_store()
     init_movement_store()
+    init_workout_store()
     init_assistant_chat_store()
     thread = Thread(target=_new_mail_sort_loop, daemon=True)
     thread.start()
@@ -302,12 +305,29 @@ def assistant_ask(payload: AssistantAskRequest):
 
 @api.get("/assistant/chats", response_model=AssistantChatListResponse)
 def assistant_chats(limit: int = Query(default=40, ge=1, le=100)):
-    return list_chats(limit=limit, user_id=get_default_user_context().user_id)
+    return list_chats(limit=limit, archived=False, user_id=get_default_user_context().user_id)
+
+
+@api.get("/assistant/chats/archived", response_model=AssistantChatListResponse)
+def assistant_archived_chats(limit: int = Query(default=40, ge=1, le=100)):
+    return list_chats(limit=limit, archived=True, user_id=get_default_user_context().user_id)
 
 
 @api.get("/assistant/chats/{chat_id}", response_model=AssistantChatThread)
 def assistant_chat_thread(chat_id: str):
     return get_chat_thread(chat_id, user_id=get_default_user_context().user_id)
+
+
+@api.patch("/assistant/chats/{chat_id}/archive")
+def assistant_archive_chat(chat_id: str, archived: bool = Query(default=True)):
+    archive_chat(chat_id, archived=archived, user_id=get_default_user_context().user_id)
+    return {"ok": True, "archived": archived}
+
+
+@api.delete("/assistant/chats/{chat_id}")
+def assistant_delete_chat(chat_id: str):
+    delete_chat(chat_id, user_id=get_default_user_context().user_id)
+    return {"ok": True}
 
 
 @api.get("/health", response_model=HealthListResponse)
@@ -330,6 +350,16 @@ def movement(days: int = Query(default=14, ge=1, le=60)):
 @api.post("/movement/daily", response_model=MovementDailySyncResponse)
 def sync_movement_daily(payload: MovementDailySyncRequest):
     return sync_movement_daily_entry(payload)
+
+
+@api.get("/workouts", response_model=WorkoutListResponse)
+def workouts(days: int = Query(default=30, ge=1, le=365), limit: int = Query(default=100, ge=1, le=500)):
+    return list_workout_entries(days=days, limit=limit)
+
+
+@api.post("/workouts/sync", response_model=WorkoutBatchSyncResponse)
+def sync_workouts(payload: WorkoutBatchSyncRequest):
+    return sync_workout_batch(payload)
 
 
 @api.get("/tasks", response_model=TaskListResponse)

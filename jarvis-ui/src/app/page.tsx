@@ -361,6 +361,31 @@ function formatMovementWindow(start: string | null | undefined, end: string | nu
   return "No commute markers";
 }
 
+function workoutToMapEntry(workout: {
+  route_points: Array<{
+    timestamp: string;
+    latitude: number;
+    longitude: number;
+  }>;
+}) {
+  return {
+    route_points: workout.route_points.map((point) => ({
+      timestamp: point.timestamp,
+      latitude: point.latitude,
+      longitude: point.longitude,
+      horizontal_accuracy_m: null,
+    })),
+    visits: [],
+  };
+}
+
+function formatWorkoutLabel(label: string | null | undefined) {
+  const normalized = (label || "").trim();
+  if (!normalized) return "Workout";
+  if (/^\(RawValue:\s*\d+\)$/i.test(normalized)) return "Workout";
+  return normalized;
+}
+
 function formatTimeOnly(value: string | null | undefined) {
   if (!value) return null;
   const parsed = parseCalendarDate(value);
@@ -379,6 +404,17 @@ function minutesBetween(start: string | null | undefined, end: string | null | u
   return Number.isFinite(minutes) ? minutes : null;
 }
 
+function formatMovementVisitTitle(
+  visit: { label?: string | null; arrival?: string | null; departure?: string | null },
+  index: number
+) {
+  if (visit.label?.trim()) return visit.label.trim();
+  if (visit.arrival && !visit.departure) return `Arrival ${index + 1}`;
+  if (visit.departure && !visit.arrival) return `Departure ${index + 1}`;
+  if (visit.arrival && visit.departure) return `Place ${index + 1}`;
+  return `Visit ${index + 1}`;
+}
+
 function buildMovementStoryboard(entry: MovementDailyEntry) {
   const items = entry.visits
     .slice(0, 8)
@@ -386,7 +422,7 @@ function buildMovementStoryboard(entry: MovementDailyEntry) {
       const arrivalText = formatTimeOnly(visit.arrival);
       const departureText = formatTimeOnly(visit.departure);
       const stayMinutes = minutesBetween(visit.arrival, visit.departure);
-      const title = visit.label || `Stop ${index + 1}`;
+      const title = formatMovementVisitTitle(visit, index);
       let detail = "Visit detected";
       if (arrivalText && departureText) {
         detail = `${arrivalText} to ${departureText}`;
@@ -432,7 +468,7 @@ function buildMovementRibbonSegments(entry: MovementDailyEntry) {
   return entry.visits.slice(0, 6).map((visit, index) => ({
     id: `${visit.latitude}-${visit.longitude}-${index}`,
     width: Math.max(100 / total, 12),
-    label: visit.label || `Stop ${index + 1}`,
+    label: formatMovementVisitTitle(visit, index),
   }));
 }
 
@@ -704,6 +740,37 @@ type MovementListResponse = {
   entries: MovementDailyEntry[];
 };
 
+type WorkoutRoutePoint = {
+  timestamp: string;
+  latitude: number;
+  longitude: number;
+  altitude_m?: number | null;
+  horizontal_accuracy_m?: number | null;
+  vertical_accuracy_m?: number | null;
+};
+
+type WorkoutEntry = {
+  workout_id: string;
+  date: string;
+  source: string;
+  activity_type: string;
+  activity_label: string;
+  start_date: string;
+  end_date: string;
+  duration_minutes: number;
+  total_distance_km?: number | null;
+  active_energy_kcal?: number | null;
+  avg_heart_rate_bpm?: number | null;
+  max_heart_rate_bpm?: number | null;
+  source_name?: string | null;
+  route_points: WorkoutRoutePoint[];
+  synced_at?: string | null;
+};
+
+type WorkoutListResponse = {
+  workouts: WorkoutEntry[];
+};
+
 type DashboardResponse = {
   generated_at: string;
   date_label: string;
@@ -721,12 +788,14 @@ type DashboardResponse = {
 function HealthDetailPanel({
   dashboard,
   movementEntries,
+  workoutEntries,
   movementLoading,
   loading,
   onBackToDashboard,
 }: {
   dashboard: DashboardResponse | null;
   movementEntries: MovementDailyEntry[];
+  workoutEntries: WorkoutEntry[];
   movementLoading: boolean;
   loading: boolean;
   onBackToDashboard?: () => void;
@@ -736,22 +805,27 @@ function HealthDetailPanel({
   const [expandedMetricsOpen, setExpandedMetricsOpen] = useState(false);
   const movementStoryboard = latestMovementEntry ? buildMovementStoryboard(latestMovementEntry) : [];
   const movementRibbonSegments = latestMovementEntry ? buildMovementRibbonSegments(latestMovementEntry) : [];
+  const mappedWorkouts = workoutEntries.filter((workout) => workout.route_points.length > 1).slice(0, 2);
+  const featuredWorkout = workoutEntries[0] ?? null;
   const hasMovementMap = Boolean(
     latestMovementEntry && (latestMovementEntry.route_points.length || latestMovementEntry.visits.length)
   );
 
   return (
     <div className="space-y-6">
-      <Card className="rounded-[2rem] border border-white/8 bg-[rgba(17,19,34,0.82)] shadow-[0_16px_44px_rgba(6,7,14,0.36)] backdrop-blur-xl">
+      <Card className="overflow-hidden rounded-[2rem] border border-white/8 bg-[linear-gradient(180deg,rgba(19,24,42,0.94),rgba(13,15,28,0.94))] shadow-[0_16px_44px_rgba(6,7,14,0.36)] backdrop-blur-xl">
         <CardHeader className="pb-3">
           <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
             <div>
-              <CardTitle className="flex items-center gap-2 text-lg">
-                <Activity className="h-5 w-5" />
-                Health trends
+              <div className="inline-flex items-center gap-2 rounded-full border border-cyan-300/18 bg-cyan-400/10 px-3 py-1 text-[11px] uppercase tracking-[0.2em] text-cyan-100">
+                <Activity className="h-4 w-4" />
+                Health Atlas
+              </div>
+              <CardTitle className="mt-3 text-xl text-white">
+                Daily health, workouts, and movement together
               </CardTitle>
               <p className="mt-2 text-sm leading-6 text-slate-300">
-                A deeper look at synced Apple Health metrics, recent daily history, and the location-based movement journal coming from your phone.
+                A calmer view of body signals, logged workouts, and your location-based movement story.
               </p>
             </div>
             {onBackToDashboard ? (
@@ -763,16 +837,21 @@ function HealthDetailPanel({
         </CardHeader>
         <CardContent>
           {healthSummary || latestMovementEntry ? (
-            <div className="space-y-4">
+            <div className="space-y-5">
               {healthSummary ? (
-                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                  <div className="rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4">
-                    <div className="text-xs uppercase tracking-wide text-slate-400">Today&apos;s steps</div>
-                    <div className="mt-2 text-2xl font-semibold text-white">
+                <div className="grid gap-3 xl:grid-cols-[1.35fr_0.85fr_0.85fr_0.95fr]">
+                  <div className="rounded-[1.6rem] border border-cyan-300/16 bg-[linear-gradient(135deg,rgba(37,99,235,0.16),rgba(17,19,34,0.64))] p-5">
+                    <div className="text-xs uppercase tracking-[0.2em] text-cyan-100/80">Today&apos;s baseline</div>
+                    <div className="mt-3 text-3xl font-semibold text-white">
                       {formatHealthStat(healthSummary.today_entry?.steps)}
                     </div>
-                    <div className="mt-2 text-xs text-slate-400">
-                      7-day avg {formatHealthStat(healthSummary.seven_day_avg_steps)}
+                    <div className="mt-2 flex flex-wrap gap-2 text-xs text-cyan-100">
+                      <span className="rounded-full border border-cyan-300/25 bg-black/10 px-3 py-1">
+                        7-day avg {formatHealthStat(healthSummary.seven_day_avg_steps)}
+                      </span>
+                      <span className="rounded-full border border-cyan-300/25 bg-black/10 px-3 py-1">
+                        {healthSummary.streak_days} day streak
+                      </span>
                     </div>
                   </div>
                   <div className="rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4">
@@ -806,7 +885,7 @@ function HealthDetailPanel({
               ) : null}
 
               {healthSummary ? (
-                <div className="rounded-[1.4rem] border border-cyan-300/15 bg-[linear-gradient(135deg,rgba(56,189,248,0.12),rgba(35,37,58,0.85))] p-4">
+                <div className="rounded-[1.5rem] border border-cyan-300/15 bg-[linear-gradient(135deg,rgba(56,189,248,0.12),rgba(35,37,58,0.85))] p-4">
                   <div className="flex flex-wrap items-center gap-2 text-xs text-cyan-100">
                     {healthSummary.latest_date ? (
                       <span className="rounded-full border border-cyan-300/25 bg-cyan-400/10 px-2.5 py-1">
@@ -822,7 +901,7 @@ function HealthDetailPanel({
 
               {healthSummary?.today_entry?.extra_metrics &&
               Object.keys(healthSummary.today_entry.extra_metrics).length ? (
-                <div className="rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4">
+                <div className="rounded-[1.5rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4">
                   <button
                     type="button"
                     onClick={() => setExpandedMetricsOpen((current) => !current)}
@@ -860,29 +939,83 @@ function HealthDetailPanel({
                 </div>
               ) : null}
 
-              <Card className="rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] shadow-none">
+              <Card className="rounded-[1.5rem] border border-white/6 bg-[rgba(35,37,58,0.72)] shadow-none">
                 <CardHeader className="pb-2">
-                  <CardTitle className="text-base">Recent history</CardTitle>
+                  <CardTitle className="text-base">Workout spotlight</CardTitle>
                 </CardHeader>
-                <CardContent className="space-y-2">
-                  {healthSummary?.recent_entries.slice().reverse().map((entry) => (
-                    <div
-                      key={entry.date}
-                      className="flex items-center justify-between rounded-[1.2rem] border border-white/6 bg-[rgba(17,19,34,0.45)] px-4 py-3 text-sm"
-                    >
-                      <div className="text-slate-300">{entry.date}</div>
-                      <div className="flex flex-wrap items-center gap-3 text-slate-100">
-                        <span>{formatHealthStat(entry.steps)} steps</span>
-                        <span>{formatHealthStat(entry.active_energy_kcal)} kcal</span>
-                        <span>{formatHealthStat(entry.workouts)} workouts</span>
-                        <span>{formatHealthStat(entry.sleep_hours, 1)} hr sleep</span>
+                <CardContent>
+                  {featuredWorkout ? (
+                    <div className="rounded-[1.2rem] border border-white/6 bg-[rgba(17,19,34,0.45)] px-4 py-4">
+                      <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+                        <div>
+                          <div className="text-sm font-medium text-slate-100">
+                            {formatWorkoutLabel(featuredWorkout.activity_label)}
+                          </div>
+                          <div className="mt-1 text-xs text-slate-400">
+                            {formatScheduleDateTime(featuredWorkout.start_date)}
+                          </div>
+                        </div>
+                        <div className="flex flex-wrap gap-3 text-xs text-slate-300">
+                          <span>{formatHealthStat(featuredWorkout.duration_minutes, 0)} min</span>
+                          <span>{formatHealthStat(featuredWorkout.total_distance_km, 1)} km</span>
+                          <span>{formatHealthStat(featuredWorkout.active_energy_kcal)} kcal</span>
+                          <span>{formatHealthStat(featuredWorkout.avg_heart_rate_bpm)} avg bpm</span>
+                        </div>
                       </div>
                     </div>
-                  ))}
+                  ) : (
+                    <div className="rounded-[1rem] border border-dashed border-white/10 px-4 py-3 text-sm text-slate-400">
+                      No workout history has been synced yet.
+                    </div>
+                  )}
                 </CardContent>
               </Card>
 
-              <Card className="rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] shadow-none">
+              <Card className="rounded-[1.5rem] border border-white/6 bg-[rgba(35,37,58,0.72)] shadow-none">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-base">Workout routes</CardTitle>
+                  <p className="text-sm leading-6 text-slate-300">
+                    Mapped workouts stay separate from passive movement so hikes and runs read like distinct events.
+                  </p>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  {mappedWorkouts.length ? (
+                    <div className="grid gap-4 xl:grid-cols-2">
+                      {mappedWorkouts.map((workout) => (
+                        <div
+                          key={`${workout.workout_id}-map`}
+                          className="overflow-hidden rounded-[1.2rem] border border-white/6 bg-[rgba(17,19,34,0.45)]"
+                        >
+                          <div className="flex items-center justify-between gap-3 px-4 py-3">
+                            <div>
+                              <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Workout route</div>
+                              <div className="mt-1 text-sm font-medium text-slate-100">{formatWorkoutLabel(workout.activity_label)}</div>
+                            </div>
+                            <div className="text-xs text-slate-400">
+                              {formatHealthStat(workout.total_distance_km, 1)} km
+                            </div>
+                          </div>
+                          <MovementMap entry={workoutToMapEntry(workout)} className="h-[320px]" />
+                          <div className="flex flex-wrap gap-2 px-4 py-3 text-xs text-slate-300">
+                            <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1">
+                              {formatScheduleDateTime(workout.start_date)}
+                            </span>
+                            <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1">
+                              {workout.route_points.length} route point{workout.route_points.length === 1 ? "" : "s"}
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="rounded-[1rem] border border-dashed border-white/10 px-4 py-3 text-sm text-slate-400">
+                      No mapped workout routes available yet.
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              <Card className="rounded-[1.5rem] border border-white/6 bg-[rgba(35,37,58,0.72)] shadow-none">
                 <CardHeader className="pb-2">
                   <CardTitle className="text-base">Movement journal</CardTitle>
                   <p className="text-sm leading-6 text-slate-300">
@@ -1052,31 +1185,6 @@ function HealthDetailPanel({
                         </div>
                       </div>
 
-                      <div className="space-y-2">
-                        <div className="text-xs uppercase tracking-wide text-slate-400">Recent movement days</div>
-                        {movementEntries.slice(0, 7).map((entry) => (
-                          <div
-                            key={entry.date}
-                            className="rounded-[1.2rem] border border-white/6 bg-[rgba(17,19,34,0.45)] px-4 py-3"
-                          >
-                            <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-                              <div>
-                                <div className="text-sm font-medium text-slate-100">{entry.date}</div>
-                                <div className="mt-1 text-xs text-slate-400">
-                                  {entry.visited_places_count} visits · {formatMinutes(entry.time_away_minutes)} away
-                                </div>
-                              </div>
-                              <div className="flex flex-wrap items-center gap-3 text-xs text-slate-300">
-                                <span>{formatHealthStat(entry.total_distance_km, 1)} km</span>
-                                <span>{formatMovementWindow(entry.commute_start, entry.commute_end)}</span>
-                              </div>
-                            </div>
-                            <div className="mt-3 text-sm leading-6 text-slate-200">
-                              {entry.movement_story || "No movement story available."}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
                     </>
                   ) : (
                     <div className="rounded-[1.2rem] border border-dashed border-white/10 p-4 text-sm text-slate-400">
@@ -1582,6 +1690,7 @@ export default function HomePage() {
   const [mailView, setMailView] = useState<"ai" | "raw">("ai");
   const [dashboard, setDashboard] = useState<DashboardResponse | null>(null);
   const [movementEntries, setMovementEntries] = useState<MovementDailyEntry[]>([]);
+  const [workoutEntries, setWorkoutEntries] = useState<WorkoutEntry[]>([]);
   const [movementLoading, setMovementLoading] = useState(false);
   const [tasks, setTasks] = useState<DashboardTaskItem[]>([]);
   const [taskDrafts, setTaskDrafts] = useState<Record<string, TaskDraft>>({});
@@ -1904,9 +2013,10 @@ export default function HomePage() {
     setError("");
 
     try {
-      const [dashboardResponse, movementResponse] = await Promise.all([
+      const [dashboardResponse, movementResponse, workoutsResponse] = await Promise.all([
         fetch(`${API_BASE}/dashboard`),
         fetch(`${API_BASE}/movement?days=14`),
+        fetch(`${API_BASE}/workouts?days=90&limit=60`),
       ]);
 
       if (!dashboardResponse.ok) {
@@ -1924,6 +2034,12 @@ export default function HomePage() {
         setMovementEntries(movementData.entries);
       } else {
         setMovementEntries([]);
+      }
+      if (workoutsResponse.ok) {
+        const workoutData: WorkoutListResponse = await workoutsResponse.json();
+        setWorkoutEntries(workoutData.workouts);
+      } else {
+        setWorkoutEntries([]);
       }
 
       await loadTasks(false);
@@ -4287,6 +4403,7 @@ export default function HomePage() {
           <HealthDetailPanel
             dashboard={dashboard}
             movementEntries={movementEntries}
+            workoutEntries={workoutEntries}
             movementLoading={movementLoading}
             loading={loading}
             onBackToDashboard={() => setMode("dashboard")}

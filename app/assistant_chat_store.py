@@ -33,6 +33,7 @@ def init_assistant_chat_store() -> None:
                 user_id TEXT NOT NULL,
                 chat_id TEXT NOT NULL,
                 title TEXT NOT NULL DEFAULT '',
+                archived INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (user_id, chat_id)
@@ -55,6 +56,12 @@ def init_assistant_chat_store() -> None:
             )
             """
         )
+        columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(assistant_chats)").fetchall()
+        }
+        if "archived" not in columns:
+            connection.execute("ALTER TABLE assistant_chats ADD COLUMN archived INTEGER NOT NULL DEFAULT 0")
         connection.commit()
 
 
@@ -186,11 +193,11 @@ def _row_to_message(row: sqlite3.Row) -> AssistantStoredMessage:
     )
 
 
-def list_chats(*, limit: int = 40, user_id: str = APP_DEFAULT_USER_ID) -> AssistantChatListResponse:
+def list_chats(*, limit: int = 40, archived: bool = False, user_id: str = APP_DEFAULT_USER_ID) -> AssistantChatListResponse:
     with _db_lock, closing(_connect()) as connection:
         rows = connection.execute(
             """
-            SELECT c.chat_id, c.title, c.updated_at,
+            SELECT c.chat_id, c.title, c.archived, c.updated_at,
                    COUNT(m.message_id) AS message_count,
                    COALESCE(
                      (
@@ -205,12 +212,12 @@ def list_chats(*, limit: int = 40, user_id: str = APP_DEFAULT_USER_ID) -> Assist
             FROM assistant_chats c
             LEFT JOIN assistant_messages m
               ON m.user_id = c.user_id AND m.chat_id = c.chat_id
-            WHERE c.user_id = ?
+            WHERE c.user_id = ? AND c.archived = ?
             GROUP BY c.chat_id, c.title, c.updated_at
             ORDER BY c.updated_at DESC
             LIMIT ?
             """,
-            (user_id, limit),
+            (user_id, int(archived), limit),
         ).fetchall()
 
     return AssistantChatListResponse(
@@ -220,6 +227,7 @@ def list_chats(*, limit: int = 40, user_id: str = APP_DEFAULT_USER_ID) -> Assist
                 title=row["title"] or "New chat",
                 preview=(row["preview"] or "").strip(),
                 message_count=int(row["message_count"] or 0),
+                archived=bool(row["archived"]),
                 updated_at=row["updated_at"],
             )
             for row in rows
@@ -231,7 +239,7 @@ def get_chat_thread(chat_id: str, *, user_id: str = APP_DEFAULT_USER_ID) -> Assi
     with _db_lock, closing(_connect()) as connection:
         chat_row = connection.execute(
             """
-            SELECT chat_id, title, updated_at
+            SELECT chat_id, title, archived, updated_at
             FROM assistant_chats
             WHERE user_id = ? AND chat_id = ?
             """,
@@ -253,6 +261,43 @@ def get_chat_thread(chat_id: str, *, user_id: str = APP_DEFAULT_USER_ID) -> Assi
     return AssistantChatThread(
         id=chat_row["chat_id"],
         title=chat_row["title"] or "New chat",
+        archived=bool(chat_row["archived"]),
         updated_at=chat_row["updated_at"],
         messages=[_row_to_message(row) for row in message_rows],
     )
+
+
+def archive_chat(chat_id: str, *, archived: bool = True, user_id: str = APP_DEFAULT_USER_ID) -> None:
+    with _db_lock, closing(_connect()) as connection:
+        cursor = connection.execute(
+            """
+            UPDATE assistant_chats
+            SET archived = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE user_id = ? AND chat_id = ?
+            """,
+            (int(archived), user_id, chat_id),
+        )
+        connection.commit()
+        if cursor.rowcount <= 0:
+            raise RuntimeError("Assistant chat not found.")
+
+
+def delete_chat(chat_id: str, *, user_id: str = APP_DEFAULT_USER_ID) -> None:
+    with _db_lock, closing(_connect()) as connection:
+        connection.execute(
+            """
+            DELETE FROM assistant_messages
+            WHERE user_id = ? AND chat_id = ?
+            """,
+            (user_id, chat_id),
+        )
+        cursor = connection.execute(
+            """
+            DELETE FROM assistant_chats
+            WHERE user_id = ? AND chat_id = ?
+            """,
+            (user_id, chat_id),
+        )
+        connection.commit()
+        if cursor.rowcount <= 0:
+            raise RuntimeError("Assistant chat not found.")

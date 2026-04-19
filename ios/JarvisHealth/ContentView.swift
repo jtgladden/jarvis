@@ -21,14 +21,18 @@ struct ContentView: View {
         }
         .task {
             healthKitManager.refreshAuthorizationStatus()
+            healthKitManager.configureAutomaticSync(baseURL: healthKitManager.selectedBaseURL)
+            healthKitManager.handleAppBecameActive()
             movementManager.configureSync(baseURL: healthKitManager.selectedBaseURL)
             movementManager.handleAppBecameActive()
         }
         .onChange(of: healthKitManager.selectedBaseURL) { _, newValue in
+            healthKitManager.configureAutomaticSync(baseURL: newValue)
             movementManager.configureSync(baseURL: newValue)
         }
         .onChange(of: scenePhase) { _, newPhase in
             if newPhase == .active {
+                healthKitManager.handleAppBecameActive()
                 movementManager.handleAppBecameActive()
             }
         }
@@ -261,13 +265,57 @@ struct ContentView: View {
                 .buttonStyle(.bordered)
                 .disabled(healthKitManager.isSyncInFlight || healthKitManager.isHistorySyncInFlight)
 
+                Button {
+                    Task {
+                        do {
+                            try await healthKitManager.syncWorkoutHistoryToJarvis()
+                        } catch {
+                        }
+                    }
+                } label: {
+                    HStack {
+                        if healthKitManager.isWorkoutSyncInFlight {
+                            ProgressView()
+                        }
+                        Text(healthKitManager.isWorkoutSyncInFlight ? "Syncing Workouts..." : "Sync Workout History")
+                    }
+                }
+                .buttonStyle(.bordered)
+                .disabled(
+                    healthKitManager.isSyncInFlight ||
+                    healthKitManager.isHistorySyncInFlight ||
+                    healthKitManager.isWorkoutSyncInFlight
+                )
+
                 if let summary = healthKitManager.todaySummary {
                     Text(summary)
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
 
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Automatic sync")
+                        .font(.subheadline.weight(.semibold))
+                    Text(healthKitManager.lastAutoSyncSummary)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+
+                    if let status = healthKitManager.lastAutoSyncStatus {
+                        Text("Last auto-sync status: \(status)")
+                            .font(.caption)
+                            .foregroundStyle(status == "Success" ? .green : .orange)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.top, 4)
+
                 if let progress = healthKitManager.historySyncProgress {
+                    Text(progress)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+
+                if let progress = healthKitManager.workoutSyncProgress {
                     Text(progress)
                         .font(.subheadline)
                         .foregroundStyle(.secondary)

@@ -137,6 +137,35 @@ type MovementListResponse = {
   entries: MovementDailyEntry[];
 };
 
+type WorkoutEntry = {
+  workout_id: string;
+  date: string;
+  source: string;
+  activity_type: string;
+  activity_label: string;
+  start_date: string;
+  end_date: string;
+  duration_minutes: number;
+  total_distance_km?: number | null;
+  active_energy_kcal?: number | null;
+  avg_heart_rate_bpm?: number | null;
+  max_heart_rate_bpm?: number | null;
+  source_name?: string | null;
+  route_points: Array<{
+    timestamp: string;
+    latitude: number;
+    longitude: number;
+    altitude_m?: number | null;
+    horizontal_accuracy_m?: number | null;
+    vertical_accuracy_m?: number | null;
+  }>;
+  synced_at?: string | null;
+};
+
+type WorkoutListResponse = {
+  workouts: WorkoutEntry[];
+};
+
 type TaskListResponse = {
   generated_at: string;
   tasks: DashboardTaskItem[];
@@ -279,6 +308,31 @@ function formatMovementWindow(start: string | null | undefined, end: string | nu
   return "No commute markers";
 }
 
+function workoutToMapEntry(workout: {
+  route_points: Array<{
+    timestamp: string;
+    latitude: number;
+    longitude: number;
+  }>;
+}) {
+  return {
+    route_points: workout.route_points.map((point) => ({
+      timestamp: point.timestamp,
+      latitude: point.latitude,
+      longitude: point.longitude,
+      horizontal_accuracy_m: null,
+    })),
+    visits: [],
+  };
+}
+
+function formatWorkoutLabel(label: string | null | undefined) {
+  const normalized = (label || "").trim();
+  if (!normalized) return "Workout";
+  if (/^\(RawValue:\s*\d+\)$/i.test(normalized)) return "Workout";
+  return normalized;
+}
+
 function formatTimeOnly(value: string | null | undefined) {
   if (!value) return null;
   const parsed = parseCalendarDate(value);
@@ -297,6 +351,17 @@ function minutesBetween(start: string | null | undefined, end: string | null | u
   return Number.isFinite(minutes) ? minutes : null;
 }
 
+function formatMovementVisitTitle(
+  visit: { label?: string | null; arrival?: string | null; departure?: string | null },
+  index: number
+) {
+  if (visit.label?.trim()) return visit.label.trim();
+  if (visit.arrival && !visit.departure) return `Arrival ${index + 1}`;
+  if (visit.departure && !visit.arrival) return `Departure ${index + 1}`;
+  if (visit.arrival && visit.departure) return `Place ${index + 1}`;
+  return `Visit ${index + 1}`;
+}
+
 function buildMovementStoryboard(entry: MovementDailyEntry) {
   const items = entry.visits.slice(0, 6).map((visit, index) => {
     const arrivalText = formatTimeOnly(visit.arrival);
@@ -305,7 +370,7 @@ function buildMovementStoryboard(entry: MovementDailyEntry) {
 
     return {
       id: `${visit.latitude}-${visit.longitude}-${index}`,
-      title: visit.label || `Stop ${index + 1}`,
+      title: formatMovementVisitTitle(visit, index),
       detail:
         arrivalText && departureText
           ? `${arrivalText} to ${departureText}`
@@ -339,7 +404,7 @@ function buildMovementRibbonSegments(entry: MovementDailyEntry) {
   return entry.visits.slice(0, 5).map((visit, index) => ({
     id: `${visit.latitude}-${visit.longitude}-${index}`,
     width: Math.max(100 / total, 16),
-    label: visit.label || `Stop ${index + 1}`,
+    label: formatMovementVisitTitle(visit, index),
   }));
 }
 
@@ -459,6 +524,7 @@ function MobilePageContent() {
   const [error, setError] = useState("");
   const [dashboard, setDashboard] = useState<DashboardResponse | null>(null);
   const [movementEntries, setMovementEntries] = useState<MovementDailyEntry[]>([]);
+  const [workoutEntries, setWorkoutEntries] = useState<WorkoutEntry[]>([]);
   const [expandedMetricsOpen, setExpandedMetricsOpen] = useState(false);
   const [tasks, setTasks] = useState<DashboardTaskItem[]>([]);
   const [journal, setJournal] = useState<JournalDayEntry[]>([]);
@@ -476,6 +542,7 @@ function MobilePageContent() {
   const hasLoadedJournalRef = useRef(false);
   const hasLoadedScheduleRef = useRef(false);
   const latestMovementEntry = movementEntries[0] ?? null;
+  const mappedWorkoutEntries = workoutEntries.filter((workout) => workout.route_points.length > 1).slice(0, 1);
   const movementStoryboard = latestMovementEntry ? buildMovementStoryboard(latestMovementEntry) : [];
   const movementRibbonSegments = latestMovementEntry ? buildMovementRibbonSegments(latestMovementEntry) : [];
   const hasMovementMap = Boolean(
@@ -535,11 +602,12 @@ function MobilePageContent() {
     setError("");
 
     try {
-      const [dashboardResponse, tasksResponse, movementResponse, journalResponse] = await Promise.all([
+      const [dashboardResponse, tasksResponse, movementResponse, journalResponse, workoutsResponse] = await Promise.all([
         fetch(`${API_BASE}/dashboard`),
         fetch(`${API_BASE}/tasks?include_completed=true`),
         fetch(`${API_BASE}/movement?days=14`),
         fetch(`${API_BASE}/journal?days=3`),
+        fetch(`${API_BASE}/workouts?days=90&limit=30`),
       ]);
 
       for (const response of [dashboardResponse, tasksResponse]) {
@@ -560,6 +628,12 @@ function MobilePageContent() {
         setMovementEntries(movementData.entries);
       } else {
         setMovementEntries([]);
+      }
+      if (workoutsResponse.ok) {
+        const workoutData = (await workoutsResponse.json()) as WorkoutListResponse;
+        setWorkoutEntries(workoutData.workouts);
+      } else {
+        setWorkoutEntries([]);
       }
       if (journalResponse.ok) {
         const journalData = (await journalResponse.json()) as JournalResponse;
@@ -1210,43 +1284,69 @@ function MobilePageContent() {
 
         {activeTab === "health" ? (
           <div className="space-y-4">
-            <Card className="rounded-[1.8rem] border border-white/8 bg-[rgba(17,19,34,0.82)]">
+            <Card className="overflow-hidden rounded-[1.8rem] border border-white/8 bg-[linear-gradient(180deg,rgba(19,24,42,0.94),rgba(13,15,28,0.94))]">
               <CardHeader className="pb-2">
-                <CardTitle className="text-lg">Health and movement</CardTitle>
+                <div className="inline-flex items-center gap-2 self-start rounded-full border border-cyan-300/18 bg-cyan-400/10 px-3 py-1 text-[11px] uppercase tracking-[0.2em] text-cyan-100">
+                  <Activity className="h-3.5 w-3.5" />
+                  Health Atlas
+                </div>
+                <CardTitle className="text-lg">Body, workouts, and movement</CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
                 {dashboard?.health_summary || movementEntries.length ? (
                   <>
                     {healthSummary ? (
                       <>
-                        <div className="grid grid-cols-2 gap-3">
-                          <div className="rounded-[1.2rem] border border-white/8 bg-white/5 p-3">
-                            <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Today&apos;s steps</div>
-                            <div className="mt-2 text-2xl font-semibold text-white">
-                              {formatHealthStat(healthSummary.today_entry?.steps)}
+                        <div className="rounded-[1.3rem] border border-cyan-300/18 bg-[linear-gradient(135deg,rgba(56,189,248,0.14),rgba(17,19,34,0.5))] p-4">
+                          <div className="text-[11px] uppercase tracking-[0.2em] text-cyan-100/80">Today&apos;s baseline</div>
+                          <div className="mt-3 grid grid-cols-2 gap-3">
+                            <div>
+                              <div className="text-3xl font-semibold text-white">
+                                {formatHealthStat(healthSummary.today_entry?.steps)}
+                              </div>
+                              <div className="mt-1 text-xs text-slate-300">steps</div>
                             </div>
-                            <div className="mt-2 text-xs text-slate-400">
-                              7-day avg {formatHealthStat(healthSummary.seven_day_avg_steps)}
+                            <div>
+                              <div className="text-2xl font-semibold text-white">
+                                {formatHealthStat(healthSummary.seven_day_avg_sleep_hours, 1)} hr
+                              </div>
+                              <div className="mt-1 text-xs text-slate-300">sleep avg</div>
                             </div>
                           </div>
+                          <div className="mt-3 flex flex-wrap gap-2 text-xs text-cyan-100">
+                            <span className="rounded-full border border-cyan-300/25 bg-black/10 px-2.5 py-1">
+                              7-day avg {formatHealthStat(healthSummary.seven_day_avg_steps)}
+                            </span>
+                            <span className="rounded-full border border-cyan-300/25 bg-black/10 px-2.5 py-1">
+                              {healthSummary.streak_days} day streak
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-3">
                           <div className="rounded-[1.2rem] border border-white/8 bg-white/5 p-3">
-                            <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Sleep average</div>
+                            <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Resting heart rate</div>
                             <div className="mt-2 text-2xl font-semibold text-white">
-                              {formatHealthStat(healthSummary.seven_day_avg_sleep_hours, 1)} hr
+                              {formatHealthStat(healthSummary.today_entry?.resting_heart_rate)}
                             </div>
-                            <div className="mt-2 text-xs text-slate-400">
-                              Resting HR {formatHealthStat(healthSummary.today_entry?.resting_heart_rate)} bpm
+                            <div className="mt-2 text-xs text-slate-400">bpm</div>
+                          </div>
+                          <div className="rounded-[1.2rem] border border-white/8 bg-white/5 p-3">
+                            <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Workouts today</div>
+                            <div className="mt-2 text-2xl font-semibold text-white">
+                              {formatHealthStat(healthSummary.today_entry?.workouts)}
                             </div>
+                            <div className="mt-2 text-xs text-slate-400">logged sessions</div>
                           </div>
                         </div>
 
                         <div className="rounded-[1.2rem] border border-cyan-300/18 bg-cyan-400/8 px-4 py-3 text-sm leading-6 text-slate-200">
-                          {healthSummary.streak_days} day movement streak, {formatHealthStat(healthSummary.today_entry?.workouts)} workouts today, latest sync {healthSummary.last_synced_at ? formatScheduleDateTime(healthSummary.last_synced_at) : "unknown"}.
+                          Latest sync {healthSummary.last_synced_at ? formatScheduleDateTime(healthSummary.last_synced_at) : "unknown"}.
                         </div>
                       </>
                     ) : null}
 
-                    <div className="rounded-[1.2rem] border border-emerald-300/18 bg-emerald-400/8 px-4 py-3">
+                    <div className="rounded-[1.3rem] border border-emerald-300/18 bg-[linear-gradient(135deg,rgba(16,185,129,0.18),rgba(17,19,34,0.56))] px-4 py-4">
                       <div className="text-[11px] uppercase tracking-[0.18em] text-emerald-100/80">Movement today</div>
                       {latestMovementEntry ? (
                         <>
@@ -1372,27 +1472,52 @@ function MobilePageContent() {
                       </div>
                     ) : null}
 
-                    <div className="space-y-2">
-                      <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Recent days</div>
-                      {healthSummary?.recent_entries.slice().reverse().map((entry) => (
-                        <div
-                          key={entry.date}
-                          className="rounded-[1.2rem] border border-white/8 bg-white/5 px-4 py-3"
-                        >
-                          <div className="flex items-center justify-between gap-3">
-                            <div className="text-sm font-medium text-white">{entry.date}</div>
-                            <div className="text-xs text-slate-400">
-                              {formatHealthStat(entry.sleep_hours, 1)} hr sleep
-                            </div>
+                    {workoutEntries[0] ? (
+                      <div className="rounded-[1.2rem] border border-white/8 bg-white/5 px-4 py-3">
+                        <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Workout spotlight</div>
+                        <div className="mt-2 flex items-center justify-between gap-3">
+                          <div className="text-sm font-medium text-white">
+                            {formatWorkoutLabel(workoutEntries[0].activity_label)}
                           </div>
-                          <div className="mt-2 flex flex-wrap gap-3 text-xs text-slate-300">
-                            <span>{formatHealthStat(entry.steps)} steps</span>
-                            <span>{formatHealthStat(entry.active_energy_kcal)} kcal</span>
-                            <span>{formatHealthStat(entry.workouts)} workouts</span>
+                          <div className="text-xs text-slate-400">
+                            {formatHealthStat(workoutEntries[0].duration_minutes)} min
                           </div>
                         </div>
-                      ))}
-                    </div>
+                        <div className="mt-1 text-xs text-slate-400">
+                          {formatScheduleDateTime(workoutEntries[0].start_date)}
+                        </div>
+                        <div className="mt-2 flex flex-wrap gap-3 text-xs text-slate-300">
+                          <span>{formatHealthStat(workoutEntries[0].total_distance_km, 1)} km</span>
+                          <span>{formatHealthStat(workoutEntries[0].active_energy_kcal)} kcal</span>
+                          <span>{formatHealthStat(workoutEntries[0].avg_heart_rate_bpm)} avg bpm</span>
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {mappedWorkoutEntries.length ? (
+                      <div className="rounded-[1.2rem] border border-white/8 bg-white/5 px-4 py-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <div>
+                            <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Workout route</div>
+                            <div className="mt-1 text-sm font-medium text-white">{formatWorkoutLabel(mappedWorkoutEntries[0].activity_label)}</div>
+                          </div>
+                          <div className="text-[11px] text-slate-400">
+                            {formatHealthStat(mappedWorkoutEntries[0].total_distance_km, 1)} km
+                          </div>
+                        </div>
+                        <div className="mt-3 overflow-hidden rounded-[1rem] border border-white/8 bg-[radial-gradient(circle_at_top_left,rgba(56,189,248,0.12),transparent_32%),linear-gradient(180deg,rgba(9,12,22,0.96),rgba(15,18,28,0.96))]">
+                          <MovementMap entry={workoutToMapEntry(mappedWorkoutEntries[0])} className="h-[340px] min-h-[340px]" />
+                        </div>
+                        <div className="mt-3 flex flex-wrap gap-2 text-[11px] text-slate-300">
+                          <span className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1">
+                            {formatScheduleDateTime(mappedWorkoutEntries[0].start_date)}
+                          </span>
+                          <span className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1">
+                            {mappedWorkoutEntries[0].route_points.length} route point{mappedWorkoutEntries[0].route_points.length === 1 ? "" : "s"}
+                          </span>
+                        </div>
+                      </div>
+                    ) : null}
 
                     <div className="space-y-2">
                       <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Movement storyboard</div>
@@ -1421,34 +1546,6 @@ function MobilePageContent() {
                       )}
                     </div>
 
-                    <div className="space-y-2">
-                      <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Recent movement days</div>
-                      {movementEntries.length ? (
-                        movementEntries.slice(0, 6).map((entry) => (
-                          <div
-                            key={entry.date}
-                            className="rounded-[1.2rem] border border-white/8 bg-white/5 px-4 py-3"
-                          >
-                            <div className="flex items-center justify-between gap-3">
-                              <div className="text-sm font-medium text-white">{entry.date}</div>
-                              <div className="text-xs text-slate-400">
-                                {formatHealthStat(entry.total_distance_km, 1)} km
-                              </div>
-                            </div>
-                            <div className="mt-2 text-xs text-slate-300">
-                              {entry.visited_places_count} visits · {formatMinutes(entry.time_away_minutes)} away · {formatMovementWindow(entry.commute_start, entry.commute_end)}
-                            </div>
-                            <div className="mt-2 text-sm leading-6 text-slate-200">
-                              {entry.movement_story || "No movement story available."}
-                            </div>
-                          </div>
-                        ))
-                      ) : (
-                        <div className="rounded-[1.2rem] border border-dashed border-white/10 px-4 py-4 text-sm text-slate-400">
-                          No movement history yet.
-                        </div>
-                      )}
-                    </div>
                   </>
                 ) : (
                   <div className="rounded-[1.2rem] border border-dashed border-white/10 px-4 py-4 text-sm text-slate-400">

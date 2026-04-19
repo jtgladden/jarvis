@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { MessageSquare, RefreshCw, Sparkles } from "lucide-react";
+import { Archive, Inbox, MessageSquare, RefreshCw, Sparkles, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 
@@ -10,6 +10,7 @@ type AssistantSource = {
   label: string;
   kind: string;
   detail?: string | null;
+  url?: string | null;
 };
 
 type AssistantMessage = {
@@ -37,12 +38,14 @@ type AssistantChatSummary = {
   title: string;
   preview: string;
   message_count: number;
+  archived?: boolean;
   updated_at?: string | null;
 };
 
 type AssistantChatThread = {
   id: string;
   title: string;
+  archived?: boolean;
   messages: Array<{
     id: string;
     role: "user" | "assistant";
@@ -63,6 +66,8 @@ type AssistantPanelProps = {
 
 const LOCAL_THREADS_KEY = "jarvis_assistant_threads_v1";
 const LOCAL_ACTIVE_CHAT_KEY = "jarvis_assistant_active_chat_v1";
+const LOCAL_ARCHIVED_CHAT_IDS_KEY = "jarvis_assistant_archived_chat_ids_v1";
+const LOCAL_DELETED_CHAT_IDS_KEY = "jarvis_assistant_deleted_chat_ids_v1";
 
 async function getErrorMessage(response: Response, fallback: string) {
   try {
@@ -124,6 +129,21 @@ function safeLocalStorageSet(key: string, value: string) {
   }
 }
 
+function loadLocalIdSet(key: string) {
+  const raw = safeLocalStorageGet(key);
+  if (!raw) return new Set<string>();
+  try {
+    const parsed = JSON.parse(raw) as string[];
+    return new Set(Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : []);
+  } catch {
+    return new Set<string>();
+  }
+}
+
+function saveLocalIdSet(key: string, values: Set<string>) {
+  safeLocalStorageSet(key, JSON.stringify(Array.from(values)));
+}
+
 function buildChatSummaryFromThread(thread: AssistantChatThread): AssistantChatSummary {
   const firstUserMessage = thread.messages.find((message) => message.role === "user");
   const lastMessage = thread.messages[thread.messages.length - 1];
@@ -132,6 +152,7 @@ function buildChatSummaryFromThread(thread: AssistantChatThread): AssistantChatS
     title: thread.title || firstUserMessage?.content.slice(0, 80) || "New chat",
     preview: lastMessage?.content || "",
     message_count: thread.messages.length,
+    archived: Boolean(thread.archived),
     updated_at: thread.updated_at || lastMessage?.created_at || null,
   };
 }
@@ -153,8 +174,18 @@ function saveLocalThread(thread: AssistantChatThread) {
   safeLocalStorageSet(LOCAL_THREADS_KEY, JSON.stringify(threads));
 }
 
-function localThreadSummaries(): AssistantChatSummary[] {
+function removeLocalThread(chatId: string) {
+  const threads = loadLocalThreads();
+  delete threads[chatId];
+  safeLocalStorageSet(LOCAL_THREADS_KEY, JSON.stringify(threads));
+}
+
+function localThreadSummaries(archived: boolean): AssistantChatSummary[] {
+  const archivedIds = loadLocalIdSet(LOCAL_ARCHIVED_CHAT_IDS_KEY);
+  const deletedIds = loadLocalIdSet(LOCAL_DELETED_CHAT_IDS_KEY);
   return Object.values(loadLocalThreads())
+    .filter((thread) => !deletedIds.has(thread.id))
+    .filter((thread) => archivedIds.has(thread.id) === archived)
     .map(buildChatSummaryFromThread)
     .sort((left, right) => (right.updated_at || "").localeCompare(left.updated_at || ""));
 }
@@ -170,6 +201,7 @@ export function AssistantPanel({
 }: AssistantPanelProps) {
   const [chats, setChats] = useState<AssistantChatSummary[]>([]);
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
+  const [chatTab, setChatTab] = useState<"active" | "archived">("active");
   const [messages, setMessages] = useState<AssistantMessage[]>([]);
   const [question, setQuestion] = useState("");
   const [loading, setLoading] = useState(false);
@@ -182,9 +214,11 @@ export function AssistantPanel({
     [messages]
   );
 
-  const loadChats = useCallback(async () => {
+  const loadChats = useCallback(async (tab: "active" | "archived" = chatTab) => {
     try {
-      const response = await fetch(`${apiBase}/assistant/chats`);
+      const response = await fetch(
+        `${apiBase}/assistant/chats${tab === "archived" ? "/archived" : ""}`
+      );
       if (!response.ok) {
         throw new Error(
           await getErrorMessage(response, `Assistant chats request failed with status ${response.status}`)
@@ -194,7 +228,7 @@ export function AssistantPanel({
       const serverChats = data.chats || [];
       const merged = [...serverChats];
       const seen = new Set(serverChats.map((chat) => chat.id));
-      for (const localChat of localThreadSummaries()) {
+      for (const localChat of localThreadSummaries(tab === "archived")) {
         if (!seen.has(localChat.id)) {
           merged.push(localChat);
         }
@@ -202,10 +236,10 @@ export function AssistantPanel({
       merged.sort((left, right) => (right.updated_at || "").localeCompare(left.updated_at || ""));
       setChats(merged);
     } catch (err) {
-      setChats(localThreadSummaries());
+      setChats(localThreadSummaries(tab === "archived"));
       setError(err instanceof Error ? err.message : "Failed to load assistant chats.");
     }
-  }, [apiBase]);
+  }, [apiBase, chatTab]);
 
   const loadChatThread = useCallback(async (chatId: string) => {
     setHistoryLoading(true);
@@ -257,8 +291,8 @@ export function AssistantPanel({
   }, [apiBase]);
 
   useEffect(() => {
-    void loadChats();
-  }, [loadChats]);
+    void loadChats(chatTab);
+  }, [chatTab, loadChats]);
 
   useEffect(() => {
     const savedActiveChatId = safeLocalStorageGet(LOCAL_ACTIVE_CHAT_KEY);
@@ -340,6 +374,7 @@ export function AssistantPanel({
       const localThread: AssistantChatThread = {
         id: data.chat_id,
         title: nextMessages.find((message) => message.role === "user")?.content.slice(0, 80) || "New chat",
+        archived: false,
         updated_at: new Date().toISOString(),
         messages: nextMessages.map((message, index) => ({
           id: message.id || `${data.chat_id}-${index}`,
@@ -352,7 +387,7 @@ export function AssistantPanel({
         })),
       };
       saveLocalThread(localThread);
-      await loadChats();
+      await loadChats(chatTab);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Ask Jarvis failed.");
     } finally {
@@ -369,6 +404,64 @@ export function AssistantPanel({
     setContextSummary("");
   };
 
+  const archiveChatById = useCallback(async (chatId: string, archived: boolean) => {
+    setError("");
+    try {
+      const response = await fetch(`${apiBase}/assistant/chats/${chatId}/archive?archived=${archived ? "true" : "false"}`, {
+        method: "PATCH",
+      });
+      if (!response.ok) {
+        throw new Error(
+          await getErrorMessage(response, `Assistant archive request failed with status ${response.status}`)
+        );
+      }
+    } catch (err) {
+      const archivedIds = loadLocalIdSet(LOCAL_ARCHIVED_CHAT_IDS_KEY);
+      if (archived) {
+        archivedIds.add(chatId);
+      } else {
+        archivedIds.delete(chatId);
+      }
+      saveLocalIdSet(LOCAL_ARCHIVED_CHAT_IDS_KEY, archivedIds);
+      if (!(err instanceof Error)) {
+        setError("Unable to update archive state on the server. Kept the change locally.");
+      }
+    }
+
+    if (activeChatId === chatId) {
+      startNewChat();
+    }
+    await loadChats(chatTab);
+  }, [activeChatId, apiBase, chatTab, loadChats]);
+
+  const deleteChatById = useCallback(async (chatId: string) => {
+    setError("");
+    try {
+      const response = await fetch(`${apiBase}/assistant/chats/${chatId}`, {
+        method: "DELETE",
+      });
+      if (!response.ok) {
+        throw new Error(
+          await getErrorMessage(response, `Assistant delete request failed with status ${response.status}`)
+        );
+      }
+    } catch (err) {
+      if (!(err instanceof Error)) {
+        setError("Unable to delete chat on the server. Removed it locally.");
+      }
+    }
+
+    const deletedIds = loadLocalIdSet(LOCAL_DELETED_CHAT_IDS_KEY);
+    deletedIds.add(chatId);
+    saveLocalIdSet(LOCAL_DELETED_CHAT_IDS_KEY, deletedIds);
+    removeLocalThread(chatId);
+
+    if (activeChatId === chatId) {
+      startNewChat();
+    }
+    await loadChats(chatTab);
+  }, [activeChatId, apiBase, chatTab, loadChats]);
+
   return (
     <div className={compact ? "space-y-4" : "grid gap-5 lg:grid-cols-[280px_minmax(0,1fr)]"}>
       <div className="space-y-3">
@@ -379,31 +472,73 @@ export function AssistantPanel({
             New
           </Button>
         </div>
+        <div className="grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            onClick={() => setChatTab("active")}
+            className={`rounded-full border px-3 py-2 text-xs transition ${
+              chatTab === "active"
+                ? "border-cyan-300/30 bg-cyan-400/10 text-cyan-100"
+                : "border-white/8 bg-white/5 text-slate-300 hover:border-white/14"
+            }`}
+          >
+            Active
+          </button>
+          <button
+            type="button"
+            onClick={() => setChatTab("archived")}
+            className={`rounded-full border px-3 py-2 text-xs transition ${
+              chatTab === "archived"
+                ? "border-cyan-300/30 bg-cyan-400/10 text-cyan-100"
+                : "border-white/8 bg-white/5 text-slate-300 hover:border-white/14"
+            }`}
+          >
+            Archived
+          </button>
+        </div>
         <div className={`${compact ? "grid gap-2" : "max-h-[700px] space-y-2 overflow-y-auto pr-1"}`}>
           {chats.length ? (
             chats.map((chat) => (
-              <button
+              <div
                 key={chat.id}
-                type="button"
-                onClick={() => void loadChatThread(chat.id)}
-                className={`w-full rounded-[1.2rem] border px-4 py-3 text-left transition ${
+                className={`flex items-center gap-2 rounded-[1rem] border px-2 py-2 transition ${
                   activeChatId === chat.id
                     ? "border-cyan-300/28 bg-cyan-400/10"
                     : "border-white/8 bg-[rgba(255,255,255,0.04)] hover:border-white/14 hover:bg-[rgba(255,255,255,0.06)]"
                 }`}
               >
-                <div className="text-sm font-medium text-slate-100">{chat.title || "New chat"}</div>
-                <div className="mt-1 text-xs leading-5 text-slate-400">
-                  {chat.preview || `${chat.message_count} saved messages`}
-                </div>
-                <div className="mt-2 text-[11px] uppercase tracking-[0.16em] text-slate-500">
-                  {formatUpdatedAt(chat.updated_at)}
-                </div>
-              </button>
+                <button
+                  type="button"
+                  onClick={() => void loadChatThread(chat.id)}
+                  className="min-w-0 flex-1 text-left"
+                >
+                  <div className="truncate text-sm font-medium text-slate-100">{chat.title || "New chat"}</div>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void archiveChatById(chat.id, chatTab !== "archived")}
+                  className="rounded-lg border border-white/8 p-2 text-slate-400 transition hover:border-white/14 hover:text-slate-200"
+                  aria-label={chatTab === "archived" ? "Unarchive chat" : "Archive chat"}
+                  title={chatTab === "archived" ? "Unarchive" : "Archive"}
+                >
+                  {chatTab === "archived" ? <Inbox className="h-3.5 w-3.5" /> : <Archive className="h-3.5 w-3.5" />}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void deleteChatById(chat.id)}
+                  className="rounded-lg border border-white/8 p-2 text-slate-400 transition hover:border-rose-400/30 hover:text-rose-200"
+                  aria-label="Delete chat"
+                  title="Delete"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              </div>
             ))
           ) : (
             <div className="rounded-[1.2rem] border border-dashed border-white/10 px-4 py-5 text-sm leading-6 text-slate-400">
-              No saved chats yet. Start a conversation and Jarvis will keep it here.
+              {chatTab === "archived"
+                ? "No archived chats yet."
+                : "No saved chats yet. Start a conversation and Jarvis will keep it here."}
             </div>
           )}
         </div>
@@ -421,7 +556,7 @@ export function AssistantPanel({
                 Ask about mail, tasks, journal, movement, health, and what deserves attention next.
               </div>
             </div>
-            <Button type="button" variant="outline" className="rounded-2xl" onClick={() => void loadChats()}>
+            <Button type="button" variant="outline" className="rounded-2xl" onClick={() => void loadChats(chatTab)}>
               <RefreshCw className="mr-2 h-4 w-4" />
               Refresh
             </Button>
@@ -465,9 +600,26 @@ export function AssistantPanel({
                 {message.sources?.length ? (
                   <div className="mt-3 flex flex-wrap gap-2">
                     {message.sources.map((source) => (
-                      <Badge key={`${source.id}-${source.label}`} variant="outline" className="rounded-xl">
-                        {source.label}
-                      </Badge>
+                      source.url ? (
+                        <a
+                          key={`${source.id}-${source.label}`}
+                          href={source.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex"
+                        >
+                          <Badge
+                            variant="outline"
+                            className="rounded-xl border-cyan-300/20 bg-cyan-400/8 text-cyan-100 hover:border-cyan-300/35 hover:bg-cyan-400/14"
+                          >
+                            {source.label}
+                          </Badge>
+                        </a>
+                      ) : (
+                        <Badge key={`${source.id}-${source.label}`} variant="outline" className="rounded-xl">
+                          {source.label}
+                        </Badge>
+                      )
                     ))}
                   </div>
                 ) : null}

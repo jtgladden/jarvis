@@ -9,3 +9,4 @@ data/tasks.db
 data/health.db
 data/movement.db
 data/assistant_chat.db
+data/workouts.db

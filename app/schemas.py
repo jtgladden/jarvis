@@ -460,6 +460,68 @@ class HealthListResponse(BaseModel):
     entries: List[HealthDailyEntry] = Field(default_factory=list)
 
 
+class WorkoutRoutePoint(BaseModel):
+    timestamp: str
+    latitude: float
+    longitude: float
+    altitude_m: Optional[float] = None
+    horizontal_accuracy_m: Optional[float] = None
+    vertical_accuracy_m: Optional[float] = None
+
+
+class WorkoutEntry(BaseModel):
+    workout_id: str
+    date: str
+    source: str = "ios_healthkit_workout"
+    activity_type: str = "other"
+    activity_label: str = "Other"
+    start_date: str
+    end_date: str
+    duration_minutes: float = 0
+    total_distance_km: Optional[float] = None
+    active_energy_kcal: Optional[float] = None
+    avg_heart_rate_bpm: Optional[float] = None
+    max_heart_rate_bpm: Optional[float] = None
+    source_name: Optional[str] = None
+    route_points: List[WorkoutRoutePoint] = Field(default_factory=list)
+    synced_at: Optional[str] = None
+
+
+class WorkoutSyncRequest(BaseModel):
+    workout_id: str
+    date: str
+    source: str = "ios_healthkit_workout"
+    activity_type: str = "other"
+    activity_label: str = "Other"
+    start_date: str
+    end_date: str
+    duration_minutes: float = 0
+    total_distance_km: Optional[float] = None
+    active_energy_kcal: Optional[float] = None
+    avg_heart_rate_bpm: Optional[float] = None
+    max_heart_rate_bpm: Optional[float] = None
+    source_name: Optional[str] = None
+    route_points: List[WorkoutRoutePoint] = Field(default_factory=list)
+
+
+class WorkoutBatchSyncRequest(BaseModel):
+    workouts: List[WorkoutSyncRequest] = Field(default_factory=list)
+
+
+class WorkoutSyncResponse(BaseModel):
+    saved: bool = True
+    workout: WorkoutEntry
+
+
+class WorkoutBatchSyncResponse(BaseModel):
+    saved: int = 0
+    workouts: List[WorkoutEntry] = Field(default_factory=list)
+
+
+class WorkoutListResponse(BaseModel):
+    workouts: List[WorkoutEntry] = Field(default_factory=list)
+
+
 class MovementVisit(BaseModel):
     arrival: Optional[str] = None
     departure: Optional[str] = None
@@ -540,8 +602,9 @@ class AssistantAskRequest(BaseModel):
 class AssistantSource(BaseModel):
     id: str
     label: str
-    kind: Literal["dashboard", "mail", "tasks", "calendar", "health", "movement", "journal", "news", "system"] = "system"
+    kind: Literal["dashboard", "mail", "tasks", "calendar", "health", "movement", "workout", "journal", "news", "web", "system"] = "system"
     detail: Optional[str] = None
+    url: Optional[str] = None
 
 
 class AssistantAskResponse(BaseModel):
@@ -559,6 +622,7 @@ class AssistantChatSummary(BaseModel):
     title: str = ""
     preview: str = ""
     message_count: int = 0
+    archived: bool = False
     updated_at: Optional[str] = None
 
 
@@ -569,5 +633,6 @@ class AssistantChatListResponse(BaseModel):
 class AssistantChatThread(BaseModel):
     id: str
     title: str = ""
+    archived: bool = False
     messages: List[AssistantStoredMessage] = Field(default_factory=list)
     updated_at: Optional[str] = None
