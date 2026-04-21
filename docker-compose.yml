@@ -8,6 +8,10 @@ services:
       GMAIL_CREDENTIALS_FILE: /data/credentials.json
       JOURNAL_DB: /data/journal_entries.db
       TASKS_DB: /data/tasks.db
+      HEALTH_DB: /data/health.db
+      MOVEMENT_DB: /data/movement.db
+      WORKOUT_DB: /data/workouts.db
+      ASSISTANT_CHAT_DB: /data/assistant_chat.db
       CLASSIFICATION_CACHE_DB: /data/classification_cache.db
       CLASSIFICATION_GUIDANCE_FILE: /data/classification_guidance.json
       OPENAI_MAX_EMAILS_PER_RUN: ${OPENAI_MAX_EMAILS_PER_RUN:-15}

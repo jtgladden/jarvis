@@ -1578,6 +1578,18 @@ function MobilePageContent() {
                           <div className="mt-3 text-xs text-slate-200">
                             {formatMovementWindow(latestMovementEntry.commute_start, latestMovementEntry.commute_end)}
                           </div>
+                          {latestMovementEntry.place_labels.length ? (
+                            <div className="mt-3 flex flex-wrap gap-2">
+                              {latestMovementEntry.place_labels.map((label) => (
+                                <span
+                                  key={label}
+                                  className="rounded-full border border-emerald-300/20 bg-black/10 px-2.5 py-1 text-[11px] text-emerald-50"
+                                >
+                                  {label}
+                                </span>
+                              ))}
+                            </div>
+                          ) : null}
                         </>
                       ) : (
                         <div className="mt-2 text-sm text-slate-300">

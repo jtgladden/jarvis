@@ -44,10 +44,14 @@ The backend stores its persistent local state in the mounted `data/` folder, inc
 - `data/token.json`
 - `data/journal_entries.db`
 - `data/tasks.db`
+- `data/health.db`
+- `data/movement.db`
+- `data/workouts.db`
+- `data/assistant_chat.db`
 - `data/classification_cache.db`
 - `data/classification_guidance.json`
 
-That means Gmail auth, journal entries, task edits/completions, saved classification cache, and guidance survive container restarts as long as the `data/` folder is preserved.
+That means Gmail auth, journal entries, task edits/completions, health history, movement history, workout history, assistant chat history, saved classification cache, and guidance survive container restarts as long as the `data/` folder is preserved.
 
 ### Important Gmail note
 

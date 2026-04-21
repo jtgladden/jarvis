@@ -58,11 +58,27 @@ struct LocalMovementDayJournal: Codable {
     var movementStory: String
 }
 
+struct StoredPlaceCluster: Codable {
+    let id: String
+    var label: String
+    var latitude: Double
+    var longitude: Double
+    var visitCount: Int
+    var lastResolvedAt: String?
+}
+
 @MainActor
 final class MovementManager: NSObject, ObservableObject {
     private enum StorageKeys {
         static let movementJournal = "jarvis_movement_journal"
         static let movementSyncBaseURL = "jarvis_movement_sync_base_url"
+        static let movementPlaceClusters = "jarvis_movement_place_clusters"
+        static let legacyMovementPlaceLabelCache = "jarvis_movement_place_label_cache"
+    }
+
+    private enum PlaceLabeling {
+        static let clusterMatchRadiusMeters: CLLocationDistance = 100
+        static let coordinateMatchThreshold = 0.0001
     }
 
     @Published var authorizationStatus: CLAuthorizationStatus
@@ -72,17 +88,21 @@ final class MovementManager: NSObject, ObservableObject {
     @Published var todaySummary: String?
 
     private let locationManager = CLLocationManager()
+    private let geocoder = CLGeocoder()
     private let userDefaults: UserDefaults
     private var lastRecordedLocation: CLLocation?
     private var syncTask: Task<Void, Never>?
     private var lastSyncAttemptAt: Date?
     private var configuredBaseURL: String?
     private var isForegroundLocationUpdatesActive = false
+    private var placeClusters: [StoredPlaceCluster]
+    private var labelRequestsInFlight: Set<String> = []
 
     init(userDefaults: UserDefaults = .standard) {
         self.userDefaults = userDefaults
         self.authorizationStatus = locationManager.authorizationStatus
         self.configuredBaseURL = userDefaults.string(forKey: StorageKeys.movementSyncBaseURL)
+        self.placeClusters = Self.loadPlaceClusters(from: userDefaults)
         super.init()
         locationManager.delegate = self
         locationManager.activityType = .fitness
@@ -125,6 +145,7 @@ final class MovementManager: NSObject, ObservableObject {
     func handleAppBecameActive() {
         resumeAutomaticTrackingIfAuthorized()
         startForegroundLocationUpdatesIfNeeded()
+        resolveMissingLabelsForToday()
         scheduleAutomaticSync(reason: "app active")
     }
 
@@ -331,6 +352,150 @@ final class MovementManager: NSObject, ObservableObject {
         }
     }
 
+    private func resolveMissingLabelsForToday() {
+        let journal = loadTodayJournal()
+        for visit in journal.visits where (visit.label?.isEmpty ?? true) {
+            let location = CLLocation(latitude: visit.latitude, longitude: visit.longitude)
+            resolvePlaceLabel(
+                for: location,
+                arrival: visit.arrival,
+                departure: visit.departure
+            )
+        }
+    }
+
+    private func resolvePlaceLabel(for location: CLLocation, arrival: String?, departure: String?) {
+        if let existingCluster = nearestPlaceCluster(to: location) {
+            applyResolvedLabel(
+                existingCluster.label,
+                arrival: arrival,
+                departure: departure,
+                latitude: location.coordinate.latitude,
+                longitude: location.coordinate.longitude
+            )
+            return
+        }
+
+        let requestKey = Self.requestKey(for: location.coordinate.latitude, longitude: location.coordinate.longitude)
+        guard !labelRequestsInFlight.contains(requestKey) else {
+            return
+        }
+
+        labelRequestsInFlight.insert(requestKey)
+
+        Task { @MainActor in
+            defer { self.labelRequestsInFlight.remove(requestKey) }
+
+            do {
+                let placemarks = try await geocoder.reverseGeocodeLocation(location)
+                guard let label = Self.bestPlaceLabel(from: placemarks.first), !label.isEmpty else {
+                    return
+                }
+
+                self.upsertPlaceCluster(label: label, at: location)
+                self.applyResolvedLabel(
+                    self.bestStoredLabel(near: location) ?? label,
+                    arrival: arrival,
+                    departure: departure,
+                    latitude: location.coordinate.latitude,
+                    longitude: location.coordinate.longitude
+                )
+            } catch {
+            }
+        }
+    }
+
+    private func nearestPlaceCluster(to location: CLLocation) -> StoredPlaceCluster? {
+        placeClusters
+            .compactMap { cluster -> (StoredPlaceCluster, CLLocationDistance)? in
+                let clusterLocation = CLLocation(latitude: cluster.latitude, longitude: cluster.longitude)
+                let distance = clusterLocation.distance(from: location)
+                guard distance <= PlaceLabeling.clusterMatchRadiusMeters else {
+                    return nil
+                }
+                return (cluster, distance)
+            }
+            .min(by: { $0.1 < $1.1 })?
+            .0
+    }
+
+    private func bestStoredLabel(near location: CLLocation) -> String? {
+        nearestPlaceCluster(to: location)?.label
+    }
+
+    private func upsertPlaceCluster(label: String, at location: CLLocation) {
+        let resolvedAt = Self.isoTimestampString(for: Date())
+
+        if let existingIndex = nearestPlaceClusterIndex(to: location) {
+            var cluster = placeClusters[existingIndex]
+            let nextCount = max(cluster.visitCount, 0) + 1
+            cluster.latitude = ((cluster.latitude * Double(cluster.visitCount)) + location.coordinate.latitude) / Double(nextCount)
+            cluster.longitude = ((cluster.longitude * Double(cluster.visitCount)) + location.coordinate.longitude) / Double(nextCount)
+            cluster.visitCount = nextCount
+            cluster.lastResolvedAt = resolvedAt
+            cluster.label = Self.preferredPlaceLabel(existing: cluster.label, candidate: label)
+            placeClusters[existingIndex] = cluster
+        } else {
+            placeClusters.append(
+                StoredPlaceCluster(
+                    id: UUID().uuidString,
+                    label: label,
+                    latitude: location.coordinate.latitude,
+                    longitude: location.coordinate.longitude,
+                    visitCount: 1,
+                    lastResolvedAt: resolvedAt
+                )
+            )
+        }
+
+        savePlaceClusters()
+    }
+
+    private func nearestPlaceClusterIndex(to location: CLLocation) -> Int? {
+        placeClusters
+            .enumerated()
+            .compactMap { index, cluster -> (Int, CLLocationDistance)? in
+                let clusterLocation = CLLocation(latitude: cluster.latitude, longitude: cluster.longitude)
+                let distance = clusterLocation.distance(from: location)
+                guard distance <= PlaceLabeling.clusterMatchRadiusMeters else {
+                    return nil
+                }
+                return (index, distance)
+            }
+            .min(by: { $0.1 < $1.1 })?
+            .0
+    }
+
+    private func applyResolvedLabel(
+        _ label: String,
+        arrival: String?,
+        departure: String?,
+        latitude: Double,
+        longitude: Double
+    ) {
+        updateTodayJournal { journal in
+            guard let index = journal.visits.firstIndex(where: {
+                Self.coordinatesMatch(lhsLatitude: $0.latitude, lhsLongitude: $0.longitude, rhsLatitude: latitude, rhsLongitude: longitude)
+                    && $0.arrival == arrival
+                    && $0.departure == departure
+            }) else {
+                return
+            }
+
+            let visit = journal.visits[index]
+            journal.visits[index] = LocalMovementVisit(
+                arrival: visit.arrival,
+                departure: visit.departure,
+                latitude: visit.latitude,
+                longitude: visit.longitude,
+                horizontalAccuracyMeters: visit.horizontalAccuracyMeters,
+                label: label
+            )
+        }
+
+        scheduleAutomaticSync(reason: "place labeled")
+    }
+
     private func activateTracking(includeForegroundLiveUpdates: Bool) {
         isTracking = true
         errorMessage = nil
@@ -416,6 +581,129 @@ final class MovementManager: NSObject, ObservableObject {
     private static func miles(fromMeters meters: Double) -> Double {
         meters / 1609.344
     }
+
+    private static func loadPlaceClusters(from userDefaults: UserDefaults) -> [StoredPlaceCluster] {
+        if
+            let data = userDefaults.data(forKey: StorageKeys.movementPlaceClusters),
+            let decoded = try? JSONDecoder().decode([StoredPlaceCluster].self, from: data)
+        {
+            return decoded
+        }
+
+        if
+            let legacyData = userDefaults.data(forKey: StorageKeys.legacyMovementPlaceLabelCache),
+            let legacyCache = try? JSONDecoder().decode([String: String].self, from: legacyData)
+        {
+            return legacyCache.compactMap { key, value in
+                let parts = key.split(separator: ",")
+                guard
+                    parts.count == 2,
+                    let latitude = Double(parts[0]),
+                    let longitude = Double(parts[1]),
+                    !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                else {
+                    return nil
+                }
+
+                return StoredPlaceCluster(
+                    id: UUID().uuidString,
+                    label: value,
+                    latitude: latitude,
+                    longitude: longitude,
+                    visitCount: 1,
+                    lastResolvedAt: nil
+                )
+            }
+        }
+
+        return []
+    }
+
+    private func savePlaceClusters() {
+        guard let data = try? JSONEncoder().encode(placeClusters) else {
+            return
+        }
+
+        userDefaults.set(data, forKey: StorageKeys.movementPlaceClusters)
+    }
+
+    private static func requestKey(for latitude: Double, longitude: Double) -> String {
+        String(format: "%.4f,%.4f", latitude, longitude)
+    }
+
+    private static func coordinatesMatch(
+        lhsLatitude: Double,
+        lhsLongitude: Double,
+        rhsLatitude: Double,
+        rhsLongitude: Double
+    ) -> Bool {
+        abs(lhsLatitude - rhsLatitude) < PlaceLabeling.coordinateMatchThreshold &&
+            abs(lhsLongitude - rhsLongitude) < PlaceLabeling.coordinateMatchThreshold
+    }
+
+    private static func bestPlaceLabel(from placemark: CLPlacemark?) -> String? {
+        guard let placemark else {
+            return nil
+        }
+
+        let candidates: [String?] = [
+            placemark.name,
+            [placemark.subLocality, placemark.locality].compactMap { $0 }.joined(separator: ", "),
+            placemark.locality,
+            placemark.subAdministrativeArea,
+            placemark.administrativeArea
+        ]
+
+        for candidate in candidates {
+            let trimmed = (candidate ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                return trimmed
+            }
+        }
+
+        return nil
+    }
+
+    private static func preferredPlaceLabel(existing: String, candidate: String) -> String {
+        let existingTrimmed = existing.trimmingCharacters(in: .whitespacesAndNewlines)
+        let candidateTrimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !candidateTrimmed.isEmpty else {
+            return existingTrimmed
+        }
+        guard !existingTrimmed.isEmpty else {
+            return candidateTrimmed
+        }
+
+        let existingScore = placeLabelQualityScore(existingTrimmed)
+        let candidateScore = placeLabelQualityScore(candidateTrimmed)
+
+        if candidateScore > existingScore {
+            return candidateTrimmed
+        }
+
+        return existingTrimmed
+    }
+
+    private static func placeLabelQualityScore(_ label: String) -> Int {
+        let lowered = label.lowercased()
+        var score = 0
+
+        if label.contains(",") {
+            score += 2
+        }
+        if lowered.rangeOfCharacter(from: .decimalDigits) != nil {
+            score -= 2
+        }
+        if label.count <= 28 {
+            score += 2
+        }
+        if label.split(separator: " ").count <= 4 {
+            score += 1
+        }
+
+        return score
+    }
 }
 
 extension MovementManager: CLLocationManagerDelegate {
@@ -441,6 +729,11 @@ extension MovementManager: CLLocationManagerDelegate {
                 )
             }
 
+            self.resolvePlaceLabel(
+                for: CLLocation(latitude: visit.coordinate.latitude, longitude: visit.coordinate.longitude),
+                arrival: visit.arrivalDate == .distantPast ? nil : Self.isoTimestampString(for: visit.arrivalDate),
+                departure: visit.departureDate == .distantFuture ? nil : Self.isoTimestampString(for: visit.departureDate)
+            )
             self.scheduleAutomaticSync(reason: "visit recorded")
         }
     }
