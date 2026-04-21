@@ -169,6 +169,11 @@ function parseCalendarDate(value: string | null | undefined) {
     if (Number.isNaN(parsed.getTime())) return null;
     return parsed;
   }
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(value)) {
+    const parsed = new Date(value.replace(" ", "T") + "Z");
+    if (Number.isNaN(parsed.getTime())) return null;
+    return parsed;
+  }
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return null;
   return parsed;
@@ -437,11 +442,66 @@ function workoutToMapEntry(workout: {
   };
 }
 
-function formatWorkoutLabel(label: string | null | undefined) {
+function workoutActivityLabelFromType(activityType: string | null | undefined) {
+  const normalized = (activityType || "").trim();
+  const rawMatch = normalized.match(/(\d+)/);
+  const rawValue = rawMatch ? Number(rawMatch[1]) : Number(normalized);
+
+  switch (rawValue) {
+    case 9:
+      return "Climbing";
+    case 13:
+      return "Cycling";
+    case 16:
+      return "Elliptical";
+    case 20:
+      return "Functional Strength";
+    case 24:
+      return "Hike";
+    case 35:
+      return "Rowing";
+    case 37:
+      return "Run";
+    case 44:
+    case 68:
+    case 69:
+      return "Stairs";
+    case 46:
+      return "Swim";
+    case 50:
+      return "Strength";
+    case 52:
+      return "Walk";
+    case 57:
+      return "Yoga";
+    case 59:
+      return "Core Training";
+    case 63:
+      return "HIIT";
+    case 66:
+      return "Pilates";
+    case 73:
+      return "Mixed Cardio";
+    case 77:
+      return "Dance";
+    case 79:
+      return "Pickleball";
+    case 80:
+      return "Cooldown";
+    default:
+      return null;
+  }
+}
+
+function formatWorkoutLabel(label: string | null | undefined, activityType?: string | null) {
   const normalized = (label || "").trim();
-  if (!normalized) return "Workout";
-  if (/^\(RawValue:\s*\d+\)$/i.test(normalized)) return "Workout";
-  return normalized;
+  if (normalized && !/^workout$/i.test(normalized) && !/^\(RawValue:\s*\d+\)$/i.test(normalized)) {
+    return normalized;
+  }
+
+  const fallback = workoutActivityLabelFromType(activityType);
+  if (fallback) return fallback;
+  return "Workout";
 }
 
 function formatTimeOnly(value: string | null | undefined) {
@@ -509,25 +569,6 @@ function buildMovementStoryboard(entry: MovementDailyEntry) {
   }
 
   return items;
-}
-
-function buildMovementRibbonSegments(entry: MovementDailyEntry) {
-  const total = Math.max(entry.visited_places_count, 1);
-  if (!entry.visits.length) {
-    return [
-      {
-        id: "movement",
-        width: 100,
-        label: "Movement",
-      },
-    ];
-  }
-
-  return entry.visits.slice(0, 6).map((visit, index) => ({
-    id: `${visit.latitude}-${visit.longitude}-${index}`,
-    width: Math.max(100 / total, 12),
-    label: formatMovementVisitTitle(visit, index),
-  }));
 }
 
 function formatScheduleTimeRange(item: {
@@ -881,7 +922,6 @@ function HealthDetailPanel({
     return parsed ? formatLocalDateKey(parsed) === activeHealthDate : false;
   });
   const movementStoryboard = selectedMovementEntry ? buildMovementStoryboard(selectedMovementEntry) : [];
-  const movementRibbonSegments = selectedMovementEntry ? buildMovementRibbonSegments(selectedMovementEntry) : [];
   const mappedWorkouts = selectedWorkoutEntries.filter((workout) => workout.route_points.length > 1).slice(0, 2);
   const featuredWorkout = selectedWorkoutEntries[0] ?? null;
   const hasMovementMap = Boolean(
@@ -1063,7 +1103,7 @@ function HealthDetailPanel({
                       <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
                         <div>
                           <div className="text-sm font-medium text-slate-100">
-                            {formatWorkoutLabel(featuredWorkout.activity_label)}
+                            {formatWorkoutLabel(featuredWorkout.activity_label, featuredWorkout.activity_type)}
                           </div>
                           <div className="mt-1 text-xs text-slate-400">
                             {formatScheduleDateTime(featuredWorkout.start_date)}
@@ -1103,7 +1143,7 @@ function HealthDetailPanel({
                           <div className="flex items-center justify-between gap-3 px-4 py-3">
                             <div>
                               <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Workout route</div>
-                              <div className="mt-1 text-sm font-medium text-slate-100">{formatWorkoutLabel(workout.activity_label)}</div>
+                              <div className="mt-1 text-sm font-medium text-slate-100">{formatWorkoutLabel(workout.activity_label, workout.activity_type)}</div>
                             </div>
                             <div className="text-xs text-slate-400">
                               {formatDistanceMiles(workout.total_distance_km, 1)}
@@ -1165,38 +1205,6 @@ function HealthDetailPanel({
                               {selectedMovementEntry.visited_places_count}
                             </div>
                           </div>
-                        </div>
-                      </div>
-
-                      <div className="rounded-[1.3rem] border border-white/6 bg-[rgba(17,19,34,0.45)] p-4">
-                        <div className="flex items-center justify-between gap-3">
-                          <div>
-                            <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Day ribbon</div>
-                            <div className="mt-1 text-sm text-slate-300">A compact visual rhythm of your stops and movement.</div>
-                          </div>
-                          <div className="text-xs text-slate-400">
-                            {formatMovementWindow(selectedMovementEntry.commute_start, selectedMovementEntry.commute_end)}
-                          </div>
-                        </div>
-                        <div className="mt-4 flex h-4 overflow-hidden rounded-full border border-white/8 bg-[rgba(8,10,18,0.9)]">
-                          {movementRibbonSegments.map((segment, index) => (
-                            <div
-                              key={segment.id}
-                              className={index % 2 === 0 ? "bg-emerald-400/70" : "bg-cyan-400/70"}
-                              style={{ width: `${segment.width}%` }}
-                              title={segment.label}
-                            />
-                          ))}
-                        </div>
-                        <div className="mt-3 flex flex-wrap gap-2">
-                          {movementRibbonSegments.map((segment, index) => (
-                            <span
-                              key={`${segment.id}-label`}
-                              className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-slate-300"
-                            >
-                              {index + 1}. {segment.label}
-                            </span>
-                          ))}
                         </div>
                       </div>
 

@@ -6,6 +6,7 @@ from threading import Lock
 
 from app.config import APP_DEFAULT_USER_ID
 from app.schemas import WorkoutEntry, WorkoutRoutePoint
+from app.time_utils import normalize_utc_timestamp
 
 _db_lock = Lock()
 
@@ -76,7 +77,7 @@ def _row_to_entry(row: sqlite3.Row) -> WorkoutEntry:
         max_heart_rate_bpm=row["max_heart_rate_bpm"],
         source_name=row["source_name"],
         route_points=_decode_route_points(row["route_points_json"]),
-        synced_at=row["synced_at"],
+        synced_at=normalize_utc_timestamp(row["synced_at"]),
     )
 
 

@@ -43,7 +43,8 @@ You can still update these defaults in `Info.plist`, but the app now lets you sw
 The app now also includes a first-pass `Core Location` movement journal:
 
 - requests location authorization
-- monitors visits and significant movement
+- monitors visits and significant movement in the background
+- uses standard location updates only while the app is active for richer route detail
 - stores a local day log with visits and route points
 - syncs a daily movement summary to `POST /api/movement/daily`
 
@@ -55,6 +56,10 @@ This is a V1 foundation for:
 - approximate route polyline
 - commute start/end heuristics
 - movement story summaries
+
+## Important iOS behavior
+
+If the user force-quits the app from the app switcher, iOS may stop background delivery until the app is opened again. Ordinary backgrounding should continue to collect movement events after location permission is granted.
 
 ## Next step
 

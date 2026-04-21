@@ -6,6 +6,7 @@ from threading import Lock
 
 from app.config import APP_DEFAULT_USER_ID
 from app.schemas import MovementDailyEntry, MovementRoutePoint, MovementVisit
+from app.time_utils import normalize_utc_timestamp
 
 _db_lock = Lock()
 
@@ -72,7 +73,7 @@ def _row_to_entry(row: sqlite3.Row) -> MovementDailyEntry:
         visits=_decode_json_list(row["visits_json"], MovementVisit),
         route_points=_decode_json_list(row["route_points_json"], MovementRoutePoint),
         place_labels=json.loads(row["place_labels_json"] or "[]"),
-        synced_at=row["synced_at"],
+        synced_at=normalize_utc_timestamp(row["synced_at"]),
     )
 
 

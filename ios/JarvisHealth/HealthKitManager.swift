@@ -106,6 +106,7 @@ final class HealthKitManager: ObservableObject {
     private enum AutoSync {
         static let minimumInterval: TimeInterval = 15 * 60
         static let workoutSyncDays = 30
+        static let workoutMinimumInterval: TimeInterval = 12 * 60 * 60
     }
 
     @Published var isHealthDataAvailable = HKHealthStore.isHealthDataAvailable()
@@ -159,6 +160,7 @@ final class HealthKitManager: ObservableObject {
     private let userDefaults: UserDefaults
     private var syncTask: Task<Void, Never>?
     private var lastAutoSyncAttemptAt: Date?
+    private var lastAutoWorkoutSyncAt: Date?
     private var configuredBaseURL: String?
 
     private let quantityMetrics: [QuantityMetricDefinition] = [
@@ -536,12 +538,13 @@ final class HealthKitManager: ObservableObject {
             lastAutoSyncStatus = "Success"
             syncMessage = "Auto-synced Apple Health (\(reason)) via \(successfulBaseURL)."
 
-            if snapshot.workouts > 0 {
+            if shouldAutoSyncWorkouts(after: snapshot) {
                 let workouts = try await fetchWorkoutCandidates(days: AutoSync.workoutSyncDays, reportProgress: false)
                 if !workouts.isEmpty {
                     let workoutBaseURL = try await postWorkoutsToJarvis(workouts, candidateBaseURLs: [baseURL])
                     lastSuccessfulSyncBaseURL = workoutBaseURL
                     lastAutoSyncAt = Date()
+                    lastAutoWorkoutSyncAt = Date()
                     lastAutoSyncStatus = "Success"
                     syncMessage = "Auto-synced Apple Health and workouts (\(reason)) via \(workoutBaseURL)."
                 }
@@ -616,6 +619,10 @@ final class HealthKitManager: ObservableObject {
 
     private func buildSummaryText(from snapshot: TodayHealthSnapshot) -> String {
         var fragments = ["\(Int(snapshot.steps)) steps"]
+
+        if let distanceKM = snapshot.extraMetrics["walking_running_distance_km"] ?? nil {
+            fragments.append(String(format: "%.1f mi walked", Self.miles(fromKilometers: distanceKM)))
+        }
 
         if let activeEnergy = snapshot.activeEnergy {
             fragments.append("\(Int(activeEnergy)) active calories")
@@ -1192,6 +1199,10 @@ final class HealthKitManager: ObservableObject {
         ISO8601DateFormatter().string(from: date)
     }
 
+    private static func miles(fromKilometers kilometers: Double) -> Double {
+        kilometers * 0.621371
+    }
+
     private func normalizedBaseURL(_ rawValue: String) -> String {
         rawValue.trimmingCharacters(in: CharacterSet(charactersIn: "/ \n\t"))
     }
@@ -1232,6 +1243,18 @@ final class HealthKitManager: ObservableObject {
             }
             return value != 0
         }
+    }
+
+    private func shouldAutoSyncWorkouts(after snapshot: TodayHealthSnapshot) -> Bool {
+        if snapshot.workouts > 0 {
+            return true
+        }
+
+        guard let lastAutoWorkoutSyncAt else {
+            return true
+        }
+
+        return Date().timeIntervalSince(lastAutoWorkoutSyncAt) >= AutoSync.workoutMinimumInterval
     }
 
     private func fetchOldestSampleDate() async throws -> Date? {
@@ -1288,22 +1311,42 @@ private extension HKWorkoutActivityType {
 
     var displayName: String {
         switch self {
+        case .climbing:
+            return "Climbing"
+        case .cycling:
+            return "Cycling"
+        case .elliptical:
+            return "Elliptical"
+        case .rowing:
+            return "Rowing"
         case .running:
             return "Run"
+        case .stairClimbing, .stairs, .stepTraining:
+            return "Stairs"
         case .walking:
             return "Walk"
         case .hiking:
             return "Hike"
-        case .cycling:
-            return "Ride"
         case .swimming:
             return "Swim"
         case .traditionalStrengthTraining:
             return "Strength"
         case .functionalStrengthTraining:
             return "Functional Strength"
+        case .coreTraining:
+            return "Core Training"
         case .highIntensityIntervalTraining:
             return "HIIT"
+        case .mixedCardio, .mixedMetabolicCardioTraining:
+            return "Mixed Cardio"
+        case .pilates:
+            return "Pilates"
+        case .pickleball:
+            return "Pickleball"
+        case .dance, .danceInspiredTraining, .cardioDance, .socialDance:
+            return "Dance"
+        case .cooldown:
+            return "Cooldown"
         case .yoga:
             return "Yoga"
         default:

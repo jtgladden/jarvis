@@ -267,6 +267,11 @@ function parseCalendarDate(value: string | null | undefined) {
     const [year, month, day] = value.split("-").map(Number);
     return new Date(year, month - 1, day);
   }
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(value)) {
+    const parsed = new Date(value.replace(" ", "T") + "Z");
+    if (Number.isNaN(parsed.getTime())) return null;
+    return parsed;
+  }
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return null;
   return parsed;
@@ -395,11 +400,66 @@ function workoutToMapEntry(workout: {
   };
 }
 
-function formatWorkoutLabel(label: string | null | undefined) {
+function workoutActivityLabelFromType(activityType: string | null | undefined) {
+  const normalized = (activityType || "").trim();
+  const rawMatch = normalized.match(/(\d+)/);
+  const rawValue = rawMatch ? Number(rawMatch[1]) : Number(normalized);
+
+  switch (rawValue) {
+    case 9:
+      return "Climbing";
+    case 13:
+      return "Cycling";
+    case 16:
+      return "Elliptical";
+    case 20:
+      return "Functional Strength";
+    case 24:
+      return "Hike";
+    case 35:
+      return "Rowing";
+    case 37:
+      return "Run";
+    case 44:
+    case 68:
+    case 69:
+      return "Stairs";
+    case 46:
+      return "Swim";
+    case 50:
+      return "Strength";
+    case 52:
+      return "Walk";
+    case 57:
+      return "Yoga";
+    case 59:
+      return "Core Training";
+    case 63:
+      return "HIIT";
+    case 66:
+      return "Pilates";
+    case 73:
+      return "Mixed Cardio";
+    case 77:
+      return "Dance";
+    case 79:
+      return "Pickleball";
+    case 80:
+      return "Cooldown";
+    default:
+      return null;
+  }
+}
+
+function formatWorkoutLabel(label: string | null | undefined, activityType?: string | null) {
   const normalized = (label || "").trim();
-  if (!normalized) return "Workout";
-  if (/^\(RawValue:\s*\d+\)$/i.test(normalized)) return "Workout";
-  return normalized;
+  if (normalized && !/^workout$/i.test(normalized) && !/^\(RawValue:\s*\d+\)$/i.test(normalized)) {
+    return normalized;
+  }
+
+  const fallback = workoutActivityLabelFromType(activityType);
+  if (fallback) return fallback;
+  return "Workout";
 }
 
 function formatTimeOnly(value: string | null | undefined) {
@@ -462,19 +522,6 @@ function buildMovementStoryboard(entry: MovementDailyEntry) {
   }
 
   return items;
-}
-
-function buildMovementRibbonSegments(entry: MovementDailyEntry) {
-  const total = Math.max(entry.visited_places_count, 1);
-  if (!entry.visits.length) {
-    return [{ id: "movement", width: 100, label: "Movement" }];
-  }
-
-  return entry.visits.slice(0, 5).map((visit, index) => ({
-    id: `${visit.latitude}-${visit.longitude}-${index}`,
-    width: Math.max(100 / total, 16),
-    label: formatMovementVisitTitle(visit, index),
-  }));
 }
 
 function healthMetricLabel(key: string) {
@@ -624,7 +671,6 @@ function MobilePageContent() {
     return parsed ? formatLocalDateKey(parsed) === activeHealthDate && workout.route_points.length > 1 : false;
   }).slice(0, 1);
   const movementStoryboard = latestMovementEntry ? buildMovementStoryboard(latestMovementEntry) : [];
-  const movementRibbonSegments = latestMovementEntry ? buildMovementRibbonSegments(latestMovementEntry) : [];
   const hasMovementMap = Boolean(
     latestMovementEntry && (latestMovementEntry.route_points.length || latestMovementEntry.visits.length)
   );
@@ -1540,38 +1586,6 @@ function MobilePageContent() {
                       )}
                     </div>
 
-                    {latestMovementEntry ? (
-                      <div className="rounded-[1.2rem] border border-white/8 bg-white/5 px-4 py-3">
-                        <div className="flex items-center justify-between gap-3">
-                          <div>
-                            <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Day ribbon</div>
-                            <div className="mt-1 text-xs text-slate-500">A compact view of how the day flowed.</div>
-                          </div>
-                          <div className="text-[11px] text-slate-400">{latestMovementEntry.route_points.length} pts</div>
-                        </div>
-                        <div className="mt-3 flex h-3 overflow-hidden rounded-full border border-white/8 bg-[rgba(8,10,18,0.9)]">
-                          {movementRibbonSegments.map((segment, index) => (
-                            <div
-                              key={segment.id}
-                              className={index % 2 === 0 ? "bg-emerald-400/70" : "bg-cyan-400/70"}
-                              style={{ width: `${segment.width}%` }}
-                              title={segment.label}
-                            />
-                          ))}
-                        </div>
-                        <div className="mt-3 flex flex-wrap gap-2">
-                          {movementRibbonSegments.map((segment, index) => (
-                            <span
-                              key={`${segment.id}-label`}
-                              className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] text-slate-300"
-                            >
-                              {index + 1}. {segment.label}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-                    ) : null}
-
                     {hasMovementMap && latestMovementEntry ? (
                       <div className="rounded-[1.2rem] border border-white/8 bg-white/5 px-4 py-3">
                         <div className="flex items-center justify-between gap-3">
@@ -1633,7 +1647,7 @@ function MobilePageContent() {
                         <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Workout spotlight</div>
                         <div className="mt-2 flex items-center justify-between gap-3">
                           <div className="text-sm font-medium text-white">
-                            {formatWorkoutLabel(workoutEntries[0].activity_label)}
+                            {formatWorkoutLabel(workoutEntries[0].activity_label, workoutEntries[0].activity_type)}
                           </div>
                           <div className="text-xs text-slate-400">
                             {formatHealthStat(workoutEntries[0].duration_minutes)} min
@@ -1655,7 +1669,7 @@ function MobilePageContent() {
                         <div className="flex items-center justify-between gap-3">
                           <div>
                             <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Workout route</div>
-                            <div className="mt-1 text-sm font-medium text-white">{formatWorkoutLabel(mappedWorkoutEntries[0].activity_label)}</div>
+                            <div className="mt-1 text-sm font-medium text-white">{formatWorkoutLabel(mappedWorkoutEntries[0].activity_label, mappedWorkoutEntries[0].activity_type)}</div>
                           </div>
                           <div className="text-[11px] text-slate-400">
                             {formatDistanceMiles(mappedWorkoutEntries[0].total_distance_km, 1)}

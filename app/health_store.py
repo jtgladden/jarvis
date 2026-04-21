@@ -7,6 +7,7 @@ from threading import Lock
 
 from app.config import APP_DEFAULT_USER_ID
 from app.schemas import DashboardHealthSummary, HealthDailyEntry
+from app.time_utils import normalize_utc_timestamp
 
 _db_lock = Lock()
 
@@ -71,7 +72,7 @@ def _row_to_entry(row: sqlite3.Row) -> HealthDailyEntry:
         workouts=int(row["workouts"] or 0),
         resting_heart_rate=row["resting_heart_rate"],
         extra_metrics=extra_metrics,
-        synced_at=row["synced_at"],
+        synced_at=normalize_utc_timestamp(row["synced_at"]),
     )
 
 

@@ -77,6 +77,7 @@ final class MovementManager: NSObject, ObservableObject {
     private var syncTask: Task<Void, Never>?
     private var lastSyncAttemptAt: Date?
     private var configuredBaseURL: String?
+    private var isForegroundLocationUpdatesActive = false
 
     init(userDefaults: UserDefaults = .standard) {
         self.userDefaults = userDefaults
@@ -85,6 +86,8 @@ final class MovementManager: NSObject, ObservableObject {
         super.init()
         locationManager.delegate = self
         locationManager.activityType = .fitness
+        locationManager.desiredAccuracy = kCLLocationAccuracyHundredMeters
+        locationManager.distanceFilter = 50
         locationManager.pausesLocationUpdatesAutomatically = true
         locationManager.allowsBackgroundLocationUpdates = true
         refreshSummary()
@@ -121,7 +124,13 @@ final class MovementManager: NSObject, ObservableObject {
 
     func handleAppBecameActive() {
         resumeAutomaticTrackingIfAuthorized()
+        startForegroundLocationUpdatesIfNeeded()
         scheduleAutomaticSync(reason: "app active")
+    }
+
+    func handleAppMovedToBackground() {
+        stopForegroundLocationUpdates()
+        scheduleAutomaticSync(reason: "app backgrounded")
     }
 
     func startTracking() {
@@ -130,16 +139,12 @@ final class MovementManager: NSObject, ObservableObject {
             return
         }
 
-        isTracking = true
-        errorMessage = nil
-        syncMessage = "Movement monitoring started."
-        locationManager.startMonitoringVisits()
-        locationManager.startMonitoringSignificantLocationChanges()
-        locationManager.startUpdatingLocation()
+        activateTracking(includeForegroundLiveUpdates: true)
     }
 
     func stopTracking() {
         isTracking = false
+        isForegroundLocationUpdatesActive = false
         locationManager.stopMonitoringVisits()
         locationManager.stopMonitoringSignificantLocationChanges()
         locationManager.stopUpdatingLocation()
@@ -169,11 +174,11 @@ final class MovementManager: NSObject, ObservableObject {
     }
 
     private func buildSummaryText(from journal: LocalMovementDayJournal) -> String {
-        let distanceKm = journal.totalDistanceMeters / 1000
+        let distanceMiles = Self.miles(fromMeters: journal.totalDistanceMeters)
         let awayText = journal.timeAwayMinutes.map { "\($0) minutes away from home" } ?? "home time not set yet"
         return String(
-            format: "Today: %.1f km traveled, %d visits, %@.",
-            distanceKm,
+            format: "Today: %.1f mi traveled, %d visits, %@.",
+            distanceMiles,
             journal.visits.count,
             awayText
         )
@@ -281,15 +286,15 @@ final class MovementManager: NSObject, ObservableObject {
     }
 
     private func generateMovementStory(for journal: LocalMovementDayJournal) -> String {
-        let distanceKm = journal.totalDistanceMeters / 1000
+        let distanceMiles = Self.miles(fromMeters: journal.totalDistanceMeters)
         if journal.visits.isEmpty && journal.routePoints.isEmpty {
             return "No visits recorded yet today."
         }
 
         if let firstArrival = journal.visits.first?.arrival, let lastDeparture = journal.visits.last?.departure {
             return String(
-                format: "You traveled about %.1f km today, recorded %d visits, and moved between %@ and %@.",
-                distanceKm,
+                format: "You traveled about %.1f mi today, recorded %d visits, and moved between %@ and %@.",
+                distanceMiles,
                 journal.visits.count,
                 firstArrival,
                 lastDeparture
@@ -297,8 +302,8 @@ final class MovementManager: NSObject, ObservableObject {
         }
 
         return String(
-            format: "You traveled about %.1f km today and recorded %d visit events.",
-            distanceKm,
+            format: "You traveled about %.1f mi today and recorded %d visit events.",
+            distanceMiles,
             journal.visits.count
         )
     }
@@ -322,8 +327,38 @@ final class MovementManager: NSObject, ObservableObject {
         }
 
         if !isTracking {
-            startTracking()
+            activateTracking(includeForegroundLiveUpdates: false)
         }
+    }
+
+    private func activateTracking(includeForegroundLiveUpdates: Bool) {
+        isTracking = true
+        errorMessage = nil
+        syncMessage = "Movement monitoring started."
+        locationManager.startMonitoringVisits()
+        locationManager.startMonitoringSignificantLocationChanges()
+
+        if includeForegroundLiveUpdates {
+            startForegroundLocationUpdatesIfNeeded()
+        }
+    }
+
+    private func startForegroundLocationUpdatesIfNeeded() {
+        guard isTracking, !isForegroundLocationUpdatesActive else {
+            return
+        }
+
+        locationManager.startUpdatingLocation()
+        isForegroundLocationUpdatesActive = true
+    }
+
+    private func stopForegroundLocationUpdates() {
+        guard isForegroundLocationUpdatesActive else {
+            return
+        }
+
+        locationManager.stopUpdatingLocation()
+        isForegroundLocationUpdatesActive = false
     }
 
     private func scheduleAutomaticSync(reason: String) {
@@ -376,6 +411,10 @@ final class MovementManager: NSObject, ObservableObject {
 
     private static func isoTimestampString(for date: Date) -> String {
         ISO8601DateFormatter().string(from: date)
+    }
+
+    private static func miles(fromMeters meters: Double) -> Double {
+        meters / 1609.344
     }
 }
 
