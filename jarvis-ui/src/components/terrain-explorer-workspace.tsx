@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useEffectEvent, useMemo, useState } from "react";
-import { ExternalLink } from "lucide-react";
+import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
+import { ChevronDown, ChevronUp, ExternalLink, GripHorizontal, Search } from "lucide-react";
 import { TrailExplorer3D } from "@/components/trail-explorer-3d";
 import {
   type NearbyTrailItem,
@@ -18,6 +18,57 @@ type TrailSearchResponse = {
   count: number;
   items: NearbyTrailItem[];
 };
+
+type GeocodeResult = {
+  place_id: number | string;
+  display_name: string;
+  lat: string;
+  lon: string;
+  boundingbox?: string[];
+};
+
+type PanelPosition = {
+  x: number;
+  y: number;
+};
+
+const PANEL_PADDING_PX = 12;
+
+function clampPanelPosition(
+  position: PanelPosition,
+  size: { width: number; height: number },
+  viewport: { width: number; height: number }
+) {
+  return {
+    x: Math.min(
+      Math.max(PANEL_PADDING_PX, position.x),
+      Math.max(PANEL_PADDING_PX, viewport.width - size.width - PANEL_PADDING_PX)
+    ),
+    y: Math.min(
+      Math.max(PANEL_PADDING_PX, position.y),
+      Math.max(PANEL_PADDING_PX, viewport.height - size.height - PANEL_PADDING_PX)
+    ),
+  };
+}
+
+function getLeftPanelInitialPosition(viewport: { width: number; height: number }) {
+  return {
+    x: viewport.width >= 768 ? 16 : 12,
+    y: viewport.width >= 768 ? 16 : 12,
+  };
+}
+
+function getRightPanelInitialPosition(viewport: { width: number; height: number }) {
+  const estimatedWidth = viewport.width >= 768 ? Math.min(416, viewport.width - 32) : viewport.width - 24;
+  const estimatedHeight = Math.min(416, Math.max(220, viewport.height * 0.38));
+  return clampPanelPosition(
+    viewport.width >= 768
+      ? { x: viewport.width - estimatedWidth - 16, y: 16 }
+      : { x: 12, y: viewport.height - estimatedHeight - 12 },
+    { width: estimatedWidth, height: estimatedHeight },
+    viewport
+  );
+}
 
 function clampTrailSearchBounds(bounds: {
   min_lat: number;
@@ -220,6 +271,121 @@ function formatTrailSourceLabel(trail: NearbyTrailItem) {
   return "OSM trail segment";
 }
 
+function DraggableOverlayPanel({
+  title,
+  initialPosition,
+  className,
+  children,
+}: {
+  title: string;
+  initialPosition: (viewport: { width: number; height: number }) => PanelPosition;
+  className: string;
+  children: React.ReactNode;
+}) {
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const dragStateRef = useRef<{
+    offsetX: number;
+    offsetY: number;
+  } | null>(null);
+  const [position, setPosition] = useState<PanelPosition | null>(null);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const applyInitialOrClampPosition = () => {
+      const viewport = { width: window.innerWidth, height: window.innerHeight };
+      const panel = panelRef.current;
+      const size = {
+        width: panel?.offsetWidth ?? Math.min(384, viewport.width - PANEL_PADDING_PX * 2),
+        height: panel?.offsetHeight ?? Math.min(320, viewport.height - PANEL_PADDING_PX * 2),
+      };
+
+      setPosition((current) =>
+        current
+          ? clampPanelPosition(current, size, viewport)
+          : clampPanelPosition(initialPosition(viewport), size, viewport)
+      );
+    };
+
+    applyInitialOrClampPosition();
+    window.addEventListener("resize", applyInitialOrClampPosition);
+    return () => window.removeEventListener("resize", applyInitialOrClampPosition);
+  }, [initialPosition]);
+
+  useEffect(() => {
+    const handlePointerMove = (event: PointerEvent) => {
+      if (!dragStateRef.current || !panelRef.current) {
+        return;
+      }
+
+      const viewport = { width: window.innerWidth, height: window.innerHeight };
+      const size = {
+        width: panelRef.current.offsetWidth,
+        height: panelRef.current.offsetHeight,
+      };
+      setPosition(
+        clampPanelPosition(
+          {
+            x: event.clientX - dragStateRef.current.offsetX,
+            y: event.clientY - dragStateRef.current.offsetY,
+          },
+          size,
+          viewport
+        )
+      );
+    };
+
+    const handlePointerUp = () => {
+      dragStateRef.current = null;
+    };
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+    window.addEventListener("pointercancel", handlePointerUp);
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+      window.removeEventListener("pointercancel", handlePointerUp);
+    };
+  }, []);
+
+  return (
+    <div
+      ref={panelRef}
+      className={className}
+      style={
+        position
+          ? {
+              left: `${position.x}px`,
+              top: `${position.y}px`,
+            }
+          : undefined
+      }
+    >
+      <button
+        type="button"
+        className="mb-3 flex w-full cursor-grab items-center justify-between rounded-xl border border-white/8 bg-black/10 px-3 py-2 text-left text-[11px] uppercase tracking-[0.18em] text-slate-400 active:cursor-grabbing"
+        onPointerDown={(event) => {
+          if (!panelRef.current) {
+            return;
+          }
+          const rect = panelRef.current.getBoundingClientRect();
+          dragStateRef.current = {
+            offsetX: event.clientX - rect.left,
+            offsetY: event.clientY - rect.top,
+          };
+        }}
+      >
+        <span>{title}</span>
+        <GripHorizontal className="h-4 w-4 text-slate-500" />
+      </button>
+      {children}
+    </div>
+  );
+}
+
 export function TerrainExplorerWorkspace({
   terrainExplorerOptions,
   initialSelectedTerrainExplorerId,
@@ -252,6 +418,12 @@ export function TerrainExplorerWorkspace({
   const [selectedNearbyTrailId, setSelectedNearbyTrailId] = useState<string | null>(
     initialSelectedNearbyTrailId
   );
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchError, setSearchError] = useState("");
+  const [searchResults, setSearchResults] = useState<GeocodeResult[]>([]);
+  const [focusedSearchResult, setFocusedSearchResult] = useState<GeocodeResult | null>(null);
+  const [trailsPanelOpen, setTrailsPanelOpen] = useState(true);
 
   const selectedTerrainExplorer =
     terrainExplorerOptions.find((option) => option.id === selectedTerrainExplorerId) ??
@@ -373,6 +545,47 @@ export function TerrainExplorerWorkspace({
     }
   };
 
+  const runLocationSearch = async () => {
+    const query = searchQuery.trim();
+    if (!query) {
+      setSearchResults([]);
+      setSearchError("Enter a place, trailhead, canyon, or mountain to search.");
+      return;
+    }
+
+    setSearchLoading(true);
+    setSearchError("");
+
+    try {
+      const params = new URLSearchParams({ q: query, limit: "5" });
+      const response = await fetch(`/jarvis-geocode/search?${params.toString()}`, {
+        cache: "no-store",
+      });
+      if (!response.ok) {
+        throw new Error(
+          await getErrorMessage(response, `Location search failed with status ${response.status}`)
+        );
+      }
+
+      const data = (await response.json()) as { items?: GeocodeResult[] };
+      const results = data.items || [];
+      setSearchResults(results);
+      if (!results.length) {
+        setSearchError("No places matched that search.");
+        return;
+      }
+
+      setFocusedSearchResult(results[0]);
+    } catch (error) {
+      setSearchResults([]);
+      setSearchError(
+        error instanceof Error ? error.message : "Unable to search for that place."
+      );
+    } finally {
+      setSearchLoading(false);
+    }
+  };
+
   const overlayTitle = useMemo(
     () => selectedTerrainExplorer?.label || "Terrain explorer",
     [selectedTerrainExplorer]
@@ -392,13 +605,18 @@ export function TerrainExplorerWorkspace({
         entry={selectedTerrainExplorer.entry}
         plannedRoute={plannedRouteOverlay}
         referenceTrail={selectedNearbyTrail ? trailToOverlay(selectedNearbyTrail) : null}
+        focusSearchResult={focusedSearchResult}
         onViewBoundsChange={handleTerrainViewBoundsChange}
         showOverlayControls={false}
         className="h-screen min-h-screen rounded-none border-0"
       />
 
       <div className="pointer-events-none absolute inset-0">
-        <div className="pointer-events-auto absolute left-3 right-3 top-3 z-20 max-h-[min(42vh,26rem)] overflow-auto rounded-[1.2rem] border border-white/10 bg-[rgba(8,11,18,0.78)] p-4 backdrop-blur md:left-4 md:right-auto md:top-4 md:max-h-[calc(100vh-2rem)] md:w-[min(24rem,calc(100vw-2rem))]">
+        <DraggableOverlayPanel
+          title="Move Terrain Panel"
+          initialPosition={getLeftPanelInitialPosition}
+          className="pointer-events-auto absolute z-20 max-h-[min(42vh,26rem)] w-[min(24rem,calc(100vw-1.5rem))] overflow-auto rounded-[1.2rem] border border-white/10 bg-[rgba(8,11,18,0.78)] p-4 backdrop-blur md:max-h-[calc(100vh-2rem)] md:w-[min(24rem,calc(100vw-2rem))]"
+        >
           <div className="text-[11px] uppercase tracking-[0.18em] text-emerald-100/80">
             Fullscreen terrain
           </div>
@@ -422,6 +640,57 @@ export function TerrainExplorerWorkspace({
                 {option.label}
               </button>
             ))}
+          </div>
+
+          <div className="mt-4 rounded-[1rem] border border-white/8 bg-black/10 p-3">
+            <div className="text-xs uppercase tracking-[0.16em] text-slate-400">Map search</div>
+            <div className="mt-1 text-xs text-slate-500">
+              Search trailheads, canyons, peaks, towns, or landmarks and move the camera there.
+            </div>
+            <div className="mt-3 flex gap-2">
+              <div className="relative flex-1">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+                <input
+                  value={searchQuery}
+                  onChange={(event) => setSearchQuery(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      void runLocationSearch();
+                    }
+                  }}
+                  placeholder="Search Provo Canyon, Sundance..."
+                  className="h-10 w-full rounded-xl border border-white/10 bg-black/20 pl-9 pr-3 text-sm text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-cyan-300/40"
+                />
+              </div>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="rounded-2xl"
+                onClick={() => void runLocationSearch()}
+                disabled={searchLoading}
+              >
+                {searchLoading ? "Searching..." : "Search"}
+              </Button>
+            </div>
+            {searchError ? (
+              <div className="mt-2 text-xs text-rose-200">{searchError}</div>
+            ) : null}
+            {searchResults.length ? (
+              <div className="mt-3 flex flex-wrap gap-2">
+                {searchResults.slice(0, 4).map((result) => (
+                  <button
+                    key={String(result.place_id)}
+                    type="button"
+                    onClick={() => setFocusedSearchResult(result)}
+                    className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-left text-xs text-slate-200 transition hover:border-white/20"
+                  >
+                    {result.display_name}
+                  </button>
+                ))}
+              </div>
+            ) : null}
           </div>
 
           <div className="mt-4 rounded-[1rem] border border-white/8 bg-black/10 p-3">
@@ -461,40 +730,55 @@ export function TerrainExplorerWorkspace({
               ) : null}
             </div>
           </div>
-        </div>
+        </DraggableOverlayPanel>
 
-        <div className="pointer-events-auto absolute bottom-3 left-3 right-3 z-20 max-h-[min(42vh,26rem)] overflow-auto rounded-[1.2rem] border border-white/10 bg-[rgba(8,11,18,0.78)] p-4 backdrop-blur md:bottom-auto md:left-auto md:right-4 md:top-4 md:max-h-[calc(100vh-2rem)] md:w-[min(26rem,calc(100vw-2rem))]">
+        <DraggableOverlayPanel
+          title="Move Trails Panel"
+          initialPosition={getRightPanelInitialPosition}
+          className="pointer-events-auto absolute z-20 max-h-[min(42vh,26rem)] w-[min(26rem,calc(100vw-1.5rem))] overflow-auto rounded-[1.2rem] border border-white/10 bg-[rgba(8,11,18,0.78)] p-4 backdrop-blur md:max-h-[calc(100vh-2rem)] md:w-[min(26rem,calc(100vw-2rem))]"
+        >
           <div className="flex items-start justify-between gap-3">
             <div>
               <div className="text-xs uppercase tracking-[0.16em] text-slate-400">Trails in view</div>
               <div className="mt-1 text-sm text-slate-300">
                 Search the currently visible terrain view and overlay trail results directly on the globe.
               </div>
-              <div className="mt-2 text-xs text-slate-400">
-                Search area: {terrainViewBounds ? "current map view" : "waiting for map view"}
-              </div>
-              {nearbyTrails.length ? (
-                <div className="mt-1 text-xs text-slate-400">
-                  Provider: {nearbyTrails[0]?.source === "usgs" ? "USGS National Map" : "OpenStreetMap fallback"}
-                </div>
-              ) : null}
-              {nearbyTrailsError ? (
-                <div className="mt-2 text-xs text-rose-200">{nearbyTrailsError}</div>
-              ) : null}
             </div>
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              className="rounded-2xl"
-              onClick={() => void searchNearbyTrails()}
-              disabled={nearbyTrailsLoading}
-            >
-              {nearbyTrailsLoading ? "Searching..." : "Find trails in view"}
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="rounded-2xl"
+                onClick={() => void searchNearbyTrails()}
+                disabled={nearbyTrailsLoading}
+              >
+                {nearbyTrailsLoading ? "Searching..." : "Find trails in view"}
+              </Button>
+              <button
+                type="button"
+                onClick={() => setTrailsPanelOpen((current) => !current)}
+                className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-white/5 text-slate-200 transition hover:border-white/20"
+                aria-label={trailsPanelOpen ? "Collapse trails in view" : "Expand trails in view"}
+              >
+                {trailsPanelOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
+              </button>
+            </div>
           </div>
 
+          <div className="mt-2 text-xs text-slate-400">
+            Search area: {terrainViewBounds ? "current map view" : "waiting for map view"}
+          </div>
           {nearbyTrails.length ? (
+            <div className="mt-1 text-xs text-slate-400">
+              Provider: {nearbyTrails[0]?.source === "usgs" ? "USGS National Map" : "OpenStreetMap fallback"}
+            </div>
+          ) : null}
+          {nearbyTrailsError ? (
+            <div className="mt-2 text-xs text-rose-200">{nearbyTrailsError}</div>
+          ) : null}
+
+          {trailsPanelOpen && nearbyTrails.length ? (
             <div className="mt-4 space-y-3">
               {nearbyTrails.map((trail) => {
                 const active = selectedNearbyTrail?.id === trail.id;
@@ -558,7 +842,7 @@ export function TerrainExplorerWorkspace({
               })}
             </div>
           ) : null}
-        </div>
+        </DraggableOverlayPanel>
       </div>
     </div>
   );

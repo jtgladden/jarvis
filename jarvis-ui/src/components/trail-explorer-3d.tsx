@@ -31,6 +31,7 @@ type TrailExplorer3DProps = {
   entry: TrailExplorerEntry;
   plannedRoute?: PlannedRouteOverlay | null;
   referenceTrail?: PlannedRouteOverlay | null;
+  focusSearchResult?: GeocodeResult | null;
   onViewBoundsChange?: ((bounds: {
     min_lat: number;
     min_lon: number;
@@ -79,8 +80,41 @@ function flyToEntities(Cesium: any, viewer: any, coordinateCount: number) {
     duration: 0.9,
     offset: new Cesium.HeadingPitchRange(
       0,
-      Cesium.Math.toRadians(-35),
+      Cesium.Math.toRadians(-42),
       Math.max(1800, coordinateCount * 18)
+    ),
+  });
+}
+
+function flyToRectangle3D(
+  Cesium: any,
+  viewer: any,
+  rectangle: { west: number; south: number; east: number; north: number },
+  minimumRange = 4200
+) {
+  const lonSpan = Math.max(rectangle.east - rectangle.west, 0.004);
+  const latSpan = Math.max(rectangle.north - rectangle.south, 0.004);
+  const lonPadding = Math.max(0.01, lonSpan * 0.75);
+  const latPadding = Math.max(0.01, latSpan * 0.75);
+  const west = Math.max(-180, rectangle.west - lonPadding);
+  const south = Math.max(-90, rectangle.south - latPadding);
+  const east = Math.min(180, rectangle.east + lonPadding);
+  const north = Math.min(90, rectangle.north + latPadding);
+  const positions = [
+    Cesium.Cartesian3.fromDegrees(west, south),
+    Cesium.Cartesian3.fromDegrees(west, north),
+    Cesium.Cartesian3.fromDegrees(east, south),
+    Cesium.Cartesian3.fromDegrees(east, north),
+    Cesium.Cartesian3.fromDegrees((west + east) / 2, (south + north) / 2),
+  ];
+  const sphere = Cesium.BoundingSphere.fromPoints(positions);
+
+  viewer.camera.flyToBoundingSphere(sphere, {
+    duration: 1.1,
+    offset: new Cesium.HeadingPitchRange(
+      0,
+      Cesium.Math.toRadians(-36),
+      Math.max(minimumRange, sphere.radius * 3.6)
     ),
   });
 }
@@ -100,8 +134,13 @@ function flyToCoordinateSet(
       destination: Cesium.Cartesian3.fromDegrees(
         coordinates[0][0],
         coordinates[0][1],
-        Math.max(4200, fallbackRange)
+        Math.max(5200, fallbackRange)
       ),
+      orientation: {
+        heading: 0,
+        pitch: Cesium.Math.toRadians(-42),
+        roll: 0,
+      },
       duration: 1.0,
     });
     return;
@@ -113,27 +152,16 @@ function flyToCoordinateSet(
   const east = Math.max(...longitudes);
   const south = Math.min(...latitudes);
   const north = Math.max(...latitudes);
-  const latSpan = Math.max(north - south, 0.004);
-  const lonSpan = Math.max(east - west, 0.004);
-  const latPadding = Math.max(0.01, latSpan * 0.75);
-  const lonPadding = Math.max(0.01, lonSpan * 0.75);
-
-  viewer.camera.flyTo({
-    destination: Cesium.Rectangle.fromDegrees(
-      Math.max(-180, west - lonPadding),
-      Math.max(-90, south - latPadding),
-      Math.min(180, east + lonPadding),
-      Math.min(90, north + latPadding)
-    ),
-    duration: 1.05,
-  });
+  flyToRectangle3D(Cesium, viewer, { west, south, east, north }, Math.max(4800, fallbackRange));
 }
 
 function flyToProvoValley(Cesium: any, viewer: any) {
-  viewer.camera.flyTo({
-    destination: Cesium.Rectangle.fromDegrees(-111.82, 40.18, -111.48, 40.42),
-    duration: 1.1,
-  });
+  flyToRectangle3D(Cesium, viewer, {
+    west: -111.82,
+    south: 40.18,
+    east: -111.48,
+    north: 40.42,
+  }, 9000);
 }
 
 function flyToSearchResult(Cesium: any, viewer: any, result: GeocodeResult) {
@@ -150,10 +178,7 @@ function flyToSearchResult(Cesium: any, viewer: any, result: GeocodeResult) {
       Number.isFinite(west) &&
       Number.isFinite(east)
     ) {
-      viewer.camera.flyTo({
-        destination: Cesium.Rectangle.fromDegrees(west, south, east, north),
-        duration: 1.1,
-      });
+      flyToRectangle3D(Cesium, viewer, { west, south, east, north }, 6000);
       return;
     }
   }
@@ -162,7 +187,12 @@ function flyToSearchResult(Cesium: any, viewer: any, result: GeocodeResult) {
   const longitude = Number(result.lon);
   if (Number.isFinite(latitude) && Number.isFinite(longitude)) {
     viewer.camera.flyTo({
-      destination: Cesium.Cartesian3.fromDegrees(longitude, latitude, 14000),
+      destination: Cesium.Cartesian3.fromDegrees(longitude, latitude, 16000),
+      orientation: {
+        heading: 0,
+        pitch: Cesium.Math.toRadians(-42),
+        roll: 0,
+      },
       duration: 1.1,
     });
   }
@@ -470,6 +500,7 @@ export function TrailExplorer3D({
   entry,
   plannedRoute,
   referenceTrail,
+  focusSearchResult,
   onViewBoundsChange,
   className,
   showOverlayControls = true,
@@ -483,6 +514,7 @@ export function TrailExplorer3D({
   const latestReferenceTrailRef = useRef(referenceTrail);
   const lastRenderedRouteKeyRef = useRef<string | null>(null);
   const lastReferenceTrailKeyRef = useRef<string | null>(null);
+  const lastFocusedSearchResultKeyRef = useRef<string | null>(null);
   const lastEmittedBoundsKeyRef = useRef<string | null>(null);
   const [isReady, setIsReady] = useState(false);
   const [status, setStatus] = useState("loading Cesium");
@@ -817,6 +849,23 @@ export function TrailExplorer3D({
 
     lastReferenceTrailKeyRef.current = referenceTrailKey;
   }, [referenceTrail, referenceTrailKey, isReady]);
+
+  useEffect(() => {
+    const viewer = viewerRef.current;
+    const Cesium = cesiumRef.current;
+    if (!viewer || !Cesium || !isReady || !focusSearchResult) {
+      return;
+    }
+
+    const nextKey = `${String(focusSearchResult.place_id)}:${focusSearchResult.lat}:${focusSearchResult.lon}:${focusSearchResult.display_name}`;
+    if (lastFocusedSearchResultKeyRef.current === nextKey) {
+      return;
+    }
+
+    flyToSearchResult(Cesium, viewer, focusSearchResult);
+    window.setTimeout(emitViewBounds, 950);
+    lastFocusedSearchResultKeyRef.current = nextKey;
+  }, [focusSearchResult, isReady]);
 
   const runLocationSearch = async () => {
     const query = searchQuery.trim();

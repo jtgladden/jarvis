@@ -9,6 +9,7 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       GMAIL_TOKEN_FILE: /data/token.json
       GMAIL_CREDENTIALS_FILE: /data/credentials.json
+      GOOGLE_OAUTH_BASE_URL: ${GOOGLE_OAUTH_BASE_URL:-}
       JOURNAL_DB: /data/journal_entries.db
       TASKS_DB: /data/tasks.db
       HEALTH_DB: /data/health.db

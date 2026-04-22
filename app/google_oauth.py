@@ -41,6 +41,13 @@ def _build_redirect_uri(request: Request) -> str:
     return str(request.url_for("google_oauth_callback"))
 
 
+def _build_authorization_response(request: Request, redirect_uri: str) -> str:
+    query = request.url.query
+    if not query:
+      return redirect_uri
+    return f"{redirect_uri}?{query}"
+
+
 def _build_flow(*, redirect_uri: str, state: Optional[str] = None) -> Flow:
     if not os.path.exists(GMAIL_CREDENTIALS_FILE):
         raise RuntimeError(
@@ -88,7 +95,7 @@ def finish_google_oauth(request: Request, state: str) -> Credentials:
     flow = _build_flow(redirect_uri=redirect_uri, state=state)
     if code_verifier:
         flow.code_verifier = code_verifier
-    authorization_response = str(request.url)
+    authorization_response = _build_authorization_response(request, redirect_uri)
     original_insecure_transport = os.environ.get("OAUTHLIB_INSECURE_TRANSPORT")
     insecure_transport_enabled = False
 
