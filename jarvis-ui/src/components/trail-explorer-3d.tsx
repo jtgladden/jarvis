@@ -32,6 +32,12 @@ type TrailExplorer3DProps = {
   plannedRoute?: PlannedRouteOverlay | null;
   referenceTrail?: PlannedRouteOverlay | null;
   focusSearchResult?: GeocodeResult | null;
+  imageryMode?: ImageryMode;
+  onImageryModeChange?: ((mode: ImageryMode) => void) | null;
+  terrainMode?: TerrainMode;
+  onTerrainModeChange?: ((mode: TerrainMode) => void) | null;
+  lightingEnabled?: boolean;
+  onLightingEnabledChange?: ((enabled: boolean) => void) | null;
   onViewBoundsChange?: ((bounds: {
     min_lat: number;
     min_lon: number;
@@ -501,6 +507,12 @@ export function TrailExplorer3D({
   plannedRoute,
   referenceTrail,
   focusSearchResult,
+  imageryMode: controlledImageryMode,
+  onImageryModeChange,
+  terrainMode: controlledTerrainMode,
+  onTerrainModeChange,
+  lightingEnabled = true,
+  onLightingEnabledChange,
   onViewBoundsChange,
   className,
   showOverlayControls = true,
@@ -518,8 +530,8 @@ export function TrailExplorer3D({
   const lastEmittedBoundsKeyRef = useRef<string | null>(null);
   const [isReady, setIsReady] = useState(false);
   const [status, setStatus] = useState("loading Cesium");
-  const [imageryMode, setImageryMode] = useState<ImageryMode>("satellite");
-  const [terrainMode, setTerrainMode] = useState<TerrainMode>("ellipsoid");
+  const [uncontrolledImageryMode, setUncontrolledImageryMode] = useState<ImageryMode>("satellite");
+  const [uncontrolledTerrainMode, setUncontrolledTerrainMode] = useState<TerrainMode>("ellipsoid");
   const [runtimeConfig, setRuntimeConfig] = useState<RuntimeTerrainConfig>({
     cesiumIonToken: "",
     cesiumTerrainUrl: "",
@@ -567,6 +579,8 @@ export function TrailExplorer3D({
   );
   const terrainUrl = runtimeConfig.cesiumTerrainUrl.trim();
   const ionToken = runtimeConfig.cesiumIonToken.trim();
+  const imageryMode = controlledImageryMode ?? uncontrolledImageryMode;
+  const terrainMode = controlledTerrainMode ?? uncontrolledTerrainMode;
   const routeSceneKey = `${entryKey}::${plannedRouteKey}::${referenceTrailKey}`;
   const zoomSceneKey = `${entryKey}::${plannedRouteKey}`;
 
@@ -638,11 +652,19 @@ export function TrailExplorer3D({
 
   useEffect(() => {
     if (terrainUrl) {
-      setTerrainMode("local");
+      if (onTerrainModeChange) {
+        onTerrainModeChange("local");
+      } else {
+        setUncontrolledTerrainMode("local");
+      }
     } else if (ionToken) {
-      setTerrainMode("world");
+      if (onTerrainModeChange) {
+        onTerrainModeChange("world");
+      } else {
+        setUncontrolledTerrainMode("world");
+      }
     }
-  }, [terrainUrl, ionToken]);
+  }, [terrainUrl, ionToken, onTerrainModeChange]);
 
   useEffect(() => {
     let cancelled = false;
@@ -679,12 +701,17 @@ export function TrailExplorer3D({
           selectionIndicator: false,
         });
 
-        viewer.scene.globe.enableLighting = true;
+        viewer.imageryLayers.removeAll();
+        viewer.imageryLayers.addImageryProvider(
+          createImageryProvider(Cesium, imageryMode)
+        );
+        viewer.scene.globe.enableLighting = lightingEnabled;
         viewer.scene.globe.depthTestAgainstTerrain = true;
         viewer.scene.globe.maximumScreenSpaceError = 2;
         viewer.clock.currentTime = Cesium.JulianDate.fromIso8601(
           "2024-07-04T20:00:00Z"
         );
+        viewer.scene.requestRender?.();
 
         viewerRef.current = viewer;
         viewer.camera.moveEnd.addEventListener(emitViewBounds);
@@ -714,7 +741,17 @@ export function TrailExplorer3D({
       onViewBoundsChangeRef.current?.(null);
       setIsReady(false);
     };
-  }, [ionToken]);
+  }, [ionToken, imageryMode]);
+
+  useEffect(() => {
+    const viewer = viewerRef.current;
+    if (!viewer) {
+      return;
+    }
+
+    viewer.scene.globe.enableLighting = lightingEnabled;
+    viewer.scene.requestRender?.();
+  }, [lightingEnabled, isReady]);
 
   useEffect(() => {
     const viewer = viewerRef.current;
@@ -727,6 +764,7 @@ export function TrailExplorer3D({
     viewer.imageryLayers.addImageryProvider(
       createImageryProvider(Cesium, imageryMode)
     );
+    viewer.scene.requestRender?.();
   }, [imageryMode, isReady]);
 
   useEffect(() => {
@@ -951,7 +989,9 @@ export function TrailExplorer3D({
               <select
                 value={imageryMode}
                 onChange={(event) =>
-                  setImageryMode(event.target.value as ImageryMode)
+                  (onImageryModeChange
+                    ? onImageryModeChange(event.target.value as ImageryMode)
+                    : setUncontrolledImageryMode(event.target.value as ImageryMode))
                 }
                 className="bg-transparent text-slate-100 outline-none"
               >
@@ -965,7 +1005,9 @@ export function TrailExplorer3D({
               <select
                 value={terrainMode}
                 onChange={(event) =>
-                  setTerrainMode(event.target.value as TerrainMode)
+                  (onTerrainModeChange
+                    ? onTerrainModeChange(event.target.value as TerrainMode)
+                    : setUncontrolledTerrainMode(event.target.value as TerrainMode))
                 }
                 className="bg-transparent text-slate-100 outline-none"
               >
@@ -974,6 +1016,15 @@ export function TrailExplorer3D({
                 <option value="ellipsoid">Flat</option>
               </select>
             </label>
+            <button
+              type="button"
+              onClick={() => {
+                onLightingEnabledChange?.(!lightingEnabled);
+              }}
+              className="rounded-full border border-white/10 bg-[rgba(8,11,18,0.78)] px-3 py-1.5 text-[11px] uppercase tracking-[0.16em] text-slate-100"
+            >
+              {lightingEnabled ? "Lighting On" : "Lighting Off"}
+            </button>
           </div>
           <div className="absolute right-3 top-3 z-10 w-[min(28rem,calc(100%-1.5rem))] rounded-[1rem] border border-white/10 bg-[rgba(8,11,18,0.82)] p-3 backdrop-blur">
             <div className="flex gap-2">

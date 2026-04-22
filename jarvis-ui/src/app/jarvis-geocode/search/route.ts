@@ -17,7 +17,6 @@ export async function GET(request: Request) {
     q: query,
     format: "jsonv2",
     limit: String(limit),
-    countrycodes: "us",
   });
 
   const response = await fetch(`${NOMINATIM_SEARCH_URL}?${params.toString()}`, {

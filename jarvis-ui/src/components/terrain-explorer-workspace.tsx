@@ -273,14 +273,20 @@ function formatTrailSourceLabel(trail: NearbyTrailItem) {
 
 function DraggableOverlayPanel({
   title,
+  collapsedTitle,
   initialPosition,
   className,
   children,
+  collapsed,
+  onCollapsedChange,
 }: {
   title: string;
+  collapsedTitle?: string;
   initialPosition: (viewport: { width: number; height: number }) => PanelPosition;
   className: string;
   children: React.ReactNode;
+  collapsed?: boolean;
+  onCollapsedChange?: ((collapsed: boolean) => void) | null;
 }) {
   const panelRef = useRef<HTMLDivElement | null>(null);
   const dragStateRef = useRef<{
@@ -364,24 +370,36 @@ function DraggableOverlayPanel({
           : undefined
       }
     >
-      <button
-        type="button"
-        className="mb-3 flex w-full cursor-grab items-center justify-between rounded-xl border border-white/8 bg-black/10 px-3 py-2 text-left text-[11px] uppercase tracking-[0.18em] text-slate-400 active:cursor-grabbing"
-        onPointerDown={(event) => {
-          if (!panelRef.current) {
-            return;
-          }
-          const rect = panelRef.current.getBoundingClientRect();
-          dragStateRef.current = {
-            offsetX: event.clientX - rect.left,
-            offsetY: event.clientY - rect.top,
-          };
-        }}
-      >
-        <span>{title}</span>
-        <GripHorizontal className="h-4 w-4 text-slate-500" />
-      </button>
-      {children}
+      <div className="mb-3 flex items-center gap-2">
+        <button
+          type="button"
+          className={`flex min-w-0 flex-1 cursor-grab items-center justify-between rounded-xl border border-white/8 bg-black/10 px-3 py-2 text-left text-[11px] uppercase tracking-[0.18em] text-slate-400 active:cursor-grabbing ${
+            collapsed ? "mb-0" : ""
+          }`}
+          onPointerDown={(event) => {
+            if (!panelRef.current) {
+              return;
+            }
+            const rect = panelRef.current.getBoundingClientRect();
+            dragStateRef.current = {
+              offsetX: event.clientX - rect.left,
+              offsetY: event.clientY - rect.top,
+            };
+          }}
+        >
+          <span className="truncate">{collapsed ? (collapsedTitle || title) : title}</span>
+          <GripHorizontal className="h-4 w-4 shrink-0 text-slate-500" />
+        </button>
+        <button
+          type="button"
+          onClick={() => onCollapsedChange?.(!collapsed)}
+          className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/8 bg-black/10 text-slate-300 transition hover:border-white/20"
+          aria-label={collapsed ? `Expand ${title}` : `Collapse ${title}`}
+        >
+          {collapsed ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+        </button>
+      </div>
+      {!collapsed ? children : null}
     </div>
   );
 }
@@ -424,6 +442,11 @@ export function TerrainExplorerWorkspace({
   const [searchResults, setSearchResults] = useState<GeocodeResult[]>([]);
   const [focusedSearchResult, setFocusedSearchResult] = useState<GeocodeResult | null>(null);
   const [trailsPanelOpen, setTrailsPanelOpen] = useState(true);
+  const [imageryMode, setImageryMode] = useState<"satellite" | "topo" | "osm">("satellite");
+  const [terrainMode, setTerrainMode] = useState<"local" | "world" | "ellipsoid">("ellipsoid");
+  const [lightingEnabled, setLightingEnabled] = useState(true);
+  const [terrainPanelCollapsed, setTerrainPanelCollapsed] = useState(false);
+  const [trailsPanelCollapsed, setTrailsPanelCollapsed] = useState(false);
 
   const selectedTerrainExplorer =
     terrainExplorerOptions.find((option) => option.id === selectedTerrainExplorerId) ??
@@ -445,6 +468,20 @@ export function TerrainExplorerWorkspace({
         : terrainExplorerOptions[0].id
     );
   }, [terrainExplorerOptions]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const applyPhonePanelDefaults = () => {
+      const isPhone = window.innerWidth < 768;
+      setTerrainPanelCollapsed(isPhone);
+      setTrailsPanelCollapsed(isPhone);
+    };
+
+    applyPhonePanelDefaults();
+  }, []);
 
   const handleTerrainViewBoundsChange = useEffectEvent(
     (
@@ -606,6 +643,12 @@ export function TerrainExplorerWorkspace({
         plannedRoute={plannedRouteOverlay}
         referenceTrail={selectedNearbyTrail ? trailToOverlay(selectedNearbyTrail) : null}
         focusSearchResult={focusedSearchResult}
+        imageryMode={imageryMode}
+        onImageryModeChange={setImageryMode}
+        terrainMode={terrainMode}
+        onTerrainModeChange={setTerrainMode}
+        lightingEnabled={lightingEnabled}
+        onLightingEnabledChange={setLightingEnabled}
         onViewBoundsChange={handleTerrainViewBoundsChange}
         showOverlayControls={false}
         className="h-screen min-h-screen rounded-none border-0"
@@ -614,8 +657,11 @@ export function TerrainExplorerWorkspace({
       <div className="pointer-events-none absolute inset-0">
         <DraggableOverlayPanel
           title="Move Terrain Panel"
+          collapsedTitle="Terrain"
           initialPosition={getLeftPanelInitialPosition}
           className="pointer-events-auto absolute z-20 max-h-[min(42vh,26rem)] w-[min(24rem,calc(100vw-1.5rem))] overflow-auto rounded-[1.2rem] border border-white/10 bg-[rgba(8,11,18,0.78)] p-4 backdrop-blur md:max-h-[calc(100vh-2rem)] md:w-[min(24rem,calc(100vw-2rem))]"
+          collapsed={terrainPanelCollapsed}
+          onCollapsedChange={setTerrainPanelCollapsed}
         >
           <div className="text-[11px] uppercase tracking-[0.18em] text-emerald-100/80">
             Fullscreen terrain
@@ -640,6 +686,41 @@ export function TerrainExplorerWorkspace({
                 {option.label}
               </button>
             ))}
+            <label className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-slate-300 transition hover:border-white/20">
+              <span className="mr-2 text-slate-400">Imagery</span>
+              <select
+                value={imageryMode}
+                onChange={(event) => setImageryMode(event.target.value as "satellite" | "topo" | "osm")}
+                className="bg-transparent text-slate-100 outline-none"
+              >
+                <option value="satellite">Satellite</option>
+                <option value="topo">Topo</option>
+                <option value="osm">OSM</option>
+              </select>
+            </label>
+            <label className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-slate-300 transition hover:border-white/20">
+              <span className="mr-2 text-slate-400">Terrain</span>
+              <select
+                value={terrainMode}
+                onChange={(event) => setTerrainMode(event.target.value as "local" | "world" | "ellipsoid")}
+                className="bg-transparent text-slate-100 outline-none"
+              >
+                <option value="local">Self-hosted</option>
+                <option value="world">World</option>
+                <option value="ellipsoid">Flat</option>
+              </select>
+            </label>
+            <button
+              type="button"
+              onClick={() => setLightingEnabled((current) => !current)}
+              className={`rounded-full border px-3 py-1 text-xs transition ${
+                lightingEnabled
+                  ? "border-amber-300/25 bg-amber-400/12 text-amber-100"
+                  : "border-white/10 bg-white/5 text-slate-300 hover:border-white/20"
+              }`}
+            >
+              {lightingEnabled ? "Lighting on" : "Lighting off"}
+            </button>
           </div>
 
           <div className="mt-4 rounded-[1rem] border border-white/8 bg-black/10 p-3">
@@ -734,8 +815,11 @@ export function TerrainExplorerWorkspace({
 
         <DraggableOverlayPanel
           title="Move Trails Panel"
+          collapsedTitle="Trails"
           initialPosition={getRightPanelInitialPosition}
           className="pointer-events-auto absolute z-20 max-h-[min(42vh,26rem)] w-[min(26rem,calc(100vw-1.5rem))] overflow-auto rounded-[1.2rem] border border-white/10 bg-[rgba(8,11,18,0.78)] p-4 backdrop-blur md:max-h-[calc(100vh-2rem)] md:w-[min(26rem,calc(100vw-2rem))]"
+          collapsed={trailsPanelCollapsed}
+          onCollapsedChange={setTrailsPanelCollapsed}
         >
           <div className="flex items-start justify-between gap-3">
             <div>
