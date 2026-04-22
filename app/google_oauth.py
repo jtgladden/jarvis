@@ -2,6 +2,7 @@ import os
 from datetime import datetime, timedelta, timezone
 from threading import Lock
 from typing import Optional
+from urllib.parse import urlparse
 
 from fastapi import HTTPException, Request
 from google.oauth2.credentials import Credentials
@@ -10,7 +11,7 @@ from google_auth_oauthlib.flow import Flow
 from app.config import GMAIL_CREDENTIALS_FILE, GMAIL_TOKEN_FILE, GOOGLE_OAUTH_BASE_URL, GOOGLE_SCOPES
 
 _STATE_TTL = timedelta(minutes=15)
-_oauth_states: dict[str, tuple[datetime, str]] = {}
+_oauth_states: dict[str, tuple[datetime, str, str | None]] = {}
 _oauth_states_lock = Lock()
 
 
@@ -66,7 +67,11 @@ def begin_google_oauth(request: Request) -> str:
 
     with _oauth_states_lock:
         _prune_expired_states()
-        _oauth_states[state] = (datetime.now(timezone.utc), redirect_uri)
+        _oauth_states[state] = (
+            datetime.now(timezone.utc),
+            redirect_uri,
+            getattr(flow, "code_verifier", None),
+        )
 
     return authorization_url
 
@@ -79,9 +84,27 @@ def finish_google_oauth(request: Request, state: str) -> Credentials:
     if state_record is None:
         raise HTTPException(status_code=400, detail="Google OAuth state is missing or expired.")
 
-    _, redirect_uri = state_record
+    _, redirect_uri, code_verifier = state_record
     flow = _build_flow(redirect_uri=redirect_uri, state=state)
-    flow.fetch_token(authorization_response=str(request.url))
+    if code_verifier:
+        flow.code_verifier = code_verifier
+    authorization_response = str(request.url)
+    original_insecure_transport = os.environ.get("OAUTHLIB_INSECURE_TRANSPORT")
+    insecure_transport_enabled = False
+
+    try:
+        if _should_allow_insecure_transport(authorization_response):
+            os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
+            insecure_transport_enabled = True
+
+        flow.fetch_token(authorization_response=authorization_response)
+    finally:
+        if insecure_transport_enabled:
+            if original_insecure_transport is None:
+                os.environ.pop("OAUTHLIB_INSECURE_TRANSPORT", None)
+            else:
+                os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = original_insecure_transport
+
     creds = flow.credentials
 
     token_directory = os.path.dirname(GMAIL_TOKEN_FILE)
@@ -97,7 +120,12 @@ def finish_google_oauth(request: Request, state: str) -> Credentials:
 def _prune_expired_states() -> None:
     cutoff = datetime.now(timezone.utc) - _STATE_TTL
     expired_states = [
-        state for state, (created_at, _) in _oauth_states.items() if created_at < cutoff
+        state for state, (created_at, _, _) in _oauth_states.items() if created_at < cutoff
     ]
     for state in expired_states:
         _oauth_states.pop(state, None)
+
+
+def _should_allow_insecure_transport(url: str) -> bool:
+    parsed = urlparse(url)
+    return parsed.scheme == "http" and parsed.hostname in {"localhost", "127.0.0.1"}

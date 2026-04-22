@@ -53,6 +53,18 @@ The backend stores its persistent local state in the mounted `data/` folder, inc
 
 That means Gmail auth, journal entries, task edits/completions, health history, movement history, workout history, assistant chat history, saved classification cache, and guidance survive container restarts as long as the `data/` folder is preserved.
 
+### 3D trail explorer
+
+Jarvis now includes a desktop-only 3D route explorer in the Health Atlas view, adapted from the `trailforkd` Cesium approach.
+You can switch between recorded movement/workout routes and import a planned `GPX` or `GeoJSON` track to preview a future hike or excursion.
+
+Optional environment variables:
+
+- `NEXT_PUBLIC_CESIUM_ION_TOKEN` for Cesium World Terrain
+- `NEXT_PUBLIC_CESIUM_TERRAIN_URL` for a self-hosted Cesium terrain server
+
+Without those, the explorer still works in flat-globe mode and can render your synced movement/workout routes in 3D with imagery layers.
+
 ### Google auth in Docker
 
 You do not need to pre-generate `token.json` anymore.

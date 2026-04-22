@@ -28,6 +28,7 @@ import {
 } from "lucide-react";
 import { AssistantPanel } from "@/components/assistant-panel";
 import { MovementMap } from "@/components/movement-map";
+import { TrailExplorer3D } from "@/components/trail-explorer-3d";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -149,6 +150,14 @@ type GoogleOAuthStatus = {
   authorized: boolean;
   start_path?: string;
   instructions?: string;
+};
+
+type PlannedRouteOverlay = {
+  name: string;
+  points: Array<{
+    latitude: number;
+    longitude: number;
+  }>;
 };
 
 function normalizeOverview(data: Partial<ClassificationOverview>): ClassificationOverview {
@@ -457,6 +466,116 @@ function workoutToMapEntry(workout: {
       horizontal_accuracy_m: null,
     })),
     visits: [],
+  };
+}
+
+function normalizePlannedRoutePoints(
+  points: Array<{ latitude: number; longitude: number }>
+) {
+  return points.filter(
+    (point) =>
+      Number.isFinite(point.latitude) &&
+      Number.isFinite(point.longitude) &&
+      Math.abs(point.latitude) <= 90 &&
+      Math.abs(point.longitude) <= 180
+  );
+}
+
+function parseGeoJsonRoute(text: string, fallbackName: string): PlannedRouteOverlay | null {
+  const parsed = JSON.parse(text) as
+    | {
+        type?: string;
+        coordinates?: unknown;
+        features?: Array<{
+          geometry?: {
+            type?: string;
+            coordinates?: unknown;
+          };
+          properties?: {
+            name?: string;
+            title?: string;
+          };
+        }>;
+        properties?: {
+          name?: string;
+        };
+      }
+    | Array<unknown>;
+
+  const candidateFeatures =
+    Array.isArray(parsed)
+      ? []
+      : parsed.type === "FeatureCollection"
+      ? parsed.features || []
+      : parsed.type === "Feature"
+      ? [parsed]
+      : [parsed];
+
+  for (const feature of candidateFeatures) {
+    const geometry = "geometry" in feature ? feature.geometry : feature;
+    if (!geometry || geometry.type !== "LineString" || !Array.isArray(geometry.coordinates)) {
+      continue;
+    }
+
+    const points = normalizePlannedRoutePoints(
+      geometry.coordinates
+        .filter((coordinate): coordinate is [number, number] =>
+          Array.isArray(coordinate) &&
+          coordinate.length >= 2 &&
+          typeof coordinate[0] === "number" &&
+          typeof coordinate[1] === "number"
+        )
+        .map(([longitude, latitude]) => ({ latitude, longitude }))
+    );
+
+    if (points.length) {
+      const featureName =
+        ("properties" in feature && feature.properties?.name) ||
+        ("properties" in feature && feature.properties?.title) ||
+        (!Array.isArray(parsed) && parsed.properties?.name) ||
+        fallbackName;
+      return {
+        name: featureName || fallbackName,
+        points,
+      };
+    }
+  }
+
+  return null;
+}
+
+function parseGpxRoute(text: string, fallbackName: string): PlannedRouteOverlay | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  const xml = new window.DOMParser().parseFromString(text, "application/xml");
+  const parserError = xml.querySelector("parsererror");
+  if (parserError) {
+    return null;
+  }
+
+  const trackPoints = Array.from(xml.querySelectorAll("trkpt"))
+    .map((node) => ({
+      latitude: Number(node.getAttribute("lat")),
+      longitude: Number(node.getAttribute("lon")),
+    }))
+    .filter(
+      (point) => Number.isFinite(point.latitude) && Number.isFinite(point.longitude)
+    );
+
+  if (!trackPoints.length) {
+    return null;
+  }
+
+  const routeName =
+    xml.querySelector("trk > name")?.textContent?.trim() ||
+    xml.querySelector("rte > name")?.textContent?.trim() ||
+    fallbackName;
+
+  return {
+    name: routeName,
+    points: normalizePlannedRoutePoints(trackPoints),
   };
 }
 
@@ -928,6 +1047,8 @@ function HealthDetailPanel({
 }) {
   const healthSummary = dashboard?.health_summary ?? null;
   const [expandedMetricsOpen, setExpandedMetricsOpen] = useState(false);
+  const [plannedRouteOverlay, setPlannedRouteOverlay] = useState<PlannedRouteOverlay | null>(null);
+  const [plannedRouteError, setPlannedRouteError] = useState("");
   const latestHealthDate = healthEntries[0]?.date ?? healthSummary?.today_entry?.date ?? formatLocalDateKey(new Date());
   const earliestHealthDate = healthEntries[healthEntries.length - 1]?.date ?? latestHealthDate;
   const activeHealthDate = selectedHealthDate ?? latestHealthDate;
@@ -944,6 +1065,79 @@ function HealthDetailPanel({
   const hasMovementMap = Boolean(
     selectedMovementEntry && (selectedMovementEntry.route_points.length || selectedMovementEntry.visits.length)
   );
+  const terrainExplorerOptions = useMemo(
+    () => [
+      ...mappedWorkouts.map((workout) => ({
+        id: `workout-${workout.workout_id}`,
+        label: formatWorkoutLabel(workout.activity_label, workout.activity_type),
+        detail: formatScheduleDateTime(workout.start_date),
+        entry: workoutToMapEntry(workout),
+      })),
+      ...(selectedMovementEntry && hasMovementMap
+        ? [
+            {
+              id: `movement-${selectedMovementEntry.date}`,
+              label: "Daily movement",
+              detail: `${selectedMovementEntry.route_points.length || selectedMovementEntry.visits.length} points`,
+              entry: selectedMovementEntry,
+            },
+          ]
+        : []),
+    ],
+    [mappedWorkouts, selectedMovementEntry, hasMovementMap]
+  );
+  const [selectedTerrainExplorerId, setSelectedTerrainExplorerId] = useState<string | null>(
+    () => terrainExplorerOptions[0]?.id ?? null
+  );
+  useEffect(() => {
+    if (!terrainExplorerOptions.length) {
+      setSelectedTerrainExplorerId(null);
+      return;
+    }
+
+    setSelectedTerrainExplorerId((current) =>
+      current && terrainExplorerOptions.some((option) => option.id === current)
+        ? current
+        : terrainExplorerOptions[0].id
+    );
+  }, [terrainExplorerOptions]);
+  const selectedTerrainExplorer =
+    terrainExplorerOptions.find((option) => option.id === selectedTerrainExplorerId) ??
+    terrainExplorerOptions[0] ??
+    null;
+
+  const handlePlannedRouteUpload = async (
+    event: React.ChangeEvent<HTMLInputElement>
+  ) => {
+    const file = event.target.files?.[0];
+    if (!file) {
+      return;
+    }
+
+    try {
+      const text = await file.text();
+      const baseName = file.name.replace(/\.[^.]+$/, "") || "Planned route";
+      const lowerName = file.name.toLowerCase();
+      const parsedRoute =
+        lowerName.endsWith(".gpx")
+          ? parseGpxRoute(text, baseName)
+          : parseGeoJsonRoute(text, baseName);
+
+      if (!parsedRoute?.points.length) {
+        throw new Error("No route points were found in that GPX or GeoJSON file.");
+      }
+
+      setPlannedRouteOverlay(parsedRoute);
+      setPlannedRouteError("");
+    } catch (error) {
+      setPlannedRouteOverlay(null);
+      setPlannedRouteError(
+        error instanceof Error ? error.message : "Unable to import the selected route file."
+      );
+    } finally {
+      event.target.value = "";
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -1243,6 +1437,84 @@ function HealthDetailPanel({
                             <span className="rounded-full border border-emerald-300/20 bg-emerald-400/10 px-3 py-1">Start</span>
                             <span className="rounded-full border border-cyan-300/20 bg-cyan-400/10 px-3 py-1">End</span>
                             <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1">{selectedMovementEntry.place_labels.length} labeled places</span>
+                          </div>
+                        </div>
+                      ) : null}
+
+                      {selectedTerrainExplorer ? (
+                        <div className="rounded-[1.3rem] border border-white/6 bg-[rgba(17,19,34,0.45)] p-4">
+                          <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                            <div>
+                              <div className="text-xs uppercase tracking-[0.18em] text-slate-400">3D terrain explorer</div>
+                              <div className="mt-1 text-sm text-slate-300">
+                                Adapted from the `trailforkd` Cesium approach so Jarvis can compare recorded routes with a planned hike or outdoor excursion on a terrain globe.
+                              </div>
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                              {terrainExplorerOptions.map((option) => (
+                                <button
+                                  key={option.id}
+                                  type="button"
+                                  onClick={() => setSelectedTerrainExplorerId(option.id)}
+                                  className={`rounded-full border px-3 py-1 text-xs transition ${
+                                    selectedTerrainExplorer.id === option.id
+                                      ? "border-emerald-300/25 bg-emerald-400/12 text-emerald-100"
+                                      : "border-white/10 bg-white/5 text-slate-300 hover:border-white/20"
+                                  }`}
+                                >
+                                  {option.label}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                          <div className="mt-4 flex flex-col gap-3 rounded-[1rem] border border-white/8 bg-black/10 p-4 lg:flex-row lg:items-center lg:justify-between">
+                            <div>
+                              <div className="text-xs uppercase tracking-[0.16em] text-slate-400">Planned route overlay</div>
+                              <div className="mt-1 text-sm text-slate-300">
+                                Import a `GPX` or `GeoJSON` track to preview a future hike or excursion against your existing route context.
+                              </div>
+                              {plannedRouteOverlay ? (
+                                <div className="mt-2 text-xs text-emerald-200">
+                                  Loaded {plannedRouteOverlay.name} with {plannedRouteOverlay.points.length} points.
+                                </div>
+                              ) : null}
+                              {plannedRouteError ? (
+                                <div className="mt-2 text-xs text-rose-200">{plannedRouteError}</div>
+                              ) : null}
+                            </div>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <label className="inline-flex cursor-pointer items-center rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-slate-200 transition hover:border-white/20">
+                                Import route
+                                <input
+                                  type="file"
+                                  accept=".gpx,.geojson,.json,application/geo+json,application/json,application/gpx+xml"
+                                  onChange={handlePlannedRouteUpload}
+                                  className="hidden"
+                                />
+                              </label>
+                              {plannedRouteOverlay ? (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setPlannedRouteOverlay(null);
+                                    setPlannedRouteError("");
+                                  }}
+                                  className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-slate-300 transition hover:border-white/20"
+                                >
+                                  Clear planned route
+                                </button>
+                              ) : null}
+                            </div>
+                          </div>
+                          <div className="mt-3 text-xs text-slate-500">
+                            {selectedTerrainExplorer.detail}
+                          </div>
+                          <div className="mt-4 overflow-hidden rounded-[1.2rem] border border-white/8 bg-[radial-gradient(circle_at_top_left,rgba(16,185,129,0.14),transparent_32%),linear-gradient(180deg,rgba(9,12,22,0.96),rgba(15,18,28,0.96))]">
+                            <TrailExplorer3D
+                              entry={selectedTerrainExplorer.entry}
+                              plannedRoute={plannedRouteOverlay}
+                              className="h-[480px] xl:h-[560px]"
+                            />
                           </div>
                         </div>
                       ) : null}

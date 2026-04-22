@@ -39,7 +39,10 @@ def get_calendar_service():
             try:
                 creds.refresh(Request())
             except Exception as exc:
-                raise RuntimeError(f"Failed to refresh Google credentials: {exc}") from exc
+                raise RuntimeError(
+                    f"Failed to refresh Google credentials: {exc}. "
+                    f"{get_google_oauth_instructions()}"
+                ) from exc
         else:
             if not os.path.exists(GMAIL_CREDENTIALS_FILE):
                 raise RuntimeError(

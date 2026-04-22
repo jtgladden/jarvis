@@ -334,7 +334,11 @@ def generate_dashboard() -> DashboardResponse:
         logger.warning("Dashboard calendar fetch failed: %s", exc)
         calendar_items = []
 
-    mail_items = _build_mail_items()
+    try:
+        mail_items = _build_mail_items()
+    except Exception as exc:
+        logger.warning("Dashboard mail fetch failed: %s", exc)
+        mail_items = []
     health_summary = get_health_dashboard_summary(user_id=user_id, today=today_local)
 
     try:
