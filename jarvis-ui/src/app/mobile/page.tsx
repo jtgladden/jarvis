@@ -16,6 +16,7 @@ import {
   Plus,
   RefreshCw,
   Search,
+  ShieldCheck,
   Sparkles,
   Smartphone,
 } from "lucide-react";
@@ -229,6 +230,24 @@ type CalendarAgendaResponse = {
   time_max: string;
   items: CalendarAgendaItem[];
 };
+
+type GoogleOAuthStatus = {
+  authorized: boolean;
+  start_path?: string;
+  instructions?: string;
+};
+
+function isGoogleAuthIssue(message: string | null | undefined) {
+  const normalized = (message || "").toLowerCase();
+  return (
+    normalized.includes("gmail credentials") ||
+    normalized.includes("google access") ||
+    normalized.includes("google calendar access") ||
+    normalized.includes("oauth") ||
+    normalized.includes("token.json") ||
+    normalized.includes("authorize google")
+  );
+}
 
 async function fetchMobileMail(
   mailView: MobileMailView,
@@ -638,6 +657,7 @@ function MobilePageContent() {
   const [selectedMailbox, setSelectedMailbox] = useState<"Jarvis Important" | "Jarvis Unimportant">("Jarvis Important");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [googleAuthStatus, setGoogleAuthStatus] = useState<GoogleOAuthStatus | null>(null);
   const [dashboard, setDashboard] = useState<DashboardResponse | null>(null);
   const [healthEntries, setHealthEntries] = useState<HealthDailyEntry[]>([]);
   const [selectedHealthDate, setSelectedHealthDate] = useState<string | null>(null);
@@ -674,6 +694,20 @@ function MobilePageContent() {
   const hasMovementMap = Boolean(
     latestMovementEntry && (latestMovementEntry.route_points.length || latestMovementEntry.visits.length)
   );
+
+  const loadGoogleAuthStatus = useCallback(async () => {
+    try {
+      const response = await fetch(`${API_BASE}/google/oauth/status`);
+      if (!response.ok) {
+        return;
+      }
+
+      const data = (await response.json()) as GoogleOAuthStatus;
+      setGoogleAuthStatus(data);
+    } catch {
+      // Keep the mobile view usable even if auth status probing fails.
+    }
+  }, []);
 
   const loadJournal = useCallback(async (query = "") => {
     setLoading(true);
@@ -785,6 +819,10 @@ function MobilePageContent() {
   useEffect(() => {
     void loadAll();
   }, [loadAll]);
+
+  useEffect(() => {
+    void loadGoogleAuthStatus();
+  }, [loadGoogleAuthStatus]);
 
   const refreshLiveMovement = useEffectEvent(async () => {
     try {
@@ -1055,6 +1093,25 @@ function MobilePageContent() {
         {error ? (
           <div className="rounded-[1.4rem] border border-rose-400/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">
             {error}
+          </div>
+        ) : null}
+
+        {(googleAuthStatus ? !googleAuthStatus.authorized : false) || isGoogleAuthIssue(error) ? (
+          <div className="rounded-[1.4rem] border border-cyan-300/15 bg-cyan-400/10 px-4 py-4 text-sm text-cyan-50">
+            <div className="flex items-center gap-2 text-sm font-medium text-white">
+              <ShieldCheck className="h-4 w-4 text-cyan-200" />
+              Google connection
+            </div>
+            <div className="mt-2 leading-6 text-cyan-100/85">
+              {googleAuthStatus?.authorized
+                ? "Google is connected, but the latest Gmail or Calendar request looks like it needs re-authorization."
+                : googleAuthStatus?.instructions || "Connect Google so this running container can reach Gmail and Calendar."}
+            </div>
+            <Button asChild variant="outline" className="mt-3 rounded-2xl border-cyan-200/30 bg-white/5 text-cyan-50 hover:bg-white/10">
+              <a href={googleAuthStatus?.start_path || `${API_BASE}/google/oauth/start`}>
+                Connect Google
+              </a>
+            </Button>
           </div>
         ) : null}
 

@@ -145,6 +145,12 @@ type ClassificationGuidance = {
   version: string;
 };
 
+type GoogleOAuthStatus = {
+  authorized: boolean;
+  start_path?: string;
+  instructions?: string;
+};
+
 function normalizeOverview(data: Partial<ClassificationOverview>): ClassificationOverview {
   const legacyDeadlineExamples = (data as Partial<{ deadline_examples: ClassificationOverview["deadline_highlights"] }>).deadline_examples;
   return {
@@ -159,6 +165,18 @@ function normalizeOverview(data: Partial<ClassificationOverview>): Classificatio
     top_action_items: data.top_action_items || [],
     deadline_highlights: data.deadline_highlights || legacyDeadlineExamples || [],
   };
+}
+
+function isGoogleAuthIssue(message: string | null | undefined) {
+  const normalized = (message || "").toLowerCase();
+  return (
+    normalized.includes("gmail credentials") ||
+    normalized.includes("google access") ||
+    normalized.includes("google calendar access") ||
+    normalized.includes("oauth") ||
+    normalized.includes("token.json") ||
+    normalized.includes("authorize google")
+  );
 }
 
 function parseCalendarDate(value: string | null | undefined) {
@@ -1946,6 +1964,7 @@ export default function HomePage() {
   const [planningCalendarLink, setPlanningCalendarLink] = useState<string | null>(null);
   const [planningBulkCalendarLoading, setPlanningBulkCalendarLoading] = useState(false);
   const [planningBulkCalendarMessage, setPlanningBulkCalendarMessage] = useState("");
+  const [googleAuthStatus, setGoogleAuthStatus] = useState<GoogleOAuthStatus | null>(null);
   const activePlanningJobIdRef = useRef<string | null>(null);
   const hasLoadedDashboardRef = useRef(false);
   const hasLoadedTasksRef = useRef(false);
@@ -1957,6 +1976,10 @@ export default function HomePage() {
       router.replace("/mobile");
     }
   }, [router]);
+
+  useEffect(() => {
+    void loadGoogleAuthStatus();
+  }, []);
 
   const syncSelectedId = (nextEmails: Email[]) => {
     if (nextEmails.length > 0) {
@@ -1975,6 +1998,20 @@ export default function HomePage() {
         nextTasks.map((task) => [task.id, buildTaskDraft(task)])
       )
     );
+  };
+
+  const loadGoogleAuthStatus = async () => {
+    try {
+      const response = await fetch(`${API_BASE}/google/oauth/status`);
+      if (!response.ok) {
+        return;
+      }
+
+      const data: GoogleOAuthStatus = await response.json();
+      setGoogleAuthStatus(data);
+    } catch {
+      // Keep the dashboard usable even if the auth status probe fails.
+    }
   };
 
   const loadLabels = async () => {
@@ -4263,6 +4300,30 @@ export default function HomePage() {
                     <div className="flex items-start gap-3 rounded-[1.4rem] border border-rose-400/20 bg-rose-500/10 p-4 text-sm text-rose-200">
                       <AlertCircle className="mt-0.5 h-4 w-4" />
                       <div>{error}</div>
+                    </div>
+                  ) : null}
+                  {(googleAuthStatus ? !googleAuthStatus.authorized : false) || isGoogleAuthIssue(error) ? (
+                    <div className="flex flex-col gap-3 rounded-[1.4rem] border border-cyan-300/15 bg-cyan-400/10 p-4 text-sm text-cyan-50 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 text-sm font-medium text-white">
+                          <ShieldCheck className="h-4 w-4 text-cyan-200" />
+                          Google connection
+                        </div>
+                        <div className="mt-1 text-sm leading-6 text-cyan-100/85">
+                          {googleAuthStatus?.authorized
+                            ? "Google is connected, but the latest Gmail or Calendar request looks like it needs re-authorization."
+                            : googleAuthStatus?.instructions || "Connect Google so this running container can reach Gmail and Calendar."}
+                        </div>
+                      </div>
+                      <Button
+                        asChild
+                        variant="outline"
+                        className="rounded-2xl border-cyan-200/30 bg-white/5 text-cyan-50 hover:bg-white/10"
+                      >
+                        <a href={googleAuthStatus?.start_path || `${API_BASE}/google/oauth/start`}>
+                          Connect Google
+                        </a>
+                      </Button>
                     </div>
                   ) : null}
                   <div className="rounded-[1.6rem] border border-cyan-300/15 bg-[linear-gradient(135deg,rgba(56,189,248,0.16),rgba(35,37,58,0.92))] p-5">

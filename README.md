@@ -53,12 +53,20 @@ The backend stores its persistent local state in the mounted `data/` folder, inc
 
 That means Gmail auth, journal entries, task edits/completions, health history, movement history, workout history, assistant chat history, saved classification cache, and guidance survive container restarts as long as the `data/` folder is preserved.
 
-### Important Gmail note
+### Google auth in Docker
 
-The first Gmail OAuth authorization still needs a valid token flow. The easiest path is usually:
+You do not need to pre-generate `token.json` anymore.
 
-1. Run the backend locally once and complete Google login.
-2. Copy the generated `token.json` into `data/token.json`.
-3. Deploy with Docker after that.
+1. Put your Google OAuth client file at `data/credentials.json`.
+2. Start the stack.
+3. Open `http://localhost:8000/api/google/oauth/start` in your browser.
+4. Sign in to Google and approve access.
+5. Jarvis will save the token into the mounted `data/token.json` file automatically.
 
-If you want fully headless server auth later, you would need to move away from the local browser OAuth flow currently used in `app/gmail_client.py`.
+If your API is running behind a proxy or on a real domain, set `GOOGLE_OAUTH_BASE_URL` in `.env` so Jarvis builds the callback URL correctly.
+
+Notes:
+
+- The OAuth client in `data/credentials.json` still needs to allow the redirect URI you use.
+- For local Docker usage, `http://localhost:8000/api/google/oauth/callback` is the simplest callback target.
+- The same Google token is shared for Gmail and Calendar scopes.

@@ -5,11 +5,11 @@ from zoneinfo import ZoneInfo
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
 from app.config import DEFAULT_TIMEZONE, GMAIL_CREDENTIALS_FILE, GMAIL_TOKEN_FILE, GOOGLE_SCOPES
+from app.google_oauth import get_google_oauth_instructions
 from app.schemas import CalendarAgendaItem, CalendarAgendaResponse, CalendarEventCreateResponse, CalendarEventPreview, EmailClassification, EmailSummary, PlanningCalendarBulkCreateResponse, PlanningCalendarCreateResponse, PlanningItem
 
 LOCAL_TIMEZONE = ZoneInfo(DEFAULT_TIMEZONE)
@@ -41,9 +41,14 @@ def get_calendar_service():
             except Exception as exc:
                 raise RuntimeError(f"Failed to refresh Google credentials: {exc}") from exc
         else:
+            if not os.path.exists(GMAIL_CREDENTIALS_FILE):
+                raise RuntimeError(
+                    "Google credentials are not configured. "
+                    f"Expected OAuth client file at {GMAIL_CREDENTIALS_FILE}."
+                )
             raise RuntimeError(
-                "Google Calendar access has not been authorized for this app yet. "
-                "Delete token.json and restart the backend locally to complete Google re-authorization "
+                "Google Calendar access has not been authorized for this running backend yet. "
+                f"{get_google_oauth_instructions()} "
                 f"with these scopes: {', '.join(GOOGLE_SCOPES)}"
             )
 

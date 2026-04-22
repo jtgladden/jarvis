@@ -1,11 +1,12 @@
 import logging
+import os
 from threading import Lock, Thread
 from time import sleep
 from uuid import uuid4
 
 from fastapi import APIRouter, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from app.assistant import ask_jarvis_assistant
 from app.assistant_chat_store import archive_chat, delete_chat, get_chat_thread, init_assistant_chat_store, list_chats
@@ -17,6 +18,7 @@ from app.classifier import IMPORTANT_LABEL, LEGACY_IMPORTANT_LABELS, LEGACY_UNIM
 from app.config import CORS_ALLOWED_ORIGINS, OPENAI_MAX_EMAILS_PER_RUN
 from app.dashboard import generate_dashboard, invalidate_dashboard_cache
 from app.gmail_client import cleanup_inbox, expire_stale_important_emails, get_all_inbox_emails, get_email_by_id, get_emails_by_any_label, get_mailbox_emails, get_mailbox_emails_page, get_new_inbox_emails, get_recent_inbox_emails, list_gmail_labels, mark_email_handled, process_new_inbox_emails, update_email
+from app.google_oauth import begin_google_oauth, finish_google_oauth, get_google_oauth_instructions
 from app.health import list_health_entries, sync_health_daily_entry
 from app.health_store import init_health_store
 from app.journal import extract_journal_day_citations, get_journal, get_journal_day, save_journal_day
@@ -199,6 +201,76 @@ def root():
 @api.get("/", response_model=dict[str, str])
 def api_root():
     return {"message": "Mail AI backend is running"}
+
+
+@api.get("/google/oauth/status")
+def google_oauth_status():
+    return {
+        "authorized": os.path.exists(os.getenv("GMAIL_TOKEN_FILE", "token.json")),
+        "start_path": "/api/google/oauth/start",
+        "instructions": get_google_oauth_instructions(),
+    }
+
+
+@api.get("/google/oauth/start", name="google_oauth_start")
+def google_oauth_start(request: Request):
+    authorization_url = begin_google_oauth(request)
+    return RedirectResponse(url=authorization_url, status_code=307)
+
+
+@api.get("/google/oauth/callback", name="google_oauth_callback")
+def google_oauth_callback(request: Request, state: str, code: str | None = None, error: str | None = None):
+    if error:
+        raise HTTPException(status_code=400, detail=f"Google OAuth was cancelled or failed: {error}")
+    if not code:
+        raise HTTPException(status_code=400, detail="Google OAuth callback did not include an authorization code.")
+
+    finish_google_oauth(request, state)
+    return HTMLResponse(
+        """
+        <html>
+          <head>
+            <title>Jarvis Google Auth Complete</title>
+            <meta name="viewport" content="width=device-width, initial-scale=1" />
+            <style>
+              body {
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+                background: #0f172a;
+                color: #e2e8f0;
+                margin: 0;
+                min-height: 100vh;
+                display: grid;
+                place-items: center;
+                padding: 24px;
+              }
+              .card {
+                max-width: 560px;
+                background: rgba(15, 23, 42, 0.92);
+                border: 1px solid rgba(148, 163, 184, 0.25);
+                border-radius: 20px;
+                padding: 28px;
+                box-shadow: 0 20px 70px rgba(0, 0, 0, 0.35);
+              }
+              h1 {
+                margin: 0 0 12px;
+                font-size: 1.4rem;
+              }
+              p {
+                margin: 0;
+                line-height: 1.55;
+                color: #cbd5e1;
+              }
+            </style>
+          </head>
+          <body>
+            <div class="card">
+              <h1>Google authorization complete</h1>
+              <p>Jarvis saved the Google token for this container. You can close this tab and refresh the app.</p>
+            </div>
+          </body>
+        </html>
+        """
+    )
 
 
 @api.get("/emails", response_model=EmailPageResponse)

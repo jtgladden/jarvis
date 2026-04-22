@@ -9,6 +9,7 @@ GMAIL_CREDENTIALS_FILE = os.getenv("GMAIL_CREDENTIALS_FILE", "credentials.json")
 GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.modify"]
 CALENDAR_SCOPES = ["https://www.googleapis.com/auth/calendar.events"]
 GOOGLE_SCOPES = [*GMAIL_SCOPES, *CALENDAR_SCOPES]
+GOOGLE_OAUTH_BASE_URL = os.getenv("GOOGLE_OAUTH_BASE_URL", "").strip()
 DEFAULT_TIMEZONE = os.getenv("DEFAULT_TIMEZONE", "America/Denver")
 APP_DEFAULT_USER_ID = os.getenv("APP_DEFAULT_USER_ID", "local-default-user")
 ASSISTANT_CHAT_DB = os.getenv("ASSISTANT_CHAT_DB", "data/assistant_chat.db")

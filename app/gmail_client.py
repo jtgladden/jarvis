@@ -10,13 +10,13 @@ from typing import Dict, List, Optional
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
 from app.classification_cache import update_cached_email
 from app.classifier import IMPORTANT_LABEL, LEGACY_IMPORTANT_LABELS, LEGACY_UNIMPORTANT_LABELS, UNIMPORTANT_LABEL, canonicalize_importance_label
 from app.config import GMAIL_TOKEN_FILE, GMAIL_CREDENTIALS_FILE, GOOGLE_SCOPES
+from app.google_oauth import get_google_oauth_instructions
 from app.schemas import CleanupDecision, CleanupItem, CleanupResponse, CleanupSummary, EmailClassification, EmailLink, EmailPageResponse, EmailSummary, EmailUpdateResponse, GmailLabel, HandleEmailResponse, RuleDecision, RuleItem, RuleProcessResponse, RuleSummary
 
 REVIEWED_LABEL = "Reviewed"
@@ -160,6 +160,19 @@ class _EmailHTMLParser(HTMLParser):
         )
 
 
+def _has_required_scopes(creds: Optional[Credentials]) -> bool:
+    granted_scopes = set(creds.scopes or []) if creds else set()
+    return set(GOOGLE_SCOPES).issubset(granted_scopes)
+
+
+def _google_reauth_message() -> str:
+    return (
+        "Google access for Jarvis needs to be re-authorized. "
+        f"Delete {GMAIL_TOKEN_FILE} if it exists, then {get_google_oauth_instructions()} "
+        f"with these scopes: {', '.join(GOOGLE_SCOPES)}"
+    )
+
+
 def get_gmail_service():
     creds: Optional[Credentials] = None
 
@@ -171,31 +184,30 @@ def get_gmail_service():
                 f"Failed to read Gmail token file at {GMAIL_TOKEN_FILE}: {exc}"
             ) from exc
 
+    if creds and not _has_required_scopes(creds):
+        creds = None
+
     if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
+        if creds and creds.expired and creds.refresh_token and _has_required_scopes(creds):
             try:
                 creds.refresh(Request())
             except Exception as exc:
-                raise RuntimeError(f"Failed to refresh Gmail credentials: {exc}") from exc
+                raise RuntimeError(
+                    f"Failed to refresh Gmail credentials: {exc}. {_google_reauth_message()}"
+                ) from exc
         else:
             if not os.path.exists(GMAIL_CREDENTIALS_FILE):
+                if os.path.exists(GMAIL_TOKEN_FILE):
+                    raise RuntimeError(_google_reauth_message())
                 raise RuntimeError(
                     "Gmail credentials are not configured. "
                     f"Expected OAuth client file at {GMAIL_CREDENTIALS_FILE}."
                 )
 
-            try:
-                flow = InstalledAppFlow.from_client_secrets_file(
-                    GMAIL_CREDENTIALS_FILE,
-                    GOOGLE_SCOPES,
-                )
-                creds = flow.run_local_server(port=0)
-            except Exception as exc:
-                raise RuntimeError(
-                    "Failed to complete Google OAuth flow. "
-                    "On a server deployment, make sure /data/credentials.json and /data/token.json "
-                    "exist in the container, or generate the token locally first."
-                ) from exc
+            raise RuntimeError(
+                "Google access has not been authorized for this running backend yet. "
+                f"{get_google_oauth_instructions()}"
+            )
 
         try:
             with open(GMAIL_TOKEN_FILE, "w") as token:
