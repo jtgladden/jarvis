@@ -586,6 +586,31 @@ class MovementListResponse(BaseModel):
     entries: List[MovementDailyEntry] = Field(default_factory=list)
 
 
+class TrailPoint(BaseModel):
+    latitude: float
+    longitude: float
+
+
+class TrailSearchItem(BaseModel):
+    id: str
+    name: str
+    source: Literal["usgs", "osm_relation", "osm_way"] = "usgs"
+    trail_type: str = "hiking"
+    ref: Optional[str] = None
+    operator: Optional[str] = None
+    network: Optional[str] = None
+    distance_from_center_m: Optional[float] = None
+    length_m: Optional[float] = None
+    points: List[TrailPoint] = Field(default_factory=list)
+    osm_url: Optional[str] = None
+
+
+class TrailSearchResponse(BaseModel):
+    provider: str = "openstreetmap_overpass"
+    count: int = 0
+    items: List[TrailSearchItem] = Field(default_factory=list)
+
+
 class AssistantChatMessage(BaseModel):
     role: Literal["user", "assistant"]
     content: str = ""

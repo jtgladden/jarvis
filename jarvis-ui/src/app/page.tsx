@@ -28,7 +28,7 @@ import {
 } from "lucide-react";
 import { AssistantPanel } from "@/components/assistant-panel";
 import { MovementMap } from "@/components/movement-map";
-import { TrailExplorer3D } from "@/components/trail-explorer-3d";
+import { saveTerrainExplorerSession } from "@/components/terrain-explorer-session";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -158,6 +158,23 @@ type PlannedRouteOverlay = {
     latitude: number;
     longitude: number;
   }>;
+};
+
+type NearbyTrailItem = {
+  id: string;
+  name: string;
+  source: "usgs" | "osm_relation" | "osm_way";
+  trail_type: string;
+  ref?: string | null;
+  operator?: string | null;
+  network?: string | null;
+  distance_from_center_m?: number | null;
+  length_m?: number | null;
+  points: Array<{
+    latitude: number;
+    longitude: number;
+  }>;
+  osm_url?: string | null;
 };
 
 function normalizeOverview(data: Partial<ClassificationOverview>): ClassificationOverview {
@@ -469,6 +486,18 @@ function workoutToMapEntry(workout: {
   };
 }
 
+function createBaseTerrainExplorerOption() {
+  return {
+    id: "terrain-explore",
+    label: "Explore terrain",
+    detail: "Free-roam 3D terrain view centered on Provo Valley.",
+    entry: {
+      route_points: [],
+      visits: [],
+    },
+  };
+}
+
 function normalizePlannedRoutePoints(
   points: Array<{ latitude: number; longitude: number }>
 ) {
@@ -479,6 +508,17 @@ function normalizePlannedRoutePoints(
       Math.abs(point.latitude) <= 90 &&
       Math.abs(point.longitude) <= 180
   );
+}
+
+function buildTrailPlanningPrompt(trail: NearbyTrailItem) {
+  const trailLength =
+    trail.length_m && trail.length_m > 0
+      ? `${formatDistanceMiles(trail.length_m / 1000, 1)} trail distance`
+      : "unknown trail distance";
+  const trailRef = trail.ref ? ` (${trail.ref})` : "";
+  const operator = trail.operator ? ` Operated or maintained by ${trail.operator}.` : "";
+
+  return `Plan a hike around ${trail.name}${trailRef}. Use it as the anchor outdoor excursion for the next few days. Consider drive time, prep time, water and gear, a realistic hiking window, and recovery afterward. Assume ${trailLength}.${operator}`;
 }
 
 function isLineStringGeometry(
@@ -1064,6 +1104,7 @@ function HealthDetailPanel({
   movementLoading,
   loading,
   onBackToDashboard,
+  onUseTrailForPlanner,
 }: {
   dashboard: DashboardResponse | null;
   healthEntries: HealthDailyEntry[];
@@ -1074,6 +1115,7 @@ function HealthDetailPanel({
   movementLoading: boolean;
   loading: boolean;
   onBackToDashboard?: () => void;
+  onUseTrailForPlanner?: (trail: NearbyTrailItem) => void;
 }) {
   const healthSummary = dashboard?.health_summary ?? null;
   const [healthAtlasTab, setHealthAtlasTab] = useState<"overview" | "routes">("overview");
@@ -1098,24 +1140,15 @@ function HealthDetailPanel({
   );
   const terrainExplorerOptions = useMemo(
     () => [
+      createBaseTerrainExplorerOption(),
       ...mappedWorkouts.map((workout) => ({
         id: `workout-${workout.workout_id}`,
         label: formatWorkoutLabel(workout.activity_label, workout.activity_type),
         detail: formatScheduleDateTime(workout.start_date),
         entry: workoutToMapEntry(workout),
       })),
-      ...(selectedMovementEntry && hasMovementMap
-        ? [
-            {
-              id: `movement-${selectedMovementEntry.date}`,
-              label: "Daily movement",
-              detail: `${selectedMovementEntry.route_points.length || selectedMovementEntry.visits.length} points`,
-              entry: selectedMovementEntry,
-            },
-          ]
-        : []),
     ],
-    [mappedWorkouts, selectedMovementEntry, hasMovementMap]
+    [mappedWorkouts]
   );
   const [selectedTerrainExplorerId, setSelectedTerrainExplorerId] = useState<string | null>(
     () => terrainExplorerOptions[0]?.id ?? null
@@ -1136,6 +1169,22 @@ function HealthDetailPanel({
     terrainExplorerOptions.find((option) => option.id === selectedTerrainExplorerId) ??
     terrainExplorerOptions[0] ??
     null;
+
+  const openFullscreenTerrainExplorer = () => {
+    if (!terrainExplorerOptions.length) {
+      return;
+    }
+
+    const sessionId = saveTerrainExplorerSession({
+      terrainExplorerOptions,
+      selectedTerrainExplorerId,
+      plannedRouteOverlay,
+      nearbyTrails: [],
+      selectedNearbyTrailId: null,
+      sourceContext: "desktop",
+    });
+    window.open(`/terrain-explorer?session=${encodeURIComponent(sessionId)}`, "_blank", "noopener,noreferrer");
+  };
 
   const handlePlannedRouteUpload = async (
     event: React.ChangeEvent<HTMLInputElement>
@@ -1452,37 +1501,49 @@ function HealthDetailPanel({
                         </div>
                       ) : null}
 
-                      {healthAtlasTab === "routes" && selectedTerrainExplorer ? (
+                      {healthAtlasTab === "routes" ? (
                         <div className="rounded-[1.3rem] border border-white/6 bg-[rgba(17,19,34,0.45)] p-4">
                           <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                             <div>
                               <div className="text-xs uppercase tracking-[0.18em] text-slate-400">3D terrain explorer</div>
                               <div className="mt-1 text-sm text-slate-300">
-                                Adapted from the `trailforkd` Cesium approach so Jarvis can compare recorded routes with a planned hike or outdoor excursion on a terrain globe.
+                                Open the terrain explorer in a separate fullscreen window to freely explore the map, then layer in workout routes, planned hikes, and live trail overlays when you want them.
                               </div>
                             </div>
                             <div className="flex flex-wrap gap-2">
-                              {terrainExplorerOptions.map((option) => (
-                                <button
-                                  key={option.id}
-                                  type="button"
-                                  onClick={() => setSelectedTerrainExplorerId(option.id)}
-                                  className={`rounded-full border px-3 py-1 text-xs transition ${
-                                    selectedTerrainExplorer.id === option.id
-                                      ? "border-emerald-300/25 bg-emerald-400/12 text-emerald-100"
-                                      : "border-white/10 bg-white/5 text-slate-300 hover:border-white/20"
-                                  }`}
-                                >
-                                  {option.label}
-                                </button>
-                              ))}
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                className="rounded-2xl"
+                                onClick={openFullscreenTerrainExplorer}
+                                disabled={!selectedTerrainExplorer}
+                              >
+                                Open fullscreen
+                              </Button>
                             </div>
+                          </div>
+                          <div className="mt-4 flex flex-wrap gap-2">
+                            {terrainExplorerOptions.map((option) => (
+                              <button
+                                key={option.id}
+                                type="button"
+                                onClick={() => setSelectedTerrainExplorerId(option.id)}
+                                className={`rounded-full border px-3 py-1 text-xs transition ${
+                                  selectedTerrainExplorer?.id === option.id
+                                    ? "border-emerald-300/25 bg-emerald-400/12 text-emerald-100"
+                                    : "border-white/10 bg-white/5 text-slate-300 hover:border-white/20"
+                                }`}
+                              >
+                                {option.label}
+                              </button>
+                            ))}
                           </div>
                           <div className="mt-4 flex flex-col gap-3 rounded-[1rem] border border-white/8 bg-black/10 p-4 lg:flex-row lg:items-center lg:justify-between">
                             <div>
                               <div className="text-xs uppercase tracking-[0.16em] text-slate-400">Planned route overlay</div>
                               <div className="mt-1 text-sm text-slate-300">
-                                Import a `GPX` or `GeoJSON` track to preview a future hike or excursion against your existing route context.
+                                Import a `GPX` or `GeoJSON` track here, then launch fullscreen to preview it on the terrain globe.
                               </div>
                               {plannedRouteOverlay ? (
                                 <div className="mt-2 text-xs text-emerald-200">
@@ -1517,15 +1578,13 @@ function HealthDetailPanel({
                               ) : null}
                             </div>
                           </div>
-                          <div className="mt-3 text-xs text-slate-500">
-                            {selectedTerrainExplorer.detail}
-                          </div>
-                          <div className="mt-4 overflow-hidden rounded-[1.2rem] border border-white/8 bg-[radial-gradient(circle_at_top_left,rgba(16,185,129,0.14),transparent_32%),linear-gradient(180deg,rgba(9,12,22,0.96),rgba(15,18,28,0.96))]">
-                            <TrailExplorer3D
-                              entry={selectedTerrainExplorer.entry}
-                              plannedRoute={plannedRouteOverlay}
-                              className="h-[480px] xl:h-[560px]"
-                            />
+                          {selectedTerrainExplorer?.detail ? (
+                            <div className="mt-3 text-xs text-slate-500">
+                              Selected route: {selectedTerrainExplorer.detail}
+                            </div>
+                          ) : null}
+                          <div className="mt-4 rounded-[1rem] border border-white/8 bg-black/10 p-4 text-sm text-slate-300">
+                            Trail search, terrain overlays, and hike-planning controls now live only in the fullscreen explorer so the embedded dashboard view stays stable.
                           </div>
                         </div>
                       ) : null}
@@ -5146,6 +5205,11 @@ export default function HomePage() {
             movementLoading={movementLoading}
             loading={loading}
             onBackToDashboard={() => setMode("dashboard")}
+            onUseTrailForPlanner={(trail) => {
+              setPlanningPrompt(buildTrailPlanningPrompt(trail));
+              setScheduleWorkspaceTab("planner");
+              setMode("schedule");
+            }}
           />
         ) : mode === "news" ? (
           <div className="space-y-6">

@@ -27,9 +27,10 @@ from app.movement import list_movement_entries, sync_movement_daily_entry
 from app.movement_store import init_movement_store
 from app.planner import generate_schedule_plan
 from app.rules import classify_new_email_rule
-from app.schemas import AssistantAskRequest, AssistantAskResponse, AssistantChatListResponse, AssistantChatThread, CalendarAgendaResponse, CalendarEventCreateResponse, CalendarEventPreview, CalendarQuickAddRequest, CalendarQuickAddResponse, ClassifiedEmailResponse, ClassificationGuidanceRequest, ClassificationGuidanceResponse, ClassificationOverviewResponse, CleanupJobStartResponse, CleanupJobStatus, CleanupResponse, DashboardResponse, DashboardTaskItem, EmailPageResponse, EmailSummary, EmailUpdateRequest, EmailUpdateResponse, GmailLabel, HandleEmailResponse, HealthDailySyncRequest, HealthDailySyncResponse, HealthListResponse, JournalDayEntry, JournalDayNoteUpdateRequest, JournalResponse, MovementDailySyncRequest, MovementDailySyncResponse, MovementListResponse, PlanningCalendarBulkCreateRequest, PlanningCalendarBulkCreateResponse, PlanningCalendarCreateRequest, PlanningCalendarCreateResponse, PlanningJobStartResponse, PlanningJobStatus, PlanningRequest, PlanningResponse, RuleProcessResponse, TaskCreateRequest, TaskListResponse, TaskUpdateRequest, WorkoutBatchSyncRequest, WorkoutBatchSyncResponse, WorkoutListResponse
+from app.schemas import AssistantAskRequest, AssistantAskResponse, AssistantChatListResponse, AssistantChatThread, CalendarAgendaResponse, CalendarEventCreateResponse, CalendarEventPreview, CalendarQuickAddRequest, CalendarQuickAddResponse, ClassifiedEmailResponse, ClassificationGuidanceRequest, ClassificationGuidanceResponse, ClassificationOverviewResponse, CleanupJobStartResponse, CleanupJobStatus, CleanupResponse, DashboardResponse, DashboardTaskItem, EmailPageResponse, EmailSummary, EmailUpdateRequest, EmailUpdateResponse, GmailLabel, HandleEmailResponse, HealthDailySyncRequest, HealthDailySyncResponse, HealthListResponse, JournalDayEntry, JournalDayNoteUpdateRequest, JournalResponse, MovementDailySyncRequest, MovementDailySyncResponse, MovementListResponse, PlanningCalendarBulkCreateRequest, PlanningCalendarBulkCreateResponse, PlanningCalendarCreateRequest, PlanningCalendarCreateResponse, PlanningJobStartResponse, PlanningJobStatus, PlanningRequest, PlanningResponse, RuleProcessResponse, TaskCreateRequest, TaskListResponse, TaskUpdateRequest, TrailSearchResponse, WorkoutBatchSyncRequest, WorkoutBatchSyncResponse, WorkoutListResponse
 from app.task_service import create_task, delete_task, list_tasks, update_task
 from app.task_store import init_task_store
+from app.trails import search_openstreetmap_trails
 from app.user_context import get_default_user_context
 from app.workout import list_workout_entries, sync_workout_batch
 from app.workout_store import init_workout_store
@@ -56,6 +57,11 @@ _new_mail_sort_lock = Lock()
 @app.exception_handler(RuntimeError)
 async def runtime_error_handler(_: Request, exc: RuntimeError):
     return JSONResponse(status_code=500, content={"detail": str(exc)})
+
+
+@app.exception_handler(ValueError)
+async def value_error_handler(_: Request, exc: ValueError):
+    return JSONResponse(status_code=400, content={"detail": str(exc)})
 
 
 def _set_cleanup_job(job_id: str, **updates) -> CleanupJobStatus:
@@ -574,6 +580,23 @@ def planning_calendar_create(payload: PlanningCalendarCreateRequest):
 @api.post("/planning/calendar/bulk", response_model=PlanningCalendarBulkCreateResponse)
 def planning_calendar_bulk_create(payload: PlanningCalendarBulkCreateRequest):
     return create_calendar_events_from_plan_items(payload.items)
+
+
+@api.get("/trails/search", response_model=TrailSearchResponse)
+def trails_search(
+    min_lat: float = Query(..., ge=-90, le=90),
+    min_lon: float = Query(..., ge=-180, le=180),
+    max_lat: float = Query(..., ge=-90, le=90),
+    max_lon: float = Query(..., ge=-180, le=180),
+    limit: int = Query(default=12, ge=1, le=25),
+):
+    return search_openstreetmap_trails(
+        min_lat=min_lat,
+        min_lon=min_lon,
+        max_lat=max_lat,
+        max_lon=max_lon,
+        limit=limit,
+    )
 
 
 @api.post("/cleanup/preview", response_model=CleanupJobStartResponse)

@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import { AssistantPanel } from "@/components/assistant-panel";
 import { MovementMap } from "@/components/movement-map";
+import { saveTerrainExplorerSession } from "@/components/terrain-explorer-session";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -174,6 +175,14 @@ type WorkoutEntry = {
 
 type WorkoutListResponse = {
   workouts: WorkoutEntry[];
+};
+
+type PlannedRouteOverlay = {
+  name: string;
+  points: Array<{
+    latitude: number;
+    longitude: number;
+  }>;
 };
 
 type TaskListResponse = {
@@ -416,6 +425,158 @@ function workoutToMapEntry(workout: {
       horizontal_accuracy_m: null,
     })),
     visits: [],
+  };
+}
+
+function normalizePlannedRoutePoints(
+  points: Array<{ latitude: number; longitude: number }>
+) {
+  return points.filter(
+    (point) =>
+      Number.isFinite(point.latitude) &&
+      Number.isFinite(point.longitude) &&
+      Math.abs(point.latitude) <= 90 &&
+      Math.abs(point.longitude) <= 180
+  );
+}
+
+function isLineStringGeometry(
+  value: unknown
+): value is { type: "LineString"; coordinates: unknown[] } {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "type" in value &&
+    (value as { type?: unknown }).type === "LineString" &&
+    "coordinates" in value &&
+    Array.isArray((value as { coordinates?: unknown }).coordinates)
+  );
+}
+
+function getFeatureRouteName(
+  feature: { properties?: { name?: string; title?: string } } | unknown,
+  fallbackName: string
+) {
+  if (
+    typeof feature === "object" &&
+    feature !== null &&
+    "properties" in feature &&
+    typeof feature.properties === "object" &&
+    feature.properties !== null
+  ) {
+    const properties = feature.properties as { name?: string; title?: string };
+    return properties.name || properties.title || fallbackName;
+  }
+
+  return fallbackName;
+}
+
+function parseGeoJsonRoute(text: string, fallbackName: string): PlannedRouteOverlay | null {
+  const parsed = JSON.parse(text) as
+    | {
+        type?: string;
+        coordinates?: unknown;
+        features?: Array<{
+          geometry?: {
+            type?: string;
+            coordinates?: unknown;
+          };
+          properties?: {
+            name?: string;
+            title?: string;
+          };
+        }>;
+        properties?: {
+          name?: string;
+        };
+      }
+    | Array<unknown>;
+
+  const candidateFeatures =
+    Array.isArray(parsed)
+      ? []
+      : parsed.type === "FeatureCollection"
+      ? parsed.features || []
+      : parsed.type === "Feature"
+      ? [parsed]
+      : [parsed];
+
+  for (const feature of candidateFeatures) {
+    const geometry = "geometry" in feature ? feature.geometry : feature;
+    if (!isLineStringGeometry(geometry)) {
+      continue;
+    }
+
+    const points = normalizePlannedRoutePoints(
+      geometry.coordinates
+        .filter((coordinate): coordinate is [number, number] =>
+          Array.isArray(coordinate) &&
+          coordinate.length >= 2 &&
+          typeof coordinate[0] === "number" &&
+          typeof coordinate[1] === "number"
+        )
+        .map(([longitude, latitude]) => ({ latitude, longitude }))
+    );
+
+    if (points.length) {
+      const featureName =
+        getFeatureRouteName(feature, fallbackName) ||
+        (!Array.isArray(parsed) && parsed.properties?.name) ||
+        fallbackName;
+      return {
+        name: featureName || fallbackName,
+        points,
+      };
+    }
+  }
+
+  return null;
+}
+
+function parseGpxRoute(text: string, fallbackName: string): PlannedRouteOverlay | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  const xml = new window.DOMParser().parseFromString(text, "application/xml");
+  const parserError = xml.querySelector("parsererror");
+  if (parserError) {
+    return null;
+  }
+
+  const trackPoints = Array.from(xml.querySelectorAll("trkpt"))
+    .map((node) => ({
+      latitude: Number(node.getAttribute("lat")),
+      longitude: Number(node.getAttribute("lon")),
+    }))
+    .filter(
+      (point) => Number.isFinite(point.latitude) && Number.isFinite(point.longitude)
+    );
+
+  if (!trackPoints.length) {
+    return null;
+  }
+
+  const routeName =
+    xml.querySelector("trk > name")?.textContent?.trim() ||
+    xml.querySelector("rte > name")?.textContent?.trim() ||
+    fallbackName;
+
+  return {
+    name: routeName,
+    points: normalizePlannedRoutePoints(trackPoints),
+  };
+}
+
+function createBaseTerrainExplorerOption() {
+  return {
+    id: "terrain-explore",
+    label: "Explore terrain",
+    detail: "Free-roam 3D terrain view centered on Provo Valley.",
+    entry: {
+      route_points: [],
+      visits: [],
+    },
   };
 }
 
@@ -664,6 +825,10 @@ function MobilePageContent() {
   const [movementEntries, setMovementEntries] = useState<MovementDailyEntry[]>([]);
   const [workoutEntries, setWorkoutEntries] = useState<WorkoutEntry[]>([]);
   const [expandedMetricsOpen, setExpandedMetricsOpen] = useState(false);
+  const [healthRoutesTab, setHealthRoutesTab] = useState<"overview" | "routes">("overview");
+  const [plannedRouteOverlay, setPlannedRouteOverlay] = useState<PlannedRouteOverlay | null>(null);
+  const [plannedRouteError, setPlannedRouteError] = useState("");
+  const [selectedTerrainExplorerId, setSelectedTerrainExplorerId] = useState<string | null>(null);
   const [tasks, setTasks] = useState<DashboardTaskItem[]>([]);
   const [journal, setJournal] = useState<JournalDayEntry[]>([]);
   const [journalQuery, setJournalQuery] = useState("");
@@ -694,6 +859,40 @@ function MobilePageContent() {
   const hasMovementMap = Boolean(
     latestMovementEntry && (latestMovementEntry.route_points.length || latestMovementEntry.visits.length)
   );
+  const terrainExplorerOptions = useMemo(
+    () => [
+      createBaseTerrainExplorerOption(),
+      ...mappedWorkoutEntries.map((workout) => ({
+        id: `workout-${workout.workout_id}`,
+        label: formatWorkoutLabel(workout.activity_label, workout.activity_type),
+        detail: formatScheduleDateTime(workout.start_date),
+        entry: workoutToMapEntry(workout),
+      })),
+    ],
+    [mappedWorkoutEntries]
+  );
+  const selectedTerrainExplorer =
+    terrainExplorerOptions.find((option) => option.id === selectedTerrainExplorerId) ??
+    terrainExplorerOptions[0] ??
+    null;
+
+  useEffect(() => {
+    if (!terrainExplorerOptions.length) {
+      setSelectedTerrainExplorerId(null);
+      return;
+    }
+
+    setSelectedTerrainExplorerId((current) =>
+      current && terrainExplorerOptions.some((option) => option.id === current)
+        ? current
+        : terrainExplorerOptions[0].id
+    );
+  }, [terrainExplorerOptions]);
+
+  useEffect(() => {
+    setPlannedRouteOverlay(null);
+    setPlannedRouteError("");
+  }, [selectedTerrainExplorerId, activeHealthDate]);
 
   const loadGoogleAuthStatus = useCallback(async () => {
     try {
@@ -823,6 +1022,55 @@ function MobilePageContent() {
   useEffect(() => {
     void loadGoogleAuthStatus();
   }, [loadGoogleAuthStatus]);
+
+  const handlePlannedRouteUpload = async (
+    event: React.ChangeEvent<HTMLInputElement>
+  ) => {
+    const file = event.target.files?.[0];
+    if (!file) {
+      return;
+    }
+
+    try {
+      const text = await file.text();
+      const baseName = file.name.replace(/\.[^.]+$/, "") || "Planned route";
+      const lowerName = file.name.toLowerCase();
+      const parsedRoute =
+        lowerName.endsWith(".gpx")
+          ? parseGpxRoute(text, baseName)
+          : parseGeoJsonRoute(text, baseName);
+
+      if (!parsedRoute?.points.length) {
+        throw new Error("No route points were found in that GPX or GeoJSON file.");
+      }
+
+      setPlannedRouteOverlay(parsedRoute);
+      setPlannedRouteError("");
+    } catch (error) {
+      setPlannedRouteOverlay(null);
+      setPlannedRouteError(
+        error instanceof Error ? error.message : "Unable to import the selected route file."
+      );
+    } finally {
+      event.target.value = "";
+    }
+  };
+
+  const openFullscreenTerrainExplorer = () => {
+    if (!terrainExplorerOptions.length) {
+      return;
+    }
+
+    const sessionId = saveTerrainExplorerSession({
+      terrainExplorerOptions,
+      selectedTerrainExplorerId,
+      plannedRouteOverlay,
+      nearbyTrails: [],
+      selectedNearbyTrailId: null,
+      sourceContext: "mobile",
+    });
+    window.open(`/terrain-explorer?session=${encodeURIComponent(sessionId)}`, "_blank", "noopener,noreferrer");
+  };
 
   const refreshLiveMovement = useEffectEvent(async () => {
     try {
@@ -1518,6 +1766,30 @@ function MobilePageContent() {
                 <CardTitle className="text-lg">Body, workouts, and movement</CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setHealthRoutesTab("overview")}
+                    className={`rounded-full border px-3 py-1.5 text-xs uppercase tracking-[0.18em] transition ${
+                      healthRoutesTab === "overview"
+                        ? "border-cyan-300/25 bg-cyan-400/12 text-cyan-100"
+                        : "border-white/10 bg-white/5 text-slate-300 hover:border-white/20"
+                    }`}
+                  >
+                    Overview
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setHealthRoutesTab("routes")}
+                    className={`rounded-full border px-3 py-1.5 text-xs uppercase tracking-[0.18em] transition ${
+                      healthRoutesTab === "routes"
+                        ? "border-emerald-300/25 bg-emerald-400/12 text-emerald-100"
+                        : "border-white/10 bg-white/5 text-slate-300 hover:border-white/20"
+                    }`}
+                  >
+                    Routes
+                  </button>
+                </div>
                 <div className="rounded-[1.2rem] border border-white/8 bg-white/5 px-4 py-3">
                   <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Selected day</div>
                   <div className="mt-1 text-sm font-semibold text-white">{formatSelectedDayLabel(activeHealthDate)}</div>
@@ -1552,6 +1824,91 @@ function MobilePageContent() {
                 </div>
                 {dashboard?.health_summary || movementEntries.length ? (
                   <>
+                    {healthRoutesTab === "routes" ? (
+                      <div className="space-y-3">
+                        <div className="rounded-[1.2rem] border border-white/8 bg-white/5 px-4 py-3">
+                          <div className="text-xs uppercase tracking-[0.18em] text-slate-400">3D route explorer</div>
+                          <div className="mt-1 text-sm text-slate-300">
+                            Open the terrain explorer in a separate fullscreen window to freely explore the map, then layer in workout routes, planned hikes, and live trail overlays when you want them.
+                          </div>
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              className="rounded-2xl"
+                              onClick={openFullscreenTerrainExplorer}
+                              disabled={!selectedTerrainExplorer}
+                            >
+                              Open fullscreen
+                            </Button>
+                          </div>
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            {terrainExplorerOptions.map((option) => (
+                              <button
+                                key={option.id}
+                                type="button"
+                                onClick={() => setSelectedTerrainExplorerId(option.id)}
+                                className={`rounded-full border px-3 py-1 text-xs transition ${
+                                  selectedTerrainExplorer?.id === option.id
+                                    ? "border-emerald-300/25 bg-emerald-400/12 text-emerald-100"
+                                    : "border-white/10 bg-white/5 text-slate-300 hover:border-white/20"
+                                }`}
+                              >
+                                {option.label}
+                              </button>
+                            ))}
+                          </div>
+                          {selectedTerrainExplorer?.detail ? (
+                            <div className="mt-3 text-[11px] text-slate-500">{selectedTerrainExplorer.detail}</div>
+                          ) : null}
+                        </div>
+
+                        <div className="rounded-[1.2rem] border border-white/8 bg-white/5 px-4 py-3">
+                          <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Planned route overlay</div>
+                          <div className="mt-1 text-xs text-slate-500">
+                            Import a GPX or GeoJSON route here, then launch fullscreen to preview it on the terrain globe.
+                          </div>
+                          {plannedRouteOverlay ? (
+                            <div className="mt-2 text-xs text-emerald-200">
+                              Loaded {plannedRouteOverlay.name} with {plannedRouteOverlay.points.length} points.
+                            </div>
+                          ) : null}
+                          {plannedRouteError ? (
+                            <div className="mt-2 text-xs text-rose-200">{plannedRouteError}</div>
+                          ) : null}
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            <label className="inline-flex cursor-pointer items-center rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-slate-200 transition hover:border-white/20">
+                              Import route
+                              <input
+                                type="file"
+                                accept=".gpx,.geojson,.json,application/geo+json,application/json,application/gpx+xml"
+                                onChange={handlePlannedRouteUpload}
+                                className="hidden"
+                              />
+                            </label>
+                            {plannedRouteOverlay ? (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setPlannedRouteOverlay(null);
+                                  setPlannedRouteError("");
+                                }}
+                                className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-slate-300 transition hover:border-white/20"
+                              >
+                                Clear route
+                              </button>
+                            ) : null}
+                          </div>
+                        </div>
+                        <div className="rounded-[1.2rem] border border-white/8 bg-white/5 px-4 py-3 text-sm text-slate-300">
+                          Trail search, terrain overlays, and hike-planning controls now live only in the fullscreen explorer so the embedded mobile view stays stable.
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {healthRoutesTab === "overview" ? (
+                      <>
                     {selectedHealthEntry ? (
                       <>
                         <div className="rounded-[1.3rem] border border-cyan-300/18 bg-[linear-gradient(135deg,rgba(56,189,248,0.14),rgba(17,19,34,0.5))] p-4">
@@ -1784,6 +2141,8 @@ function MobilePageContent() {
                         </div>
                       )}
                     </div>
+                      </>
+                    ) : null}
 
                   </>
                 ) : (
