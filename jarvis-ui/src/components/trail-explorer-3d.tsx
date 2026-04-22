@@ -33,6 +33,11 @@ type TrailExplorer3DProps = {
   className?: string;
 };
 
+type RuntimeTerrainConfig = {
+  cesiumIonToken: string;
+  cesiumTerrainUrl: string;
+};
+
 type ImageryMode = "satellite" | "topo" | "osm";
 type TerrainMode = "local" | "world" | "ellipsoid";
 
@@ -164,7 +169,10 @@ function syncTrailEntities(
   viewer: any,
   entry: TrailExplorerEntry,
   plannedRoute: PlannedRouteOverlay | null | undefined,
-  onStatus: (value: string) => void
+  onStatus: (value: string) => void,
+  options?: {
+    zoomToFit?: boolean;
+  }
 ) {
   const coordinates = getRouteCoordinates(entry);
   const plannedCoordinates = (plannedRoute?.points || [])
@@ -244,14 +252,16 @@ function syncTrailEntities(
     });
   }
 
-  viewer.flyTo(viewer.entities, {
-    duration: 0.9,
-    offset: new Cesium.HeadingPitchRange(
-      0,
-      Cesium.Math.toRadians(-35),
-      Math.max(1800, coordinates.length * 18)
-    ),
-  });
+  if (options?.zoomToFit) {
+    viewer.flyTo(viewer.entities, {
+      duration: 0.9,
+      offset: new Cesium.HeadingPitchRange(
+        0,
+        Cesium.Math.toRadians(-35),
+        Math.max(1800, coordinates.length * 18)
+      ),
+    });
+  }
   onStatus(
     plannedCoordinates.length
       ? `actual ${coordinates.length || 0} pts, planned ${plannedCoordinates.length} pts`
@@ -268,12 +278,15 @@ export function TrailExplorer3D({
   const viewerRef = useRef<any | null>(null);
   const cesiumRef = useRef<any | null>(null);
   const latestEntryRef = useRef(entry);
+  const lastRenderedRouteKeyRef = useRef<string | null>(null);
   const [isReady, setIsReady] = useState(false);
   const [status, setStatus] = useState("loading Cesium");
   const [imageryMode, setImageryMode] = useState<ImageryMode>("satellite");
   const [terrainMode, setTerrainMode] = useState<TerrainMode>("ellipsoid");
-  const terrainUrl = process.env.NEXT_PUBLIC_CESIUM_TERRAIN_URL?.trim() || "";
-  const ionToken = process.env.NEXT_PUBLIC_CESIUM_ION_TOKEN?.trim() || "";
+  const [runtimeConfig, setRuntimeConfig] = useState<RuntimeTerrainConfig>({
+    cesiumIonToken: "",
+    cesiumTerrainUrl: "",
+  });
 
   const entryKey = useMemo(
     () =>
@@ -301,10 +314,43 @@ export function TrailExplorer3D({
       ),
     [plannedRoute]
   );
+  const terrainUrl = runtimeConfig.cesiumTerrainUrl.trim();
+  const ionToken = runtimeConfig.cesiumIonToken.trim();
+  const routeSceneKey = `${entryKey}::${plannedRouteKey}`;
 
   useEffect(() => {
     latestEntryRef.current = entry;
   }, [entry, entryKey]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadRuntimeConfig() {
+      try {
+        const response = await fetch("/jarvis-runtime-config", {
+          cache: "no-store",
+        });
+        if (!response.ok) {
+          return;
+        }
+
+        const data = (await response.json()) as RuntimeTerrainConfig;
+        if (!cancelled) {
+          setRuntimeConfig(data);
+        }
+      } catch {
+        if (!cancelled) {
+          setStatus("runtime terrain config unavailable");
+        }
+      }
+    }
+
+    void loadRuntimeConfig();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (terrainUrl) {
@@ -436,7 +482,8 @@ export function TrailExplorer3D({
             viewer,
             latestEntryRef.current,
             plannedRoute,
-            setStatus
+            setStatus,
+            { zoomToFit: false }
           );
         }
       } catch {
@@ -448,7 +495,8 @@ export function TrailExplorer3D({
             viewer,
             latestEntryRef.current,
             plannedRoute,
-            setStatus
+            setStatus,
+            { zoomToFit: false }
           );
         }
       }
@@ -468,8 +516,12 @@ export function TrailExplorer3D({
       return;
     }
 
-    syncTrailEntities(Cesium, viewer, entry, plannedRoute, setStatus);
-  }, [entry, entryKey, plannedRoute, plannedRouteKey, isReady]);
+    const shouldZoomToFit = lastRenderedRouteKeyRef.current !== routeSceneKey;
+    syncTrailEntities(Cesium, viewer, entry, plannedRoute, setStatus, {
+      zoomToFit: shouldZoomToFit,
+    });
+    lastRenderedRouteKeyRef.current = routeSceneKey;
+  }, [entry, entryKey, plannedRoute, plannedRouteKey, routeSceneKey, isReady]);
 
   return (
     <div

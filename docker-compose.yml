@@ -1,5 +1,8 @@
 services:
   api:
+    build:
+      context: .
+      dockerfile: Dockerfile
     image: ${API_IMAGE:?Set API_IMAGE in .env to your GHCR backend image, e.g. ghcr.io/owner/repo-api:latest}
     container_name: jarvis-api
     environment:
@@ -24,6 +27,9 @@ services:
     restart: unless-stopped
 
   web:
+    build:
+      context: ./jarvis-ui
+      dockerfile: Dockerfile
     image: ${WEB_IMAGE:?Set WEB_IMAGE in .env to your GHCR frontend image, e.g. ghcr.io/owner/repo-web:latest}
     container_name: jarvis-web
     environment:
@@ -31,6 +37,8 @@ services:
       API_PROXY_TARGET: ${API_PROXY_TARGET:-http://api:8000}
       NEXT_PUBLIC_CESIUM_ION_TOKEN: ${NEXT_PUBLIC_CESIUM_ION_TOKEN:-}
       NEXT_PUBLIC_CESIUM_TERRAIN_URL: ${NEXT_PUBLIC_CESIUM_TERRAIN_URL:-}
+      CESIUM_ION_TOKEN: ${NEXT_PUBLIC_CESIUM_ION_TOKEN:-}
+      CESIUM_TERRAIN_URL: ${NEXT_PUBLIC_CESIUM_TERRAIN_URL:-}
     ports:
       - "3000:3000"
     depends_on:

@@ -1076,6 +1076,7 @@ function HealthDetailPanel({
   onBackToDashboard?: () => void;
 }) {
   const healthSummary = dashboard?.health_summary ?? null;
+  const [healthAtlasTab, setHealthAtlasTab] = useState<"overview" | "routes">("overview");
   const [expandedMetricsOpen, setExpandedMetricsOpen] = useState(false);
   const [plannedRouteOverlay, setPlannedRouteOverlay] = useState<PlannedRouteOverlay | null>(null);
   const [plannedRouteError, setPlannedRouteError] = useState("");
@@ -1229,6 +1230,30 @@ function HealthDetailPanel({
               </Button>
             </div>
           </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => setHealthAtlasTab("overview")}
+              className={`rounded-full border px-3 py-1.5 text-xs uppercase tracking-[0.18em] transition ${
+                healthAtlasTab === "overview"
+                  ? "border-cyan-300/25 bg-cyan-400/12 text-cyan-100"
+                  : "border-white/10 bg-white/5 text-slate-300 hover:border-white/20"
+              }`}
+            >
+              Overview
+            </button>
+            <button
+              type="button"
+              onClick={() => setHealthAtlasTab("routes")}
+              className={`rounded-full border px-3 py-1.5 text-xs uppercase tracking-[0.18em] transition ${
+                healthAtlasTab === "routes"
+                  ? "border-emerald-300/25 bg-emerald-400/12 text-emerald-100"
+                  : "border-white/10 bg-white/5 text-slate-300 hover:border-white/20"
+              }`}
+            >
+              Routes
+            </button>
+          </div>
         </CardHeader>
         <CardContent>
           {selectedHealthEntry || selectedMovementEntry ? (
@@ -1368,50 +1393,6 @@ function HealthDetailPanel({
 
               <Card className="rounded-[1.5rem] border border-white/6 bg-[rgba(35,37,58,0.72)] shadow-none">
                 <CardHeader className="pb-2">
-                  <CardTitle className="text-base">Workout routes</CardTitle>
-                  <p className="text-sm leading-6 text-slate-300">
-                    Mapped workouts stay separate from passive movement so hikes and runs read like distinct events.
-                  </p>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  {mappedWorkouts.length ? (
-                    <div className="grid gap-4 xl:grid-cols-2">
-                      {mappedWorkouts.map((workout) => (
-                        <div
-                          key={`${workout.workout_id}-map`}
-                          className="overflow-hidden rounded-[1.2rem] border border-white/6 bg-[rgba(17,19,34,0.45)]"
-                        >
-                          <div className="flex items-center justify-between gap-3 px-4 py-3">
-                            <div>
-                              <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Workout route</div>
-                              <div className="mt-1 text-sm font-medium text-slate-100">{formatWorkoutLabel(workout.activity_label, workout.activity_type)}</div>
-                            </div>
-                            <div className="text-xs text-slate-400">
-                              {formatDistanceMiles(workout.total_distance_km, 1)}
-                            </div>
-                          </div>
-                          <MovementMap entry={workoutToMapEntry(workout)} className="h-[320px]" />
-                          <div className="flex flex-wrap gap-2 px-4 py-3 text-xs text-slate-300">
-                            <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1">
-                              {formatScheduleDateTime(workout.start_date)}
-                            </span>
-                            <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1">
-                              {workout.route_points.length} route point{workout.route_points.length === 1 ? "" : "s"}
-                            </span>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="rounded-[1rem] border border-dashed border-white/10 px-4 py-3 text-sm text-slate-400">
-                      No mapped workout routes available yet.
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-
-              <Card className="rounded-[1.5rem] border border-white/6 bg-[rgba(35,37,58,0.72)] shadow-none">
-                <CardHeader className="pb-2">
                   <CardTitle className="text-base">Movement journal</CardTitle>
                   <p className="text-sm leading-6 text-slate-300">
                     A more narrative look at your day: where you went, how the day flowed, and the shape of your movement.
@@ -1449,7 +1430,7 @@ function HealthDetailPanel({
                         </div>
                       </div>
 
-                      {hasMovementMap && selectedMovementEntry ? (
+                      {healthAtlasTab === "routes" && hasMovementMap && selectedMovementEntry ? (
                         <div className="rounded-[1.3rem] border border-white/6 bg-[rgba(17,19,34,0.45)] p-4">
                           <div className="flex items-center justify-between gap-3">
                             <div>
@@ -1471,7 +1452,7 @@ function HealthDetailPanel({
                         </div>
                       ) : null}
 
-                      {selectedTerrainExplorer ? (
+                      {healthAtlasTab === "routes" && selectedTerrainExplorer ? (
                         <div className="rounded-[1.3rem] border border-white/6 bg-[rgba(17,19,34,0.45)] p-4">
                           <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                             <div>
@@ -1549,84 +1530,134 @@ function HealthDetailPanel({
                         </div>
                       ) : null}
 
-                      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                        <div className="rounded-[1.2rem] border border-white/6 bg-[rgba(17,19,34,0.45)] p-4">
-                          <div className="text-xs uppercase tracking-wide text-slate-400">Travel</div>
-                          <div className="mt-2 text-2xl font-semibold text-white">
-                            {formatDistanceMiles(selectedMovementEntry.total_distance_km, 1)}
+                      {healthAtlasTab === "overview" ? (
+                        <>
+                          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                            <div className="rounded-[1.2rem] border border-white/6 bg-[rgba(17,19,34,0.45)] p-4">
+                              <div className="text-xs uppercase tracking-wide text-slate-400">Travel</div>
+                              <div className="mt-2 text-2xl font-semibold text-white">
+                                {formatDistanceMiles(selectedMovementEntry.total_distance_km, 1)}
+                              </div>
+                              <div className="mt-2 text-xs text-slate-400">
+                                {selectedMovementEntry.route_points.length} route points
+                              </div>
+                            </div>
+                            <div className="rounded-[1.2rem] border border-white/6 bg-[rgba(17,19,34,0.45)] p-4">
+                              <div className="text-xs uppercase tracking-wide text-slate-400">Away time</div>
+                              <div className="mt-2 text-2xl font-semibold text-white">
+                                {formatMinutes(selectedMovementEntry.time_away_minutes)}
+                              </div>
+                              <div className="mt-2 text-xs text-slate-400">
+                                {selectedMovementEntry.visited_places_count} visit event{selectedMovementEntry.visited_places_count === 1 ? "" : "s"}
+                              </div>
+                            </div>
+                            <div className="rounded-[1.2rem] border border-white/6 bg-[rgba(17,19,34,0.45)] p-4">
+                              <div className="text-xs uppercase tracking-wide text-slate-400">Commute window</div>
+                              <div className="mt-2 text-sm font-semibold text-white">
+                                {formatMovementWindow(selectedMovementEntry.commute_start, selectedMovementEntry.commute_end)}
+                              </div>
+                              <div className="mt-2 text-xs text-slate-400">
+                                Synced {selectedMovementEntry.synced_at ? formatScheduleDateTime(selectedMovementEntry.synced_at) : "unknown"}
+                              </div>
+                            </div>
+                            <div className="rounded-[1.2rem] border border-white/6 bg-[rgba(17,19,34,0.45)] p-4">
+                              <div className="text-xs uppercase tracking-wide text-slate-400">Places</div>
+                              <div className="mt-2 text-2xl font-semibold text-white">
+                                {selectedMovementEntry.place_labels.length}
+                              </div>
+                              <div className="mt-2 text-xs text-slate-400">
+                                labels captured
+                              </div>
+                            </div>
                           </div>
-                          <div className="mt-2 text-xs text-slate-400">
-                            {selectedMovementEntry.route_points.length} route points
-                          </div>
-                        </div>
-                        <div className="rounded-[1.2rem] border border-white/6 bg-[rgba(17,19,34,0.45)] p-4">
-                          <div className="text-xs uppercase tracking-wide text-slate-400">Away time</div>
-                          <div className="mt-2 text-2xl font-semibold text-white">
-                            {formatMinutes(selectedMovementEntry.time_away_minutes)}
-                          </div>
-                          <div className="mt-2 text-xs text-slate-400">
-                            {selectedMovementEntry.visited_places_count} visit event{selectedMovementEntry.visited_places_count === 1 ? "" : "s"}
-                          </div>
-                        </div>
-                        <div className="rounded-[1.2rem] border border-white/6 bg-[rgba(17,19,34,0.45)] p-4">
-                          <div className="text-xs uppercase tracking-wide text-slate-400">Commute window</div>
-                          <div className="mt-2 text-sm font-semibold text-white">
-                            {formatMovementWindow(selectedMovementEntry.commute_start, selectedMovementEntry.commute_end)}
-                          </div>
-                          <div className="mt-2 text-xs text-slate-400">
-                            Synced {selectedMovementEntry.synced_at ? formatScheduleDateTime(selectedMovementEntry.synced_at) : "unknown"}
-                          </div>
-                        </div>
-                        <div className="rounded-[1.2rem] border border-white/6 bg-[rgba(17,19,34,0.45)] p-4">
-                          <div className="text-xs uppercase tracking-wide text-slate-400">Places</div>
-                          <div className="mt-2 text-2xl font-semibold text-white">
-                            {selectedMovementEntry.place_labels.length}
-                          </div>
-                          <div className="mt-2 text-xs text-slate-400">
-                            labels captured
-                          </div>
-                        </div>
-                      </div>
 
-                      {selectedMovementEntry.place_labels.length ? (
-                        <div className="flex flex-wrap gap-2">
-                          {selectedMovementEntry.place_labels.map((label) => (
-                            <span
-                              key={label}
-                              className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-slate-300"
-                            >
-                              {label}
-                            </span>
-                          ))}
-                        </div>
+                          {selectedMovementEntry.place_labels.length ? (
+                            <div className="flex flex-wrap gap-2">
+                              {selectedMovementEntry.place_labels.map((label) => (
+                                <span
+                                  key={label}
+                                  className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-slate-300"
+                                >
+                                  {label}
+                                </span>
+                              ))}
+                            </div>
+                          ) : null}
+
+                          <div className="rounded-[1.3rem] border border-white/6 bg-[rgba(17,19,34,0.45)] p-4">
+                            <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Movement storyboard</div>
+                            <div className="mt-3 space-y-3">
+                              {movementStoryboard.length ? movementStoryboard.map((item, index) => (
+                                <div
+                                  key={item.id}
+                                  className="flex gap-3 rounded-[1rem] border border-white/6 bg-[rgba(255,255,255,0.03)] px-4 py-3"
+                                >
+                                  <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-emerald-400/15 text-xs font-semibold text-emerald-100">
+                                    {index + 1}
+                                  </div>
+                                  <div className="min-w-0">
+                                    <div className="text-sm font-medium text-slate-100">{item.title}</div>
+                                    <div className="mt-1 text-sm text-slate-300">{item.detail}</div>
+                                    {item.meta ? (
+                                      <div className="mt-1 text-xs text-slate-500">{item.meta}</div>
+                                    ) : null}
+                                  </div>
+                                </div>
+                              )) : (
+                                <div className="rounded-[1rem] border border-dashed border-white/10 px-4 py-3 text-sm text-slate-400">
+                                  No visits have been turned into a movement storyboard yet.
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </>
                       ) : null}
 
-                      <div className="rounded-[1.3rem] border border-white/6 bg-[rgba(17,19,34,0.45)] p-4">
-                        <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Movement storyboard</div>
-                        <div className="mt-3 space-y-3">
-                          {movementStoryboard.length ? movementStoryboard.map((item, index) => (
-                            <div
-                              key={item.id}
-                              className="flex gap-3 rounded-[1rem] border border-white/6 bg-[rgba(255,255,255,0.03)] px-4 py-3"
-                            >
-                              <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-emerald-400/15 text-xs font-semibold text-emerald-100">
-                                {index + 1}
+                      {healthAtlasTab === "routes" ? (
+                        <Card className="rounded-[1.5rem] border border-white/6 bg-[rgba(35,37,58,0.72)] shadow-none">
+                          <CardHeader className="pb-2">
+                            <CardTitle className="text-base">Workout routes</CardTitle>
+                            <p className="text-sm leading-6 text-slate-300">
+                              Mapped workouts stay separate from passive movement so hikes and runs read like distinct events.
+                            </p>
+                          </CardHeader>
+                          <CardContent className="space-y-3">
+                            {mappedWorkouts.length ? (
+                              <div className="grid gap-4 xl:grid-cols-2">
+                                {mappedWorkouts.map((workout) => (
+                                  <div
+                                    key={`${workout.workout_id}-map`}
+                                    className="overflow-hidden rounded-[1.2rem] border border-white/6 bg-[rgba(17,19,34,0.45)]"
+                                  >
+                                    <div className="flex items-center justify-between gap-3 px-4 py-3">
+                                      <div>
+                                        <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Workout route</div>
+                                        <div className="mt-1 text-sm font-medium text-slate-100">{formatWorkoutLabel(workout.activity_label, workout.activity_type)}</div>
+                                      </div>
+                                      <div className="text-xs text-slate-400">
+                                        {formatDistanceMiles(workout.total_distance_km, 1)}
+                                      </div>
+                                    </div>
+                                    <MovementMap entry={workoutToMapEntry(workout)} className="h-[320px]" />
+                                    <div className="flex flex-wrap gap-2 px-4 py-3 text-xs text-slate-300">
+                                      <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1">
+                                        {formatScheduleDateTime(workout.start_date)}
+                                      </span>
+                                      <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1">
+                                        {workout.route_points.length} route point{workout.route_points.length === 1 ? "" : "s"}
+                                      </span>
+                                    </div>
+                                  </div>
+                                ))}
                               </div>
-                              <div className="min-w-0">
-                                <div className="text-sm font-medium text-slate-100">{item.title}</div>
-                                <div className="mt-1 text-sm text-slate-300">{item.detail}</div>
-                                {item.meta ? (
-                                  <div className="mt-1 text-xs text-slate-500">{item.meta}</div>
-                                ) : null}
+                            ) : (
+                              <div className="rounded-[1rem] border border-dashed border-white/10 px-4 py-3 text-sm text-slate-400">
+                                No mapped workout routes available yet.
                               </div>
-                            </div>
-                          )) : (
-                            <div className="rounded-[1rem] border border-dashed border-white/10 px-4 py-3 text-sm text-slate-400">
-                              No visits have been turned into a movement storyboard yet.
-                            </div>
-                          )}
-                        </div>
-                      </div>
+                            )}
+                          </CardContent>
+                        </Card>
+                      ) : null}
 
                     </>
                   ) : (
@@ -2197,6 +2228,8 @@ export default function HomePage() {
   const [mode, setMode] = useState<"dashboard" | "assistant" | "tasks" | "journal" | "mail" | "news" | "overview" | "schedule" | "planning" | "settings" | "health">("dashboard");
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const [mailView, setMailView] = useState<"ai" | "raw">("ai");
+  const [mailWorkspaceTab, setMailWorkspaceTab] = useState<"triage" | "insights">("triage");
+  const [scheduleWorkspaceTab, setScheduleWorkspaceTab] = useState<"agenda" | "planner">("agenda");
   const [dashboard, setDashboard] = useState<DashboardResponse | null>(null);
   const [healthEntries, setHealthEntries] = useState<HealthDailyEntry[]>([]);
   const [selectedHealthDate, setSelectedHealthDate] = useState<string | null>(null);
@@ -3152,11 +3185,19 @@ export default function HomePage() {
         }
         return;
       }
-      if (currentMode === "planning") {
+      if (currentMode === "planning" || (currentMode === "schedule" && scheduleWorkspaceTab === "planner")) {
+        return;
+      }
+      if (currentMode === "overview" || (currentMode === "mail" && mailWorkspaceTab === "insights")) {
+        void loadEmails("overview", mailboxName);
         return;
       }
       if (currentMode === "mail" && skipNextMailFetch) {
         setSkipNextMailFetch(false);
+        return;
+      }
+      if (currentMode === "schedule") {
+        void loadEmails("schedule", mailboxName, undefined, currentMailView);
         return;
       }
       void loadEmails(currentMode, mailboxName, undefined, currentMailView);
@@ -3229,10 +3270,10 @@ export default function HomePage() {
       if (mode === "mail" && mailView === "ai") {
         await loadEmails("mail", selectedMailbox, undefined, "ai");
       }
-      if (mode === "overview") {
+      if (isMailInsightsMode) {
         await loadEmails("overview");
       }
-      if (mode === "schedule") {
+      if (isScheduleAgendaMode) {
         await loadEmails("schedule");
       }
     } catch (err) {
@@ -3596,6 +3637,7 @@ export default function HomePage() {
 
       setSkipNextMailFetch(true);
       setSelectedMailbox(ALL_MAILBOX);
+      setMailWorkspaceTab("triage");
       setMode("mail");
       setMailView("ai");
       setOverview(null);
@@ -3684,10 +3726,10 @@ export default function HomePage() {
 
   useEffect(() => {
     fetchEmailsEffect(mode, selectedMailbox, mailView);
-  }, [mode, selectedMailbox, classifiedBucket, scheduleDays, mailView]);
+  }, [mode, selectedMailbox, classifiedBucket, scheduleDays, mailView, mailWorkspaceTab, scheduleWorkspaceTab]);
 
   useEffect(() => {
-    if (mode !== "dashboard" && mode !== "health") {
+    if (mode !== "dashboard") {
       return;
     }
 
@@ -3704,6 +3746,16 @@ export default function HomePage() {
     setRawNextPageToken(null);
     setRawPageHistory([]);
   }, [mode, selectedMailbox, mailView]);
+
+  useEffect(() => {
+    if (mode === "overview") {
+      setMailWorkspaceTab("insights");
+      setMode("mail");
+    } else if (mode === "planning") {
+      setScheduleWorkspaceTab("planner");
+      setMode("schedule");
+    }
+  }, [mode]);
 
   useEffect(() => {
     if (!cleanupJob || (cleanupJob.status !== "queued" && cleanupJob.status !== "running")) {
@@ -3727,6 +3779,7 @@ export default function HomePage() {
 
         if (data.status === "completed" && data.result) {
           const normalized = normalizeCleanupItems(data.result);
+          setMailWorkspaceTab("triage");
           setMode("mail");
           setMailView("ai");
           setEmails(normalized);
@@ -3836,9 +3889,15 @@ export default function HomePage() {
     [completedTasks, taskWindow]
   );
 
+  const isMailWorkspaceMode = mode === "mail" || mode === "overview";
+  const isMailInsightsMode = mode === "overview" || (mode === "mail" && mailWorkspaceTab === "insights");
+  const isMailTriageMode = mode === "mail" && mailWorkspaceTab === "triage";
+  const isScheduleWorkspaceMode = mode === "schedule" || mode === "planning";
+  const isScheduleAgendaMode = mode === "schedule" && scheduleWorkspaceTab === "agenda";
+  const isSchedulePlannerMode = mode === "planning" || (mode === "schedule" && scheduleWorkspaceTab === "planner");
   const isMailMode = mode === "mail";
-  const isAiMailView = isMailMode && mailView === "ai";
-  const isRawMailView = isMailMode && mailView === "raw";
+  const isAiMailView = isMailTriageMode && mailView === "ai";
+  const isRawMailView = isMailTriageMode && mailView === "raw";
   const groupedRawEmails = useMemo(() => groupEmailsByThread(filteredEmails), [filteredEmails]);
   const displayEmails = isRawMailView ? groupedRawEmails.map((item) => item.email) : filteredEmails;
   const threadCountByEmailId = useMemo(
@@ -3853,8 +3912,8 @@ export default function HomePage() {
     null;
   const canMarkHandled =
     !!selectedEmail &&
-    mode !== "overview" &&
-    mode !== "schedule" &&
+    !isMailInsightsMode &&
+    !isScheduleWorkspaceMode &&
     !emailHasLabel(selectedEmail, "Reviewed");
   const canMarkImportant = !!selectedEmail && !hasImportantLabel(selectedEmail.labels);
   const canMarkUnimportant = !!selectedEmail && !hasUnimportantLabel(selectedEmail.labels);
@@ -3924,7 +3983,7 @@ export default function HomePage() {
 
   useEffect(() => {
     setCalendarCreateLink(null);
-    if (!selectedEmail || mode === "overview") {
+    if (!selectedEmail || isMailInsightsMode) {
       setCalendarPreview(null);
       return;
     }
@@ -3939,10 +3998,10 @@ export default function HomePage() {
   }, [planningResult]);
 
   useEffect(() => {
-    if (mode !== "schedule") {
+    if (!isScheduleAgendaMode) {
       setQuickCalendarResult(null);
     }
-  }, [mode]);
+  }, [isScheduleAgendaMode]);
 
   const selectedMailboxLabel =
     mailboxLabels.find((label) => label.name === selectedMailbox) ||
@@ -3985,11 +4044,31 @@ export default function HomePage() {
   const setTopLevelMode = (
     nextMode: "dashboard" | "assistant" | "tasks" | "journal" | "mail" | "news" | "overview" | "schedule" | "planning" | "settings" | "health"
   ) => {
-    if (
-      nextMode === "overview" &&
-      (selectedMailbox === ALL_MAILBOX || selectedMailbox === JARVIS_REVIEW_MAILBOX)
-    ) {
-      setSelectedMailbox(IMPORTANT_LABEL);
+    if (nextMode === "overview") {
+      setMailWorkspaceTab("insights");
+      setMode("mail");
+      setError("");
+      setMoreMenuOpen(false);
+      if (selectedMailbox === ALL_MAILBOX || selectedMailbox === JARVIS_REVIEW_MAILBOX) {
+        setSelectedMailbox(IMPORTANT_LABEL);
+      }
+      return;
+    }
+
+    if (nextMode === "planning") {
+      setScheduleWorkspaceTab("planner");
+      setMode("schedule");
+      setError("");
+      setMoreMenuOpen(false);
+      return;
+    }
+
+    if (nextMode === "mail") {
+      setMailWorkspaceTab("triage");
+    }
+
+    if (nextMode === "schedule") {
+      setScheduleWorkspaceTab("agenda");
     }
 
     setError("");
@@ -4395,15 +4474,19 @@ export default function HomePage() {
                 ? "Review, edit, complete, and add tasks from one place."
                 : mode === "journal"
                 ? "Keep a lightweight daily journal with calendar-based summaries, a world event snapshot, and room for your own reflection."
-                : mode === "planning"
-                ? "Turn your goals for the day or week into a realistic schedule that fits around your calendar."
                 : mode === "news"
                 ? "Review the exact headlines feeding the dashboard so you can open the source coverage directly."
                 : mode === "health"
                 ? "Track your synced Apple Health data with a deeper view of daily history, heart metrics, movement, and other expanded measurements."
                 : mode === "settings"
                 ? "Manage Jarvis classification guidance and inbox cleanup tools away from the main review workspace."
-                : "Work through your inbox from one Mail tab, then switch between AI triage and raw Gmail controls whenever you need them."}
+                : isSchedulePlannerMode
+                ? "Turn your goals for the day or week into a realistic schedule that fits around your calendar."
+                : isScheduleAgendaMode
+                ? "Review what is already on your calendar, then add events or turn them into tasks."
+                : isMailInsightsMode
+                ? "See saved AI trends and action signals for one mailbox without rerunning triage every time."
+                : "Work through your inbox from one Mail tab, then switch between AI triage, raw Gmail controls, and saved insights whenever you need them."}
             </p>
           </div>
 
@@ -4427,7 +4510,7 @@ export default function HomePage() {
             </Button>
 
             <Button
-              variant={mode === "mail" ? "default" : "outline"}
+              variant={isMailWorkspaceMode ? "default" : "outline"}
               className="rounded-2xl"
               onClick={() => setTopLevelMode("mail")}
             >
@@ -4462,9 +4545,18 @@ export default function HomePage() {
               Health
             </Button>
 
+            <Button
+              variant={isScheduleWorkspaceMode ? "default" : "outline"}
+              className="rounded-2xl"
+              onClick={() => setTopLevelMode("schedule")}
+            >
+              <CalendarDays className="mr-2 h-4 w-4" />
+              Schedule
+            </Button>
+
             <div className="relative">
               <Button
-                variant={["news", "overview", "schedule", "planning", "settings"].includes(mode) ? "default" : "outline"}
+                variant={(mode === "news" || mode === "settings") ? "default" : "outline"}
                 className="rounded-2xl"
                 onClick={() => setMoreMenuOpen((current) => !current)}
               >
@@ -4481,30 +4573,6 @@ export default function HomePage() {
                     >
                       <Newspaper className="mr-2 h-4 w-4" />
                       News
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      className="justify-start rounded-xl"
-                      onClick={() => setTopLevelMode("overview")}
-                    >
-                      <ShieldCheck className="mr-2 h-4 w-4" />
-                      Overview
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      className="justify-start rounded-xl"
-                      onClick={() => setTopLevelMode("schedule")}
-                    >
-                      <CalendarDays className="mr-2 h-4 w-4" />
-                      Schedule
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      className="justify-start rounded-xl"
-                      onClick={() => setTopLevelMode("planning")}
-                    >
-                      <Sparkles className="mr-2 h-4 w-4" />
-                      Planning
                     </Button>
                     <Button
                       variant="ghost"
@@ -4548,7 +4616,7 @@ export default function HomePage() {
                   void loadJournal();
                   return;
                 }
-                if (mode === "planning") {
+                if (isSchedulePlannerMode) {
                   if (planningPrompt.trim()) {
                     void generatePlan();
                   }
@@ -4568,6 +4636,14 @@ export default function HomePage() {
                   return;
                 }
                 if (mode === "assistant") {
+                  return;
+                }
+                if (isMailInsightsMode) {
+                  void loadEmails("overview", selectedMailbox);
+                  return;
+                }
+                if (isScheduleAgendaMode) {
+                  void loadEmails("schedule", selectedMailbox);
                   return;
                 }
                 void loadEmails(mode, selectedMailbox);
@@ -4641,6 +4717,7 @@ export default function HomePage() {
                       type="button"
                       onClick={() => {
                         setSelectedMailbox(IMPORTANT_LABEL);
+                        setMailWorkspaceTab("triage");
                         setMailView("ai");
                         setMode("mail");
                       }}
@@ -4670,7 +4747,10 @@ export default function HomePage() {
                     </button>
                     <button
                       type="button"
-                      onClick={() => setMode("schedule")}
+                      onClick={() => {
+                        setScheduleWorkspaceTab("agenda");
+                        setMode("schedule");
+                      }}
                       className="rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4 text-left transition hover:border-cyan-300/30 hover:bg-[rgba(42,45,72,0.9)]"
                     >
                       <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Calendar today</div>
@@ -4690,6 +4770,7 @@ export default function HomePage() {
                       type="button"
                       onClick={() => {
                         setSelectedMailbox(IMPORTANT_LABEL);
+                        setMailWorkspaceTab("triage");
                         setMailView("ai");
                         setMode("mail");
                       }}
@@ -6073,14 +6154,34 @@ export default function HomePage() {
               </Card>
             )}
           </div>
-        ) : mode === "planning" ? (
+        ) : isSchedulePlannerMode ? (
           <div className="grid gap-6 lg:grid-cols-[320px_360px_1fr]">
             <Card className="rounded-[2rem] border border-white/8 bg-[rgba(17,19,34,0.82)] shadow-[0_16px_44px_rgba(6,7,14,0.36)] backdrop-blur-xl">
               <CardHeader className="pb-3">
-                <CardTitle className="flex items-center gap-2 text-lg">
-                  <Sparkles className="h-5 w-5" />
-                  Planning brief
-                </CardTitle>
+                <div className="flex flex-col gap-3">
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      size="sm"
+                      variant={scheduleWorkspaceTab === "agenda" ? "default" : "outline"}
+                      className="rounded-2xl"
+                      onClick={() => setScheduleWorkspaceTab("agenda")}
+                    >
+                      Agenda
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant={scheduleWorkspaceTab === "planner" ? "default" : "outline"}
+                      className="rounded-2xl"
+                      onClick={() => setScheduleWorkspaceTab("planner")}
+                    >
+                      Planner
+                    </Button>
+                  </div>
+                  <CardTitle className="flex items-center gap-2 text-lg">
+                    <Sparkles className="h-5 w-5" />
+                    Planning brief
+                  </CardTitle>
+                </div>
                 <p className="text-sm leading-6 text-slate-300">
                   Describe what you want to get done, and Jarvis will draft a realistic schedule around your existing calendar.
                 </p>
@@ -6346,14 +6447,14 @@ export default function HomePage() {
         ) : (
         <div
           className={`grid gap-6 ${
-            mode === "schedule"
+            isScheduleAgendaMode
               ? "lg:grid-cols-[minmax(280px,360px)_minmax(0,1fr)]"
               : mailSidebarOpen
                 ? "xl:grid-cols-[240px_minmax(300px,360px)_minmax(0,1fr)] lg:grid-cols-[220px_minmax(0,1fr)]"
                 : "lg:grid-cols-[minmax(300px,360px)_minmax(0,1fr)]"
           }`}
         >
-          {mode !== "schedule" && mailSidebarOpen ? (
+          {!isScheduleWorkspaceMode && mailSidebarOpen ? (
             <Card className="min-w-0 rounded-[2rem] border border-white/8 bg-[rgba(17,19,34,0.82)] shadow-[0_16px_44px_rgba(6,7,14,0.36)] backdrop-blur-xl">
               <CardHeader className="pb-3">
                 <div className="flex items-start justify-between gap-3">
@@ -6365,7 +6466,7 @@ export default function HomePage() {
                     <p className="mt-2 text-sm leading-6 text-slate-300">
                       {isRawMailView
                         ? "Switch folders and labels like Gmail."
-                        : mode === "overview"
+                        : isMailInsightsMode
                           ? "See saved AI insights for the selected mailbox without reclassifying everything."
                           : "Pick a folder or label, review AI summaries, then correct any mistakes."}
                     </p>
@@ -6407,13 +6508,14 @@ export default function HomePage() {
                             onClick={() => {
                               setSelectedMailbox(label.name);
                               if (label.name === ALL_MAILBOX) {
-                                if (mode === "mail" && mailView === "ai") {
-                                  setMailView("raw");
-                                }
-                                if (mode === "overview") {
-                                  setMode("mail");
-                                  setMailView("raw");
-                                }
+                              if (mode === "mail" && mailView === "ai") {
+                                setMailView("raw");
+                              }
+                              if (isMailInsightsMode) {
+                                setMailWorkspaceTab("triage");
+                                setMode("mail");
+                                setMailView("raw");
+                              }
                               }
                             }}
                             className={`flex min-w-0 w-full items-center justify-between overflow-hidden rounded-2xl border px-3 py-2 text-left transition ${
@@ -6517,26 +6619,28 @@ export default function HomePage() {
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <CardTitle className="flex items-center gap-2 text-lg">
-                      <Mail className="h-5 w-5" />
-                      {mode === "mail"
+                      {isScheduleWorkspaceMode ? (
+                        <CalendarDays className="h-5 w-5" />
+                      ) : (
+                        <Mail className="h-5 w-5" />
+                      )}
+                      {isMailWorkspaceMode
                         ? selectedMailboxLabel?.name === JARVIS_REVIEW_MAILBOX
                           ? "Jarvis Review"
                           : selectedMailboxLabel?.name === ALL_MAILBOX
                             ? "All Mail"
                             : selectedMailboxLabel?.name || "Mailbox"
-                        : mode === "schedule"
+                        : isScheduleWorkspaceMode
                           ? "Schedule"
-                        : mode === "overview"
-                          ? `${selectedMailboxLabel?.name || "Mailbox"} overview`
                         : classifiedBucket === "important"
                           ? "Important review"
                           : classifiedBucket === "unimportant"
                             ? "Unimportant review"
                             : "AI overview"}
                     </CardTitle>
-                    {mode !== "schedule" ? (
+                    {!isScheduleWorkspaceMode ? (
                       <p className="mt-2 text-sm leading-6 text-slate-300">
-                        {mode === "overview"
+                        {isMailInsightsMode
                           ? "Saved AI trends and summaries for the selected mailbox."
                           : isRawMailView
                             ? "Browse loaded Gmail threads and adjust conversation state."
@@ -6544,7 +6648,7 @@ export default function HomePage() {
                       </p>
                     ) : null}
                   </div>
-                  {mode !== "schedule" ? (
+                  {!isScheduleWorkspaceMode ? (
                     <Button
                       size="sm"
                       variant="outline"
@@ -6556,39 +6660,87 @@ export default function HomePage() {
                   ) : null}
                 </div>
 
-                <div className="relative">
-                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
-                  <Input
-                    value={query}
-                    onChange={(e) => setQuery(e.target.value)}
-                    placeholder="Search subject, sender, category..."
-                    className="rounded-2xl pl-9"
-                  />
-                </div>
+                {!isScheduleWorkspaceMode ? (
+                  <div className="relative">
+                    <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+                    <Input
+                      value={query}
+                      onChange={(e) => setQuery(e.target.value)}
+                      placeholder="Search subject, sender, category..."
+                      className="rounded-2xl pl-9"
+                    />
+                  </div>
+                ) : null}
               </div>
 
-              {mode === "mail" ? (
+              {isMailWorkspaceMode ? (
                 <div className="flex flex-wrap gap-2">
                   <Button
                     size="sm"
-                    variant={mailView === "ai" ? "default" : "outline"}
+                    variant={mailWorkspaceTab === "triage" ? "default" : "outline"}
                     className="rounded-2xl"
-                    onClick={() => setMailView("ai")}
+                    onClick={() => setMailWorkspaceTab("triage")}
                   >
-                    AI
+                    Triage
                   </Button>
                   <Button
                     size="sm"
-                    variant={mailView === "raw" ? "default" : "outline"}
+                    variant={mailWorkspaceTab === "insights" ? "default" : "outline"}
                     className="rounded-2xl"
-                    onClick={() => setMailView("raw")}
+                    onClick={() => {
+                      if (selectedMailbox === ALL_MAILBOX || selectedMailbox === JARVIS_REVIEW_MAILBOX) {
+                        setSelectedMailbox(IMPORTANT_LABEL);
+                      }
+                      setMailWorkspaceTab("insights");
+                    }}
                   >
-                    Raw
+                    Insights
+                  </Button>
+                  {mailWorkspaceTab === "triage" ? (
+                    <>
+                      <Button
+                        size="sm"
+                        variant={mailView === "ai" ? "default" : "outline"}
+                        className="rounded-2xl"
+                        onClick={() => setMailView("ai")}
+                      >
+                        AI
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant={mailView === "raw" ? "default" : "outline"}
+                        className="rounded-2xl"
+                        onClick={() => setMailView("raw")}
+                      >
+                        Raw
+                      </Button>
+                    </>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {isScheduleWorkspaceMode ? (
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    size="sm"
+                    variant={scheduleWorkspaceTab === "agenda" ? "default" : "outline"}
+                    className="rounded-2xl"
+                    onClick={() => setScheduleWorkspaceTab("agenda")}
+                  >
+                    Agenda
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant={scheduleWorkspaceTab === "planner" ? "default" : "outline"}
+                    className="rounded-2xl"
+                    onClick={() => setScheduleWorkspaceTab("planner")}
+                  >
+                    Planner
                   </Button>
                 </div>
               ) : null}
 
-              {(mode === "mail" || mode === "overview") ? (
+              {isMailWorkspaceMode ? (
                 <div className="flex items-center gap-2">
                   <Input
                     type="number"
@@ -6596,15 +6748,15 @@ export default function HomePage() {
                     value={inboxLimit}
                     onChange={(e) => setInboxLimit(e.target.value)}
                     className="w-32 rounded-2xl"
-                    placeholder={mode === "mail" && isRawMailView ? "Page size" : "Summary cap"}
+                    placeholder={isRawMailView ? "Page size" : "Summary cap"}
                   />
                   <div className="text-xs text-slate-400">
-                    {mode === "mail" && isRawMailView ? "Threads per page" : "Items to summarize"}
+                    {isRawMailView ? "Threads per page" : "Items to summarize"}
                   </div>
                 </div>
               ) : null}
 
-              {mode === "schedule" ? (
+              {isScheduleAgendaMode ? (
                 <div className="flex items-center gap-2">
                   <Input
                     type="number"
@@ -6667,7 +6819,7 @@ export default function HomePage() {
 
               <ScrollArea className="h-[65vh] w-full min-w-0 overflow-hidden pr-3">
                 <div className="w-full min-w-0 max-w-full space-y-3 overflow-x-hidden">
-                  {mode === "overview" ? (
+                  {isMailInsightsMode ? (
                     overview ? (
                       <div className="space-y-4">
                         <Card className="rounded-2xl shadow-none">
@@ -6778,7 +6930,7 @@ export default function HomePage() {
                     )
                   ) : null}
 
-                  {mode === "schedule" ? (
+                  {isScheduleAgendaMode ? (
                     agenda && agenda.items.length > 0 ? (
                       <div className="space-y-4">
                         {agendaDayGroups.map((group) => (
@@ -6828,8 +6980,8 @@ export default function HomePage() {
                     )
                   ) : null}
 
-                  {mode !== "overview" &&
-                  mode !== "schedule" &&
+                  {!isMailInsightsMode &&
+                  !isScheduleWorkspaceMode &&
                   displayEmails.length === 0 &&
                   !loading &&
                   !cleanupLoading ? (
@@ -6837,7 +6989,7 @@ export default function HomePage() {
                       No emails found.
                     </div>
                   ) : null}
-                  {mode !== "overview" && mode !== "schedule" &&
+                  {!isMailInsightsMode && !isScheduleWorkspaceMode &&
                     displayEmails.map((email) => {
                     const threadCount = threadCountByEmailId.get(email.id) ?? 1;
                     return (
@@ -6863,16 +7015,16 @@ export default function HomePage() {
           <Card className="min-w-0 rounded-[2rem] border border-white/8 bg-[rgba(17,19,34,0.82)] shadow-[0_16px_44px_rgba(6,7,14,0.36)] backdrop-blur-xl">
             <CardHeader>
               <CardTitle className="text-lg">
-                {mode === "overview"
+                {isMailInsightsMode
                   ? "Overview detail"
-                  : mode === "schedule"
+                  : isScheduleAgendaMode
                     ? "Event detail"
                     : "Email detail"}
               </CardTitle>
             </CardHeader>
 
             <CardContent>
-              {mode === "schedule" ? (
+              {isScheduleAgendaMode ? (
                 <div className="space-y-4">
                   <div className="rounded-[1.6rem] border border-white/6 bg-[rgba(35,37,58,0.7)] p-4 text-sm text-slate-300">
                     Upcoming events from your primary Google Calendar, organized as a day-by-day agenda.
@@ -7020,7 +7172,7 @@ export default function HomePage() {
                     })()
                   ) : null}
                 </div>
-              ) : mode === "overview" ? (
+              ) : isMailInsightsMode ? (
                 <div className="space-y-4">
                   <div className="rounded-[1.6rem] border border-white/6 bg-[rgba(35,37,58,0.7)] p-4 text-sm text-slate-300">
                     Saved AI summaries are reused here so this tab can show trends without
