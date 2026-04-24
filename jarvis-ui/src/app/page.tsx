@@ -1182,6 +1182,7 @@ function HealthDetailPanel({
       nearbyTrails: [],
       selectedNearbyTrailId: null,
       terrainViewBounds: null,
+      plannerViewNonce: 0,
       sourceContext: "desktop",
     });
     window.open(`/terrain-explorer?session=${encodeURIComponent(sessionId)}`, "jarvis-terrain-explorer");

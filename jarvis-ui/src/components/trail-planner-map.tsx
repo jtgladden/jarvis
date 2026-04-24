@@ -564,10 +564,10 @@ function buildGraphRoutedSegment(
       }
     | null = null;
 
-  candidateRoutes.forEach((candidate) => {
+  for (const candidate of candidateRoutes) {
     const graphRoute = findShortestPathInTrailGraph(graph, candidate.startNodeId, candidate.endNodeId);
     if (!graphRoute) {
-      return;
+      continue;
     }
 
     const points = dedupeRoutePoints([
@@ -584,7 +584,7 @@ function buildGraphRoutedSegment(
         points,
       };
     }
-  });
+  }
 
   if (directSameSegmentDistance < Number.POSITIVE_INFINITY) {
     const directRoute = {

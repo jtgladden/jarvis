@@ -122,6 +122,7 @@ export function createDefaultTerrainExplorerSessionPayload(
     nearbyTrails: [],
     selectedNearbyTrailId: null,
     terrainViewBounds: null,
+    plannerViewNonce: source.plannerViewNonce,
     sourceContext,
   };
 }

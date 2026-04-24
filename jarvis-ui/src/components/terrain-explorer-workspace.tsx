@@ -1154,7 +1154,7 @@ export function TerrainExplorerWorkspace({
                 size="sm"
                 variant="outline"
                 className="rounded-2xl"
-                onClick={() => void searchNearbyTrails(undefined, { force: true })}
+                onClick={() => void searchNearbyTrails()}
                 disabled={nearbyTrailsLoading || cameraMoving}
               >
                 {nearbyTrailsLoading

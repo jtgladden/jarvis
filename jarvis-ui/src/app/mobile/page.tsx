@@ -1068,6 +1068,7 @@ function MobilePageContent() {
       nearbyTrails: [],
       selectedNearbyTrailId: null,
       terrainViewBounds: null,
+      plannerViewNonce: 0,
       sourceContext: "mobile",
     });
     window.open(`/terrain-explorer?session=${encodeURIComponent(sessionId)}`, "jarvis-terrain-explorer");
