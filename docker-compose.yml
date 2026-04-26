@@ -3,7 +3,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: ${API_IMAGE:?Set API_IMAGE in .env to your GHCR backend image, e.g. ghcr.io/owner/repo-api:latest}
+    image: ${API_IMAGE}
     container_name: jarvis-api
     environment:
       OPENAI_API_KEY: ${OPENAI_API_KEY}
@@ -16,10 +16,16 @@ services:
       MOVEMENT_DB: /data/movement.db
       WORKOUT_DB: /data/workouts.db
       ASSISTANT_CHAT_DB: /data/assistant_chat.db
+      LANGUAGE_DB: /data/language_learning.db
       CLASSIFICATION_CACHE_DB: /data/classification_cache.db
       CLASSIFICATION_GUIDANCE_FILE: /data/classification_guidance.json
       OPENAI_MAX_EMAILS_PER_RUN: ${OPENAI_MAX_EMAILS_PER_RUN:-15}
       OPENAI_EMAIL_BODY_PREVIEW_CHARS: ${OPENAI_EMAIL_BODY_PREVIEW_CHARS:-0}
+      OPENAI_LANGUAGE_MODEL: ${OPENAI_LANGUAGE_MODEL:-gpt-4.1-mini}
+      OPENAI_LANGUAGE_MAX_TOKENS: ${OPENAI_LANGUAGE_MAX_TOKENS:-1400}
+      OPENAI_TRANSCRIPTION_MODEL: ${OPENAI_TRANSCRIPTION_MODEL:-gpt-4o-mini-transcribe}
+      OPENAI_TTS_MODEL: ${OPENAI_TTS_MODEL:-gpt-4o-mini-tts}
+      OPENAI_TTS_VOICE: ${OPENAI_TTS_VOICE:-cedar}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
       OVERPASS_API_URLS: ${OVERPASS_API_URLS:-}
       OVERPASS_API_URL: ${OVERPASS_API_URL:-}
@@ -33,7 +39,7 @@ services:
     build:
       context: ./jarvis-ui
       dockerfile: Dockerfile
-    image: ${WEB_IMAGE:?Set WEB_IMAGE in .env to your GHCR frontend image, e.g. ghcr.io/owner/repo-web:latest}
+    image: ${WEB_IMAGE}
     container_name: jarvis-web
     environment:
       NEXT_PUBLIC_API_BASE: ${NEXT_PUBLIC_API_BASE:-/api}

@@ -671,3 +671,196 @@ class AssistantChatThread(BaseModel):
     archived: bool = False
     messages: List[AssistantStoredMessage] = Field(default_factory=list)
     updated_at: Optional[str] = None
+
+
+LanguageCode = Literal["tagalog", "hiligaynon", "japanese", "spanish"]
+LanguageLevel = Literal["beginner", "elementary", "intermediate", "advanced"]
+
+
+class LanguageMetadata(BaseModel):
+    code: LanguageCode
+    name: str
+    local_name: str
+    script_hint: str = ""
+    greeting: str = ""
+    focus_topics: List[str] = Field(default_factory=list)
+
+
+class LanguageProfile(BaseModel):
+    target_languages: List[LanguageCode] = Field(default_factory=list)
+    active_language: LanguageCode = "tagalog"
+    level: LanguageLevel = "beginner"
+    daily_goal_minutes: int = 15
+    correction_style: Literal["gentle", "strict", "immersion"] = "gentle"
+    romanization: bool = True
+    updated_at: Optional[str] = None
+
+
+class LanguageProfileUpdateRequest(BaseModel):
+    target_languages: List[LanguageCode] = Field(default_factory=list)
+    active_language: LanguageCode = "tagalog"
+    level: LanguageLevel = "beginner"
+    daily_goal_minutes: int = Field(default=15, ge=1, le=240)
+    correction_style: Literal["gentle", "strict", "immersion"] = "gentle"
+    romanization: bool = True
+
+
+class LanguagePracticePrompt(BaseModel):
+    id: str
+    mode: Literal["vocabulary", "conversation", "writing", "grammar", "listening"]
+    title: str
+    prompt: str
+    target_phrase: str = ""
+    translation: str = ""
+    notes: str = ""
+    expected_answer: str = ""
+
+
+class LanguageVocabItem(BaseModel):
+    id: str
+    language: LanguageCode
+    phrase: str
+    translation: str = ""
+    notes: str = ""
+    tags: List[str] = Field(default_factory=list)
+    review_count: int = 0
+    last_reviewed_at: Optional[str] = None
+    next_review_at: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class LanguageVocabCreateRequest(BaseModel):
+    language: LanguageCode
+    phrase: str
+    translation: str = ""
+    notes: str = ""
+    tags: List[str] = Field(default_factory=list)
+
+
+class LanguageVocabReviewRequest(BaseModel):
+    remembered: bool = True
+
+
+class LanguagePracticeSession(BaseModel):
+    id: str
+    language: LanguageCode
+    mode: Literal["daily", "conversation", "vocabulary", "writing", "grammar", "listening"]
+    minutes: int = 0
+    notes: str = ""
+    created_at: Optional[str] = None
+
+
+class LanguagePracticeSessionCreateRequest(BaseModel):
+    language: LanguageCode
+    mode: Literal["daily", "conversation", "vocabulary", "writing", "grammar", "listening"] = "daily"
+    minutes: int = Field(default=10, ge=0, le=240)
+    notes: str = ""
+
+
+class LanguageProgressSummary(BaseModel):
+    sessions_count: int = 0
+    minutes_practiced: int = 0
+    vocab_count: int = 0
+    due_reviews: int = 0
+
+
+class LanguageDashboardResponse(BaseModel):
+    profile: LanguageProfile
+    supported_languages: List[LanguageMetadata] = Field(default_factory=list)
+    daily_prompts: List[LanguagePracticePrompt] = Field(default_factory=list)
+    daily_focus_words: List[LanguageVocabItem] = Field(default_factory=list)
+    vocab: List[LanguageVocabItem] = Field(default_factory=list)
+    recent_sessions: List[LanguagePracticeSession] = Field(default_factory=list)
+    progress: LanguageProgressSummary = Field(default_factory=LanguageProgressSummary)
+
+
+class LanguagePracticeGenerateRequest(BaseModel):
+    language: LanguageCode
+    level: LanguageLevel = "beginner"
+    mode: Literal["daily", "conversation", "vocabulary", "writing", "grammar", "listening"] = "daily"
+    focus: str = ""
+    include_saved_vocab: bool = True
+
+
+class LanguagePracticeGenerateResponse(BaseModel):
+    language: LanguageCode
+    level: LanguageLevel
+    title: str = ""
+    overview: str = ""
+    prompts: List[LanguagePracticePrompt] = Field(default_factory=list)
+    suggested_minutes: int = 15
+
+
+class LanguageWritingFeedbackRequest(BaseModel):
+    language: LanguageCode
+    level: LanguageLevel = "beginner"
+    prompt: str = ""
+    response: str = ""
+    correction_style: Literal["gentle", "strict", "immersion"] = "gentle"
+
+
+class LanguageFeedbackResponse(BaseModel):
+    transcript: str = ""
+    target_text: str = ""
+    score: int = 0
+    corrected_text: str = ""
+    feedback: str = ""
+    strengths: List[str] = Field(default_factory=list)
+    fixes: List[str] = Field(default_factory=list)
+    drills: List[str] = Field(default_factory=list)
+
+
+class LanguageSpeechRequest(BaseModel):
+    language: LanguageCode
+    text: str
+    speed: Literal["slow", "normal"] = "normal"
+
+
+class LanguageConversationMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = ""
+
+
+class LanguageConversationRequest(BaseModel):
+    language: LanguageCode
+    level: LanguageLevel = "beginner"
+    correction_style: Literal["gentle", "strict", "immersion"] = "gentle"
+    message: str
+    scenario: str = ""
+    history: List[LanguageConversationMessage] = Field(default_factory=list)
+
+
+class LanguageConversationResponse(BaseModel):
+    reply: str = ""
+    translation: str = ""
+    correction: str = ""
+    suggested_user_reply: str = ""
+    vocab: List[LanguageVocabItem] = Field(default_factory=list)
+
+
+class LanguageWordExplainRequest(BaseModel):
+    language: LanguageCode
+    level: LanguageLevel = "beginner"
+    word: str
+    translation: str = ""
+    notes: str = ""
+
+
+class LanguageWordExample(BaseModel):
+    target: str = ""
+    romanization: str = ""
+    translation: str = ""
+    note: str = ""
+
+
+class LanguageWordExplainResponse(BaseModel):
+    word: str = ""
+    translation: str = ""
+    romanization: str = ""
+    part_of_speech: str = ""
+    explanation: str = ""
+    usage_notes: List[str] = Field(default_factory=list)
+    examples: List[LanguageWordExample] = Field(default_factory=list)
+    common_mistakes: List[str] = Field(default_factory=list)
+    quick_drill: str = ""

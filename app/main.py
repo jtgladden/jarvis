@@ -4,9 +4,9 @@ from threading import Lock, Thread
 from time import sleep
 from uuid import uuid4
 
-from fastapi import APIRouter, FastAPI, HTTPException, Query, Request
+from fastapi import APIRouter, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
 from app.assistant import ask_jarvis_assistant
 from app.assistant_chat_store import archive_chat, delete_chat, get_chat_thread, init_assistant_chat_store, list_chats
@@ -23,11 +23,13 @@ from app.health import list_health_entries, sync_health_daily_entry
 from app.health_store import init_health_store
 from app.journal import extract_journal_day_citations, get_journal, get_journal_day, save_journal_day
 from app.journal_store import init_journal_store
+from app.language_learning import create_language_conversation_reply, create_language_session, create_language_vocab, explain_language_word, generate_language_practice, get_language_dashboard, get_language_pronunciation_feedback, get_language_writing_feedback, review_language_vocab, synthesize_language_speech, update_language_profile
+from app.language_store import init_language_store
 from app.movement import list_movement_entries, sync_movement_daily_entry
 from app.movement_store import init_movement_store
 from app.planner import generate_schedule_plan
 from app.rules import classify_new_email_rule
-from app.schemas import AssistantAskRequest, AssistantAskResponse, AssistantChatListResponse, AssistantChatThread, CalendarAgendaResponse, CalendarEventCreateResponse, CalendarEventPreview, CalendarQuickAddRequest, CalendarQuickAddResponse, ClassifiedEmailResponse, ClassificationGuidanceRequest, ClassificationGuidanceResponse, ClassificationOverviewResponse, CleanupJobStartResponse, CleanupJobStatus, CleanupResponse, DashboardResponse, DashboardTaskItem, EmailPageResponse, EmailSummary, EmailUpdateRequest, EmailUpdateResponse, GmailLabel, HandleEmailResponse, HealthDailySyncRequest, HealthDailySyncResponse, HealthListResponse, JournalDayEntry, JournalDayNoteUpdateRequest, JournalResponse, MovementDailySyncRequest, MovementDailySyncResponse, MovementListResponse, PlanningCalendarBulkCreateRequest, PlanningCalendarBulkCreateResponse, PlanningCalendarCreateRequest, PlanningCalendarCreateResponse, PlanningJobStartResponse, PlanningJobStatus, PlanningRequest, PlanningResponse, RuleProcessResponse, TaskCreateRequest, TaskListResponse, TaskUpdateRequest, TrailSearchResponse, WorkoutBatchSyncRequest, WorkoutBatchSyncResponse, WorkoutListResponse
+from app.schemas import AssistantAskRequest, AssistantAskResponse, AssistantChatListResponse, AssistantChatThread, CalendarAgendaResponse, CalendarEventCreateResponse, CalendarEventPreview, CalendarQuickAddRequest, CalendarQuickAddResponse, ClassifiedEmailResponse, ClassificationGuidanceRequest, ClassificationGuidanceResponse, ClassificationOverviewResponse, CleanupJobStartResponse, CleanupJobStatus, CleanupResponse, DashboardResponse, DashboardTaskItem, EmailPageResponse, EmailSummary, EmailUpdateRequest, EmailUpdateResponse, GmailLabel, HandleEmailResponse, HealthDailySyncRequest, HealthDailySyncResponse, HealthListResponse, JournalDayEntry, JournalDayNoteUpdateRequest, JournalResponse, LanguageCode, LanguageConversationRequest, LanguageConversationResponse, LanguageDashboardResponse, LanguageFeedbackResponse, LanguagePracticeGenerateRequest, LanguagePracticeGenerateResponse, LanguagePracticeSession, LanguagePracticeSessionCreateRequest, LanguageProfile, LanguageProfileUpdateRequest, LanguageSpeechRequest, LanguageVocabCreateRequest, LanguageVocabItem, LanguageVocabReviewRequest, LanguageWordExplainRequest, LanguageWordExplainResponse, LanguageWritingFeedbackRequest, MovementDailySyncRequest, MovementDailySyncResponse, MovementListResponse, PlanningCalendarBulkCreateRequest, PlanningCalendarBulkCreateResponse, PlanningCalendarCreateRequest, PlanningCalendarCreateResponse, PlanningJobStartResponse, PlanningJobStatus, PlanningRequest, PlanningResponse, RuleProcessResponse, TaskCreateRequest, TaskListResponse, TaskUpdateRequest, TrailSearchResponse, WorkoutBatchSyncRequest, WorkoutBatchSyncResponse, WorkoutListResponse
 from app.task_service import create_task, delete_task, list_tasks, update_task
 from app.task_store import init_task_store
 from app.trails import search_openstreetmap_trails
@@ -194,6 +196,7 @@ def start_background_new_mail_sorter() -> None:
     init_movement_store()
     init_workout_store()
     init_assistant_chat_store()
+    init_language_store()
     thread = Thread(target=_new_mail_sort_loop, daemon=True)
     thread.start()
 
@@ -445,6 +448,76 @@ def sync_workouts(payload: WorkoutBatchSyncRequest):
 @api.get("/tasks", response_model=TaskListResponse)
 def tasks(include_completed: bool = Query(default=True)):
     return list_tasks(include_completed=include_completed)
+
+
+@api.get("/languages", response_model=LanguageDashboardResponse)
+def language_dashboard():
+    return get_language_dashboard()
+
+
+@api.put("/languages/profile", response_model=LanguageProfile)
+def put_language_profile(payload: LanguageProfileUpdateRequest):
+    return update_language_profile(payload)
+
+
+@api.post("/languages/vocab", response_model=LanguageVocabItem)
+def post_language_vocab(payload: LanguageVocabCreateRequest):
+    return create_language_vocab(payload)
+
+
+@api.patch("/languages/vocab/{vocab_id}/review", response_model=LanguageVocabItem)
+def patch_language_vocab_review(vocab_id: str, payload: LanguageVocabReviewRequest):
+    return review_language_vocab(vocab_id, remembered=payload.remembered)
+
+
+@api.post("/languages/sessions", response_model=LanguagePracticeSession)
+def post_language_session(payload: LanguagePracticeSessionCreateRequest):
+    return create_language_session(payload)
+
+
+@api.post("/languages/practice/generate", response_model=LanguagePracticeGenerateResponse)
+def post_language_practice_generate(payload: LanguagePracticeGenerateRequest):
+    return generate_language_practice(payload)
+
+
+@api.post("/languages/feedback/writing", response_model=LanguageFeedbackResponse)
+def post_language_writing_feedback(payload: LanguageWritingFeedbackRequest):
+    return get_language_writing_feedback(payload)
+
+
+@api.post("/languages/feedback/pronunciation", response_model=LanguageFeedbackResponse)
+async def post_language_pronunciation_feedback(
+    language: LanguageCode = Form(...),
+    level: str = Form(default="beginner"),
+    target_text: str = Form(default=""),
+    audio: UploadFile = File(...),
+):
+    return await get_language_pronunciation_feedback(
+        language=language,
+        level=level,
+        target_text=target_text,
+        audio=audio,
+    )
+
+
+@api.post("/languages/speech")
+def post_language_speech(payload: LanguageSpeechRequest):
+    audio = synthesize_language_speech(payload)
+    return Response(
+        content=audio,
+        media_type="audio/mpeg",
+        headers={"Content-Disposition": 'inline; filename="language-practice.mp3"'},
+    )
+
+
+@api.post("/languages/conversation", response_model=LanguageConversationResponse)
+def post_language_conversation(payload: LanguageConversationRequest):
+    return create_language_conversation_reply(payload)
+
+
+@api.post("/languages/words/explain", response_model=LanguageWordExplainResponse)
+def post_language_word_explain(payload: LanguageWordExplainRequest):
+    return explain_language_word(payload)
 
 
 @api.post("/tasks", response_model=DashboardTaskItem)

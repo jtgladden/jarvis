@@ -15,6 +15,7 @@ import {
   ChevronRight,
   ExternalLink,
   Inbox,
+  Languages,
   Mail,
   Newspaper,
   Plus,
@@ -4627,6 +4628,16 @@ export default function HomePage() {
               {moreMenuOpen ? (
                 <div className="absolute right-0 top-[calc(100%+0.5rem)] z-50 w-56 rounded-[1.4rem] border border-white/8 bg-[rgba(17,19,34,0.96)] p-2 shadow-[0_18px_48px_rgba(6,7,14,0.42)] backdrop-blur-xl">
                   <div className="grid gap-1">
+                    <Button
+                      asChild
+                      variant="ghost"
+                      className="justify-start rounded-xl"
+                    >
+                      <Link href="/language" onClick={() => setMoreMenuOpen(false)}>
+                        <Languages className="mr-2 h-4 w-4" />
+                        Language
+                      </Link>
+                    </Button>
                     <Button
                       variant="ghost"
                       className="justify-start rounded-xl"

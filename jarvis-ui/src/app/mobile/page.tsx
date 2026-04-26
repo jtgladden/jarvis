@@ -12,6 +12,7 @@ import {
   Ellipsis,
   ChevronRight,
   House,
+  Languages,
   Mail,
   Plus,
   RefreshCw,
@@ -2260,6 +2261,24 @@ function MobilePageContent() {
                 <CardTitle className="text-lg">More</CardTitle>
               </CardHeader>
               <CardContent className="space-y-3">
+                <Link
+                  href="/language"
+                  className="flex w-full items-center justify-between rounded-[1.2rem] border border-white/8 bg-white/5 px-4 py-4 text-left transition hover:border-cyan-300/30 hover:bg-[rgba(42,45,72,0.9)]"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="rounded-full border border-white/10 bg-white/5 p-2 text-slate-200">
+                      <Languages className="h-4 w-4" />
+                    </div>
+                    <div>
+                      <div className="text-sm font-medium text-white">Language practice</div>
+                      <div className="mt-1 text-xs text-slate-400">
+                        Practice Tagalog, Hiligaynon, Japanese, and Spanish.
+                      </div>
+                    </div>
+                  </div>
+                  <ChevronRight className="h-4 w-4 text-slate-500" />
+                </Link>
+
                 <button
                   type="button"
                   onClick={() => setActiveTab("journal")}
