@@ -30,6 +30,7 @@ from app.schemas import (
     LanguagePracticeSessionCreateRequest,
     LanguageProfile,
     LanguageProfileUpdateRequest,
+    LanguageProgressByLanguage,
     LanguageSpeechRequest,
     LanguageProgressSummary,
     LanguageWritingFeedbackRequest,
@@ -43,6 +44,7 @@ from app.schemas import (
 )
 from app.language_store import (
     delete_vocab_record,
+    get_all_language_session_stats,
     get_language_stats,
     get_profile_record,
     get_word_explanation_record,
@@ -293,6 +295,34 @@ def _daily_focus_words(
     return selected
 
 
+def _language_progress_summary(
+    vocab: list[LanguageVocabItem],
+    user_id: str,
+    now: str,
+) -> list[LanguageProgressByLanguage]:
+    session_stats = get_all_language_session_stats(user_id=user_id)
+    progress: list[LanguageProgressByLanguage] = []
+    for language in DEFAULT_TARGET_LANGUAGES:
+        language_vocab = [item for item in vocab if item.language == language]
+        stats = session_stats.get(language, {})
+        progress.append(
+            LanguageProgressByLanguage(
+                language=language,
+                today_minutes=int(stats.get("today_minutes") or 0),
+                total_minutes=int(stats.get("minutes_practiced") or 0),
+                sessions_count=int(stats.get("sessions_count") or 0),
+                words_count=sum(1 for item in language_vocab if "word" in item.tags),
+                phrases_count=sum(1 for item in language_vocab if "word" not in item.tags),
+                due_reviews=sum(
+                    1
+                    for item in language_vocab
+                    if not item.next_review_at or item.next_review_at <= now
+                ),
+            )
+        )
+    return progress
+
+
 def get_language_dashboard() -> LanguageDashboardResponse:
     user_id = get_default_user_context().user_id
     _ensure_common_words_seeded(user_id)
@@ -323,6 +353,7 @@ def get_language_dashboard() -> LanguageDashboardResponse:
             language_minutes=lang_stats["language_minutes"],
             language_sessions_count=lang_stats["language_sessions_count"],
         ),
+        language_progress=_language_progress_summary(vocab, user_id, now),
     )
 
 
@@ -365,36 +396,34 @@ def update_language_profile(payload: LanguageProfileUpdateRequest) -> LanguagePr
 
 def _normalize_vocab_with_ai(payload: LanguageVocabCreateRequest) -> dict[str, Any]:
     tags = [tag.strip() for tag in payload.tags if tag.strip()]
-    if "word" not in tags:
-        return {
-            "phrase": payload.phrase.strip(),
-            "translation": payload.translation.strip(),
-            "notes": payload.notes.strip(),
-            "tags": tags,
-        }
+    is_word = "word" in tags
+    card_kind = "word" if is_word else "phrase"
 
     try:
         result = _json_chat_completion(
             (
                 "You normalize learner-created vocabulary cards. Return only JSON. "
                 "Do not add unrelated meanings. Keep the card beginner-friendly and concise. "
-                "For Japanese, if the learner enters romaji, convert the headword to the most natural "
-                "Japanese writing for a vocabulary card, preferring kana for beginner words unless kanji is essential. "
-                "Always include romaji in notes for Japanese. For Spanish, preserve accents. "
+                "Preserve whether the card is a single word or a phrase. For phrases, keep the phrase natural "
+                "and useful for conversation; do not reduce it to a single dictionary word. "
+                "For Japanese, if the learner enters romaji, convert the headword or phrase to the most natural "
+                "Japanese writing for the card, preferring kana for beginner words unless kanji is essential. "
+                "Always include romaji in notes for Japanese. For Spanish, preserve accents and punctuation. "
                 "For Tagalog and Hiligaynon, normalize spelling and keep learner-friendly notes. "
                 "If the input is ambiguous, choose the most common beginner meaning and mention ambiguity in notes."
             ),
             {
                 "language": payload.language,
-                "input_word": payload.phrase,
+                "card_kind": card_kind,
+                "input_text": payload.phrase,
                 "input_translation": payload.translation,
                 "input_notes": payload.notes,
                 "input_tags": tags,
                 "schema": {
-                    "phrase": "normalized headword in the target language",
+                    "phrase": "normalized word or phrase in the target language",
                     "translation": "short English gloss",
                     "notes": "short learner note; include Japanese romaji as 'Romaji: ...'",
-                    "tags": ["word", "part-of-speech or helpful category"],
+                    "tags": [card_kind, "part-of-speech, phrase type, or helpful category"],
                 },
             },
         )
@@ -408,8 +437,8 @@ def _normalize_vocab_with_ai(payload: LanguageVocabCreateRequest) -> dict[str, A
         }
 
     normalized_tags = [str(tag).strip() for tag in result.get("tags") or [] if str(tag).strip()]
-    if "word" not in normalized_tags:
-        normalized_tags.insert(0, "word")
+    normalized_tags = [tag for tag in normalized_tags if tag not in {"word", "phrase"}]
+    normalized_tags.insert(0, card_kind)
     if "ai-normalized" not in normalized_tags:
         normalized_tags.append("ai-normalized")
 
@@ -452,7 +481,6 @@ def normalize_existing_language_vocab(max_items: int = 30) -> LanguageVocabNorma
         item
         for item in vocab
         if item.language == profile.active_language
-        and "word" in item.tags
         and "ai-normalized" not in item.tags
         and "common-600" not in item.tags
     ][:max_items]

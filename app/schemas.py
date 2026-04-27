@@ -782,6 +782,16 @@ class LanguageProgressSummary(BaseModel):
     language_sessions_count: int = 0
 
 
+class LanguageProgressByLanguage(BaseModel):
+    language: LanguageCode
+    today_minutes: int = 0
+    total_minutes: int = 0
+    sessions_count: int = 0
+    words_count: int = 0
+    phrases_count: int = 0
+    due_reviews: int = 0
+
+
 class LanguageDashboardResponse(BaseModel):
     profile: LanguageProfile
     supported_languages: List[LanguageMetadata] = Field(default_factory=list)
@@ -790,6 +800,7 @@ class LanguageDashboardResponse(BaseModel):
     vocab: List[LanguageVocabItem] = Field(default_factory=list)
     recent_sessions: List[LanguagePracticeSession] = Field(default_factory=list)
     progress: LanguageProgressSummary = Field(default_factory=LanguageProgressSummary)
+    language_progress: List[LanguageProgressByLanguage] = Field(default_factory=list)
 
 
 class LanguagePracticeGenerateRequest(BaseModel):

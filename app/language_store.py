@@ -439,6 +439,44 @@ def get_language_stats(language: str, user_id: str = APP_DEFAULT_USER_ID) -> dic
     }
 
 
+def get_all_language_session_stats(user_id: str = APP_DEFAULT_USER_ID) -> dict[str, dict]:
+    today = datetime.utcnow().date().isoformat()
+    with _db_lock, closing(_connect()) as connection:
+        total_rows = connection.execute(
+            """
+            SELECT language, COUNT(*) AS sessions_count, COALESCE(SUM(minutes), 0) AS minutes_practiced
+            FROM language_sessions
+            WHERE user_id = ?
+            GROUP BY language
+            """,
+            (user_id,),
+        ).fetchall()
+        today_rows = connection.execute(
+            """
+            SELECT language, COALESCE(SUM(minutes), 0) AS today_minutes
+            FROM language_sessions
+            WHERE user_id = ? AND created_at LIKE ?
+            GROUP BY language
+            """,
+            (user_id, f"{today}%"),
+        ).fetchall()
+
+    stats: dict[str, dict] = {}
+    for row in total_rows:
+        stats[row["language"]] = {
+            "sessions_count": row["sessions_count"],
+            "minutes_practiced": row["minutes_practiced"],
+            "today_minutes": 0,
+        }
+    for row in today_rows:
+        language_stats = stats.setdefault(
+            row["language"],
+            {"sessions_count": 0, "minutes_practiced": 0, "today_minutes": 0},
+        )
+        language_stats["today_minutes"] = row["today_minutes"]
+    return stats
+
+
 def review_vocab_record(vocab_id: str, remembered: bool, user_id: str = APP_DEFAULT_USER_ID) -> sqlite3.Row:
     now_dt = datetime.utcnow().replace(microsecond=0)
     now = now_dt.isoformat() + "Z"

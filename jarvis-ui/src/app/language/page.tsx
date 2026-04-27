@@ -41,11 +41,18 @@ type HiraganaRow = {
   characters: HiraganaCharacter[];
 };
 
+type HiraganaPracticeWord = {
+  kana: string;
+  romaji: string;
+  meaning: string;
+};
+
 type HiraganaWeek = {
   week: number;
   title: string;
   rows: HiraganaRow[];
   drill: string;
+  words: HiraganaPracticeWord[];
 };
 
 type LanguageMetadata = {
@@ -115,6 +122,15 @@ type LanguageDashboardResponse = {
     language_minutes: number;
     language_sessions_count: number;
   };
+  language_progress: Array<{
+    language: LanguageCode;
+    today_minutes: number;
+    total_minutes: number;
+    sessions_count: number;
+    words_count: number;
+    phrases_count: number;
+    due_reviews: number;
+  }>;
 };
 
 type GeneratedPractice = {
@@ -219,6 +235,14 @@ const HIRAGANA_WEEKS: HiraganaWeek[] = [
       ] },
     ],
     drill: "Read across each row, then mix the ten cards until the sound is instant.",
+    words: [
+      { kana: "あお", romaji: "ao", meaning: "blue" },
+      { kana: "いえ", romaji: "ie", meaning: "house" },
+      { kana: "かお", romaji: "kao", meaning: "face" },
+      { kana: "きく", romaji: "kiku", meaning: "to listen" },
+      { kana: "ここ", romaji: "koko", meaning: "here" },
+      { kana: "いく", romaji: "iku", meaning: "to go" },
+    ],
   },
   {
     week: 2,
@@ -240,6 +264,14 @@ const HIRAGANA_WEEKS: HiraganaWeek[] = [
       ] },
     ],
     drill: "Pay extra attention to shi, chi, and tsu. Say them aloud before typing.",
+    words: [
+      { kana: "すし", romaji: "sushi", meaning: "sushi" },
+      { kana: "そこ", romaji: "soko", meaning: "there" },
+      { kana: "した", romaji: "shita", meaning: "under" },
+      { kana: "ちかい", romaji: "chikai", meaning: "near" },
+      { kana: "たかい", romaji: "takai", meaning: "tall / expensive" },
+      { kana: "つくえ", romaji: "tsukue", meaning: "desk" },
+    ],
   },
   {
     week: 3,
@@ -261,6 +293,14 @@ const HIRAGANA_WEEKS: HiraganaWeek[] = [
       ] },
     ],
     drill: "Contrast nu, ne, and no visually. Then practice h-row with a soft fu sound.",
+    words: [
+      { kana: "はな", romaji: "hana", meaning: "flower / nose" },
+      { kana: "ひと", romaji: "hito", meaning: "person" },
+      { kana: "ねこ", romaji: "neko", meaning: "cat" },
+      { kana: "いぬ", romaji: "inu", meaning: "dog" },
+      { kana: "ふね", romaji: "fune", meaning: "boat" },
+      { kana: "ほし", romaji: "hoshi", meaning: "star" },
+    ],
   },
   {
     week: 4,
@@ -280,6 +320,14 @@ const HIRAGANA_WEEKS: HiraganaWeek[] = [
       ] },
     ],
     drill: "Mix the three y-row cards with m-row so the shorter row still gets repeated.",
+    words: [
+      { kana: "やま", romaji: "yama", meaning: "mountain" },
+      { kana: "ゆき", romaji: "yuki", meaning: "snow" },
+      { kana: "よむ", romaji: "yomu", meaning: "to read" },
+      { kana: "みみ", romaji: "mimi", meaning: "ear" },
+      { kana: "まめ", romaji: "mame", meaning: "bean" },
+      { kana: "むし", romaji: "mushi", meaning: "bug" },
+    ],
   },
   {
     week: 5,
@@ -299,6 +347,14 @@ const HIRAGANA_WEEKS: HiraganaWeek[] = [
       ] },
     ],
     drill: "Treat を as the object-particle o for now, then drill ん at the end of sample syllables.",
+    words: [
+      { kana: "くるま", romaji: "kuruma", meaning: "car" },
+      { kana: "そら", romaji: "sora", meaning: "sky" },
+      { kana: "わたし", romaji: "watashi", meaning: "I / me" },
+      { kana: "これ", romaji: "kore", meaning: "this" },
+      { kana: "いろ", romaji: "iro", meaning: "color" },
+      { kana: "ほん", romaji: "hon", meaning: "book" },
+    ],
   },
   {
     week: 6,
@@ -319,6 +375,14 @@ const HIRAGANA_WEEKS: HiraganaWeek[] = [
       ] },
     ],
     drill: "Use this week to learn how marks change sounds, then fold marked kana into the earlier rows.",
+    words: [
+      { kana: "かぜ", romaji: "kaze", meaning: "wind / cold" },
+      { kana: "かぎ", romaji: "kagi", meaning: "key" },
+      { kana: "ぶた", romaji: "buta", meaning: "pig" },
+      { kana: "てがみ", romaji: "tegami", meaning: "letter" },
+      { kana: "ぱん", romaji: "pan", meaning: "bread" },
+      { kana: "ぺん", romaji: "pen", meaning: "pen" },
+    ],
   },
 ];
 
@@ -516,17 +580,17 @@ export default function LanguagePage() {
     }
     return deck;
   }, [wordVocab]);
-  const unenrichedWordCount = useMemo(
+  const activeVocabKind = activeTab === "words" ? "word" : "phrase";
+  const activeVocabItems = activeVocabKind === "word" ? wordVocab : phraseVocab;
+  const unenrichedVocabCount = useMemo(
     () =>
-      wordVocab.filter(
+      activeVocabItems.filter(
         (item) =>
           !item.tags.includes("ai-normalized") &&
           !item.tags.includes("common-600")
       ).length,
-    [wordVocab]
+    [activeVocabItems]
   );
-  const activeVocabKind = activeTab === "words" ? "word" : "phrase";
-  const activeVocabItems = activeVocabKind === "word" ? wordVocab : phraseVocab;
   const filteredVocabItems = useMemo(() => {
     const query = vocabSearch.trim().toLowerCase();
     if (!query) return activeVocabItems;
@@ -970,6 +1034,52 @@ export default function LanguagePage() {
     }
   };
 
+  const playLanguageText = async (
+    id: string,
+    language: LanguageCode,
+    text: string,
+    speed: "slow" | "normal" = "normal"
+  ) => {
+    if (!text.trim()) return;
+    setSpeechLoadingId(`${id}-${speed}`);
+    setError("");
+    try {
+      const response = await fetch(`${API_BASE}/languages/speech`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          language,
+          text,
+          speed,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(`Speech generation failed with status ${response.status}`);
+      }
+      const blob = await response.blob();
+      const audioUrl = URL.createObjectURL(blob);
+      const audio = new Audio(audioUrl);
+      audio.onended = () => URL.revokeObjectURL(audioUrl);
+      await audio.play();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to play language audio.");
+    } finally {
+      setSpeechLoadingId(null);
+    }
+  };
+
+  const playJapaneseText = async (id: string, text: string, speed: "slow" | "normal" = "normal") => {
+    await playLanguageText(id, "japanese", text, speed);
+  };
+
+  const submitHiraganaAnswer = () => {
+    if (!currentHiraganaCard || !hiraganaAnswer.trim()) return;
+    setHiraganaChecked(true);
+    window.setTimeout(() => {
+      advanceHiraganaPractice();
+    }, 700);
+  };
+
   const startRecording = async () => {
     if (!navigator.mediaDevices?.getUserMedia) {
       setError("This browser does not support microphone recording.");
@@ -1322,43 +1432,68 @@ export default function LanguagePage() {
           </div>
         ) : null}
 
-        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-5">
-          {[
-            ["Today", dashboard?.progress.today_minutes ?? 0],
-            ["Sessions", dashboard?.progress.language_sessions_count ?? 0],
-            ["Words", wordVocab.length],
-            ["Phrases", phraseVocab.length],
-            ["Due", dashboard?.progress.due_reviews ?? 0],
-          ].map(([label, value]) => (
-            <div key={label} className="rounded-[1.2rem] border border-white/8 bg-[rgba(24,27,44,0.86)] p-4">
-              <div className="text-xs uppercase tracking-[0.16em] text-slate-400">{label}</div>
-              <div className="mt-2 text-2xl font-semibold text-white">{value}</div>
-            </div>
-          ))}
-        </div>
-
-        {dashboard ? (() => {
-          const todayMin = dashboard.progress.today_minutes;
-          const goalMin = profile.daily_goal_minutes;
-          const pct = Math.min(100, goalMin > 0 ? Math.round((todayMin / goalMin) * 100) : 0);
-          const done = todayMin >= goalMin && goalMin > 0;
-          return (
-            <div className="rounded-[1.2rem] border border-white/8 bg-[rgba(24,27,44,0.86)] p-4">
-              <div className="mb-2 flex items-center justify-between text-xs text-slate-400">
-                <span className="uppercase tracking-[0.16em]">
-                  Daily goal · {formatLanguageName(profile.active_language, dashboard.supported_languages)}
-                </span>
-                <span className={done ? "text-emerald-400" : ""}>{todayMin} / {goalMin} min{done ? " ✓" : ""}</span>
+        {dashboard ? (
+          <div className="rounded-[1.2rem] border border-white/8 bg-[rgba(24,27,44,0.86)] p-4">
+            <div className="mb-4 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+              <div>
+                <div className="text-xs uppercase tracking-[0.16em] text-slate-400">Practice overview</div>
+                <div className="mt-1 text-sm text-slate-300">Progress across all target languages</div>
               </div>
-              <div className="h-2 overflow-hidden rounded-full bg-white/10">
-                <div
-                  className={`h-full rounded-full transition-all ${done ? "bg-emerald-400" : "bg-cyan-400"}`}
-                  style={{ width: `${pct}%` }}
-                />
-              </div>
+              <div className="text-xs text-slate-500">Daily goal: {profile.daily_goal_minutes} min per language</div>
             </div>
-          );
-        })() : null}
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+              {dashboard.language_progress.map((item) => {
+                const language = dashboard.supported_languages.find((entry) => entry.code === item.language);
+                const pct = Math.min(100, profile.daily_goal_minutes > 0 ? Math.round((item.today_minutes / profile.daily_goal_minutes) * 100) : 0);
+                const active = item.language === profile.active_language;
+                const done = item.today_minutes >= profile.daily_goal_minutes;
+                return (
+                  <button
+                    key={item.language}
+                    type="button"
+                    className={`rounded-[1.1rem] border p-4 text-left transition-colors ${
+                      active
+                        ? "border-cyan-300/30 bg-cyan-300/10"
+                        : "border-white/8 bg-white/5 hover:border-white/15"
+                    }`}
+                    onClick={() => void switchActiveLanguage(item.language)}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="font-medium text-white">{language?.name ?? item.language}</div>
+                        <div className="mt-1 text-xs text-slate-500">{language?.greeting}</div>
+                      </div>
+                      {active ? <Badge>Active</Badge> : null}
+                    </div>
+                    <div className="mt-4 flex items-end justify-between gap-3">
+                      <div>
+                        <div className={`text-2xl font-semibold ${done ? "text-emerald-300" : "text-white"}`}>
+                          {item.today_minutes}
+                        </div>
+                        <div className="text-xs uppercase tracking-[0.14em] text-slate-500">min today</div>
+                      </div>
+                      <div className="text-right text-xs leading-5 text-slate-400">
+                        <div>{item.total_minutes} total min</div>
+                        <div>{item.sessions_count} sessions</div>
+                      </div>
+                    </div>
+                    <div className="mt-3 h-2 overflow-hidden rounded-full bg-white/10">
+                      <div
+                        className={`h-full rounded-full transition-all ${done ? "bg-emerald-400" : "bg-cyan-400"}`}
+                        style={{ width: `${pct}%` }}
+                      />
+                    </div>
+                    <div className="mt-3 grid grid-cols-3 gap-2 text-center text-xs text-slate-400">
+                      <div className="rounded-lg bg-black/20 px-2 py-1">{item.words_count} words</div>
+                      <div className="rounded-lg bg-black/20 px-2 py-1">{item.phrases_count} phrases</div>
+                      <div className="rounded-lg bg-black/20 px-2 py-1">{item.due_reviews} due</div>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ) : null}
 
         <div className="space-y-3 rounded-[1.2rem] border border-white/8 bg-[rgba(24,27,44,0.86)] p-4">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -1748,16 +1883,51 @@ export default function LanguagePage() {
                     </div>
                     <div className="grid grid-cols-3 gap-2 sm:grid-cols-5">
                       {row.characters.map((character) => (
-                        <div key={`${row.label}-${character.kana}`} className="aspect-square rounded-xl border border-white/8 bg-black/20 p-2 text-center">
+                        <button
+                          key={`${row.label}-${character.kana}`}
+                          type="button"
+                          className="aspect-square rounded-xl border border-white/8 bg-black/20 p-2 text-center transition-colors hover:border-cyan-300/30 hover:bg-cyan-300/10"
+                          onClick={() => void playJapaneseText(`hiragana-${character.kana}`, character.kana, "slow")}
+                          disabled={Boolean(speechLoadingId)}
+                        >
                           <div className="flex h-full flex-col items-center justify-center">
                             <div className="text-4xl font-semibold text-white">{character.kana}</div>
                             <div className="mt-2 text-sm text-cyan-100">{character.romaji}</div>
                           </div>
-                        </div>
+                        </button>
                       ))}
                     </div>
                   </div>
                 ))}
+              </CardContent>
+            </Card>
+
+            <Card className="border-white/8 bg-[rgba(24,27,44,0.86)]">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <BookOpen className="h-5 w-5" />
+                  Practice Words
+                </CardTitle>
+                <div className="text-sm text-slate-300">
+                  Words here use only kana from week {currentHiraganaWeek.week} or earlier.
+                </div>
+              </CardHeader>
+              <CardContent>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {currentHiraganaWeek.words.map((word) => (
+                    <button
+                      key={word.kana}
+                      type="button"
+                      className="rounded-[1.1rem] border border-white/8 bg-white/5 p-4 text-left transition-colors hover:border-cyan-300/30 hover:bg-cyan-300/10"
+                      onClick={() => void playJapaneseText(`hiragana-word-${word.kana}`, word.kana, "slow")}
+                      disabled={Boolean(speechLoadingId)}
+                    >
+                      <div className="text-3xl font-semibold text-white">{word.kana}</div>
+                      <div className="mt-2 text-sm text-cyan-100">{word.romaji}</div>
+                      <div className="mt-1 text-sm text-slate-400">{word.meaning}</div>
+                    </button>
+                  ))}
+                </div>
               </CardContent>
             </Card>
 
@@ -1811,12 +1981,12 @@ export default function LanguagePage() {
                         }}
                         onKeyDown={(event) => {
                           if (event.key === "Enter") {
-                            setHiraganaChecked(true);
+                            submitHiraganaAnswer();
                           }
                         }}
                         placeholder="Type romaji"
                       />
-                      <Button variant="outline" className="rounded-2xl" onClick={() => setHiraganaChecked(true)}>
+                      <Button variant="outline" className="rounded-2xl" onClick={submitHiraganaAnswer}>
                         Check
                       </Button>
                       <Button className="rounded-2xl" onClick={advanceHiraganaPractice}>
@@ -2132,17 +2302,47 @@ export default function LanguagePage() {
               </div>
 
               {currentPracticeWord ? (
-                <div className="rounded-[1.4rem] border border-white/8 bg-black/20 p-5">
+                <div
+                  className={`rounded-[1.4rem] border border-white/8 bg-black/20 p-5 ${
+                    wordPracticeMode === "flashcard" ? "cursor-pointer transition-colors hover:border-cyan-300/25 hover:bg-cyan-300/5" : ""
+                  }`}
+                  role={wordPracticeMode === "flashcard" ? "button" : undefined}
+                  tabIndex={wordPracticeMode === "flashcard" ? 0 : undefined}
+                  onClick={() => {
+                    if (wordPracticeMode === "flashcard") {
+                      setWordPracticeRevealed((current) => !current);
+                    }
+                  }}
+                  onKeyDown={(event) => {
+                    if (wordPracticeMode === "flashcard" && (event.key === "Enter" || event.key === " ")) {
+                      event.preventDefault();
+                      setWordPracticeRevealed((current) => !current);
+                    }
+                  }}
+                >
                   <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                     <div>
                       <div className="text-xs uppercase tracking-[0.16em] text-slate-500">
                         {formatLanguageName(currentPracticeWord.language, dashboard?.supported_languages || [])} · {wordPracticeIndex + 1} of {shuffledWordPracticeDeck.length}
                       </div>
-                      <div className="mt-4 text-3xl font-semibold text-white">
+                      <button
+                        type="button"
+                        className="mt-4 text-left text-3xl font-semibold text-white transition-colors hover:text-cyan-100"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          void playLanguageText(
+                            `practice-word-${currentPracticeWord.id}`,
+                            currentPracticeWord.language,
+                            currentPracticeWord.phrase,
+                            "slow"
+                          );
+                        }}
+                        disabled={Boolean(speechLoadingId)}
+                      >
                         {wordPracticeMode === "english-to-target"
                           ? currentPracticeWord.translation || "No translation saved"
                           : currentPracticeWord.phrase}
-                      </div>
+                      </button>
                       {wordPracticeMode === "flashcard" ? (
                         <div className="mt-4 min-h-12 text-lg text-cyan-100">
                           {wordPracticeRevealed ? currentPracticeWord.translation || "No translation saved" : "Think of the answer, then reveal it."}
@@ -2179,22 +2379,45 @@ export default function LanguagePage() {
                       ) : null}
                     </div>
                     <div className="flex flex-wrap gap-2 md:justify-end">
-                      {wordPracticeMode === "flashcard" ? (
-                        <Button variant="outline" className="rounded-2xl" onClick={() => setWordPracticeRevealed((current) => !current)}>
-                          {wordPracticeRevealed ? "Hide" : "Reveal"}
-                        </Button>
-                      ) : (
+                      <Button
+                        variant="outline"
+                        className="rounded-2xl"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          void playLanguageText(
+                            `practice-word-${currentPracticeWord.id}`,
+                            currentPracticeWord.language,
+                            currentPracticeWord.phrase,
+                            "slow"
+                          );
+                        }}
+                        disabled={Boolean(speechLoadingId)}
+                      >
+                        <Play className="mr-2 h-4 w-4" />
+                        Play
+                      </Button>
+                      {wordPracticeMode !== "flashcard" ? (
                         <Button variant="outline" className="rounded-2xl" onClick={() => setWordPracticeChecked(true)}>
                           Check
                         </Button>
-                      )}
-                      <Button variant="outline" className="rounded-2xl" onClick={advanceWordPractice}>
+                      ) : null}
+                      <Button
+                        variant="outline"
+                        className="rounded-2xl"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          advanceWordPractice();
+                        }}
+                      >
                         Skip
                       </Button>
                       <Button
                         variant="outline"
                         className="rounded-2xl"
-                        onClick={() => void explainWord(currentPracticeWord)}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          void explainWord(currentPracticeWord);
+                        }}
                         disabled={wordExplanationLoadingId === currentPracticeWord.id}
                       >
                         {wordExplanationLoadingId === currentPracticeWord.id ? "Loading..." : "Examples"}
@@ -2202,10 +2425,23 @@ export default function LanguagePage() {
                     </div>
                   </div>
                   <div className="mt-5 flex flex-wrap gap-2">
-                    <Button variant="outline" className="rounded-2xl" onClick={() => void markWordPractice(false)}>
+                    <Button
+                      variant="outline"
+                      className="rounded-2xl"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void markWordPractice(false);
+                      }}
+                    >
                       Again
                     </Button>
-                    <Button className="rounded-2xl" onClick={() => void markWordPractice(true)}>
+                    <Button
+                      className="rounded-2xl"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void markWordPractice(true);
+                      }}
+                    >
                       Know it
                     </Button>
                   </div>
@@ -2244,9 +2480,9 @@ export default function LanguagePage() {
                 <Input value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Notes" />
                 <Button className="rounded-2xl" onClick={() => void addVocab()} disabled={vocabSaving || !phrase.trim()}>
                   <Plus className="mr-2 h-4 w-4" />
-                  {vocabSaving ? (activeVocabKind === "word" ? "Normalizing..." : "Saving...") : activeVocabKind === "word" ? "Save word" : "Save phrase"}
+                  {vocabSaving ? "Normalizing..." : activeVocabKind === "word" ? "Save word" : "Save phrase"}
                 </Button>
-                {activeVocabKind === "word" && unenrichedWordCount > 0 ? (
+                {unenrichedVocabCount > 0 ? (
                   <Button
                     variant="outline"
                     className="rounded-2xl"
@@ -2254,7 +2490,7 @@ export default function LanguagePage() {
                     disabled={vocabNormalizing}
                   >
                     <Wand2 className="mr-2 h-4 w-4" />
-                    {vocabNormalizing ? "Normalizing..." : `Normalize ${unenrichedWordCount} existing`}
+                    {vocabNormalizing ? "Normalizing..." : `Normalize ${unenrichedVocabCount} existing`}
                   </Button>
                 ) : null}
               </div>
@@ -2294,7 +2530,14 @@ export default function LanguagePage() {
                         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                           <div>
                             <div className="text-sm text-slate-400">{formatLanguageName(item.language, dashboard?.supported_languages || [])}</div>
-                            <div className="mt-1 font-medium text-white">{item.phrase}</div>
+                            <button
+                              type="button"
+                              className="mt-1 text-left font-medium text-white transition-colors hover:text-cyan-100"
+                              onClick={() => void playLanguageText(`vocab-${item.id}`, item.language, item.phrase, "slow")}
+                              disabled={Boolean(speechLoadingId)}
+                            >
+                              {item.phrase}
+                            </button>
                             <div className="mt-1 text-sm text-slate-300">{item.translation}</div>
                             {item.notes ? <div className="mt-1 text-sm text-cyan-100">{item.notes}</div> : null}
                             {item.tags.filter(isVisibleVocabTag).length ? (
@@ -2306,6 +2549,16 @@ export default function LanguagePage() {
                             ) : null}
                           </div>
                           <div className="flex flex-wrap gap-2">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="rounded-xl"
+                              onClick={() => void playLanguageText(`vocab-${item.id}`, item.language, item.phrase, "slow")}
+                              disabled={Boolean(speechLoadingId)}
+                            >
+                              <Play className="mr-2 h-3 w-3" />
+                              Play
+                            </Button>
                             <Button size="sm" variant="outline" className="rounded-xl" onClick={() => void reviewVocab(item.id, false)}>
                               Again
                             </Button>
@@ -2416,12 +2669,28 @@ export default function LanguagePage() {
                           <div className="text-xs uppercase tracking-[0.16em] text-cyan-100">Due now</div>
                           <div className="text-xs text-slate-500">{reviewIndex + 1} of {dueVocab.length}</div>
                         </div>
-                        <div className="mt-4 text-3xl font-semibold text-white">{currentDue.phrase}</div>
+                        <button
+                          type="button"
+                          className="mt-4 text-left text-3xl font-semibold text-white transition-colors hover:text-cyan-100"
+                          onClick={() => void playLanguageText(`review-${currentDue.id}`, currentDue.language, currentDue.phrase, "slow")}
+                          disabled={Boolean(speechLoadingId)}
+                        >
+                          {currentDue.phrase}
+                        </button>
                         {currentDue.notes ? <div className="mt-2 text-sm text-cyan-100">{currentDue.notes}</div> : null}
                         <div className="mt-4 min-h-8 text-lg text-slate-200">
                           {reviewRevealed ? currentDue.translation || "No translation saved" : "Think of the answer, then reveal."}
                         </div>
                         <div className="mt-4 flex flex-wrap gap-2">
+                          <Button
+                            variant="outline"
+                            className="rounded-2xl"
+                            onClick={() => void playLanguageText(`review-${currentDue.id}`, currentDue.language, currentDue.phrase, "slow")}
+                            disabled={Boolean(speechLoadingId)}
+                          >
+                            <Play className="mr-2 h-4 w-4" />
+                            Play
+                          </Button>
                           <Button variant="outline" className="rounded-2xl" onClick={() => setReviewRevealed((c) => !c)}>
                             {reviewRevealed ? "Hide" : "Reveal"}
                           </Button>
