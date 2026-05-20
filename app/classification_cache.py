@@ -220,6 +220,15 @@ def save_classification(
         connection.commit()
 
 
+def invalidate_cached_email(message_id: str, user_id: str = APP_DEFAULT_USER_ID) -> None:
+    with _db_lock, closing(_connect()) as connection:
+        connection.execute(
+            "DELETE FROM classification_cache WHERE user_id = ? AND message_id = ?",
+            (user_id, message_id),
+        )
+        connection.commit()
+
+
 def update_cached_email(email: EmailSummary, user_id: str = APP_DEFAULT_USER_ID) -> None:
     with _db_lock, closing(_connect()) as connection:
         row = connection.execute(

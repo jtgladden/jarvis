@@ -133,6 +133,15 @@ class HandleEmailResponse(BaseModel):
     status: str
 
 
+class HandleEmailRequest(BaseModel):
+    thread_id: Optional[str] = None
+
+
+class DeleteEmailResponse(BaseModel):
+    message_id: str
+    status: str
+
+
 class EmailUpdateRequest(BaseModel):
     add_label_names: List[str] = Field(default_factory=list)
     remove_label_names: List[str] = Field(default_factory=list)
@@ -898,6 +907,71 @@ class LanguageWordExplainResponse(BaseModel):
     examples: List[LanguageWordExample] = Field(default_factory=list)
     common_mistakes: List[str] = Field(default_factory=list)
     quick_drill: str = ""
+
+
+class UserRuleCondition(BaseModel):
+    field: str
+    operator: str
+    value: str
+
+
+class UserRule(BaseModel):
+    id: str
+    name: str
+    natural_language: str
+    conditions: List[UserRuleCondition]
+    target_label: str
+    archive: bool
+    enabled: bool
+    created_at: str
+
+
+class UserRuleCreateRequest(BaseModel):
+    natural_language: str
+    name: Optional[str] = None
+    conditions: Optional[List[UserRuleCondition]] = None
+    target_label: Optional[str] = None
+    archive: Optional[bool] = None
+
+
+class UserRuleUpdateRequest(BaseModel):
+    enabled: Optional[bool] = None
+
+
+class UserRuleListResponse(BaseModel):
+    rules: List[UserRule]
+
+
+class RuleSuggestion(BaseModel):
+    natural_language: str
+    name: str
+    conditions: List[UserRuleCondition]
+    target_label: str
+    archive: bool
+
+
+class RuleSuggestionResponse(BaseModel):
+    suggestions: List[RuleSuggestion]
+
+
+class EmailCommandRequest(BaseModel):
+    command: str
+    dry_run: bool = True
+    gmail_query: Optional[str] = None
+    action: Optional[str] = None
+    target_label: Optional[str] = None
+    archive: Optional[bool] = None
+
+
+class EmailCommandResponse(BaseModel):
+    action: str
+    gmail_query: str
+    description: str
+    target_label: Optional[str] = None
+    archive: bool = False
+    affected_count: int
+    has_more: bool = False
+    dry_run: bool
 
 
 JournalDayEntry.model_rebuild()

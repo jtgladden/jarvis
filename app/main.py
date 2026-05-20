@@ -17,7 +17,7 @@ from app.classification_guidance import get_classification_guidance, init_classi
 from app.classifier import IMPORTANT_LABEL, LEGACY_IMPORTANT_LABELS, LEGACY_UNIMPORTANT_LABELS, UNIMPORTANT_LABEL, classify_cleanup_email, classify_email, classify_emails_batch, classify_new_email_ai_fallback
 from app.config import CORS_ALLOWED_ORIGINS, OPENAI_MAX_EMAILS_PER_RUN
 from app.dashboard import generate_dashboard, invalidate_dashboard_cache
-from app.gmail_client import cleanup_inbox, expire_stale_important_emails, get_all_inbox_emails, get_email_by_id, get_emails_by_any_label, get_mailbox_emails, get_mailbox_emails_page, get_new_inbox_emails, get_recent_inbox_emails, list_gmail_labels, mark_email_handled, process_new_inbox_emails, update_email
+from app.gmail_client import apply_custom_rules_to_jarvis_emails, cleanup_inbox, expire_stale_important_emails, get_all_inbox_emails, get_email_by_id, get_emails_by_any_label, get_mailbox_emails, get_mailbox_emails_page, get_new_inbox_emails, get_recent_inbox_emails, list_gmail_labels, mark_email_handled, process_new_inbox_emails, trash_email, update_email
 from app.google_oauth import begin_google_oauth, finish_google_oauth, get_google_oauth_instructions
 from app.health import list_health_entries, sync_health_daily_entry
 from app.health_store import init_health_store
@@ -29,10 +29,11 @@ from app.movement import list_movement_entries, sync_movement_daily_entry
 from app.movement_store import init_movement_store
 from app.planner import generate_schedule_plan
 from app.rules import classify_new_email_rule
-from app.schemas import AssistantAskRequest, AssistantAskResponse, AssistantChatListResponse, AssistantChatThread, CalendarAgendaResponse, CalendarEventCreateResponse, CalendarEventPreview, CalendarQuickAddRequest, CalendarQuickAddResponse, ClassifiedEmailResponse, ClassificationGuidanceRequest, ClassificationGuidanceResponse, ClassificationOverviewResponse, CleanupJobStartResponse, CleanupJobStatus, CleanupResponse, DashboardResponse, DashboardTaskItem, EmailPageResponse, EmailSummary, EmailUpdateRequest, EmailUpdateResponse, GmailLabel, HandleEmailResponse, HealthDailySyncRequest, HealthDailySyncResponse, HealthListResponse, JournalDayEntry, JournalDayNoteUpdateRequest, JournalResponse, LanguageCode, LanguageConversationRequest, LanguageConversationResponse, LanguageDashboardResponse, LanguageFeedbackResponse, LanguagePracticeGenerateRequest, LanguagePracticeGenerateResponse, LanguagePracticeSession, LanguagePracticeSessionCreateRequest, LanguageProfile, LanguageProfileUpdateRequest, LanguageSpeechRequest, LanguageVocabCreateRequest, LanguageVocabItem, LanguageVocabNormalizeResponse, LanguageVocabReviewRequest, LanguageVocabUpdateRequest, LanguageWordExplainRequest, LanguageWordExplainResponse, LanguageWritingFeedbackRequest, MovementDailySyncRequest, MovementDailySyncResponse, MovementListResponse, PlanningCalendarBulkCreateRequest, PlanningCalendarBulkCreateResponse, PlanningCalendarCreateRequest, PlanningCalendarCreateResponse, PlanningJobStartResponse, PlanningJobStatus, PlanningRequest, PlanningResponse, RuleProcessResponse, TaskCreateRequest, TaskListResponse, TaskUpdateRequest, TrailSearchResponse, WorkoutBatchSyncRequest, WorkoutBatchSyncResponse, WorkoutListResponse
+from app.schemas import AssistantAskRequest, AssistantAskResponse, AssistantChatListResponse, AssistantChatThread, CalendarAgendaResponse, CalendarEventCreateResponse, CalendarEventPreview, CalendarQuickAddRequest, CalendarQuickAddResponse, ClassifiedEmailResponse, ClassificationGuidanceRequest, ClassificationGuidanceResponse, ClassificationOverviewResponse, CleanupJobStartResponse, CleanupJobStatus, CleanupResponse, DashboardResponse, DashboardTaskItem, DeleteEmailResponse, EmailCommandRequest, EmailCommandResponse, EmailPageResponse, EmailSummary, EmailUpdateRequest, EmailUpdateResponse, GmailLabel, HandleEmailRequest, HandleEmailResponse, HealthDailySyncRequest, HealthDailySyncResponse, HealthListResponse, JournalDayEntry, JournalDayNoteUpdateRequest, JournalResponse, LanguageCode, LanguageConversationRequest, LanguageConversationResponse, LanguageDashboardResponse, LanguageFeedbackResponse, LanguagePracticeGenerateRequest, LanguagePracticeGenerateResponse, LanguagePracticeSession, LanguagePracticeSessionCreateRequest, LanguageProfile, LanguageProfileUpdateRequest, LanguageSpeechRequest, LanguageVocabCreateRequest, LanguageVocabItem, LanguageVocabNormalizeResponse, LanguageVocabReviewRequest, LanguageVocabUpdateRequest, LanguageWordExplainRequest, LanguageWordExplainResponse, LanguageWritingFeedbackRequest, MovementDailySyncRequest, MovementDailySyncResponse, MovementListResponse, PlanningCalendarBulkCreateRequest, PlanningCalendarBulkCreateResponse, PlanningCalendarCreateRequest, PlanningCalendarCreateResponse, PlanningJobStartResponse, PlanningJobStatus, PlanningRequest, PlanningResponse, RuleSuggestion, RuleSuggestionResponse, RuleProcessResponse, TaskCreateRequest, TaskListResponse, TaskUpdateRequest, UserRule, UserRuleCondition, UserRuleCreateRequest, UserRuleListResponse, UserRuleUpdateRequest, WorkoutBatchSyncRequest, WorkoutBatchSyncResponse, WorkoutListResponse
+from app.rule_parser import parse_rule_to_fields
 from app.task_service import create_task, delete_task, list_tasks, update_task
 from app.task_store import init_task_store
-from app.trails import search_openstreetmap_trails
+from app.user_rules_store import create_user_rule, delete_user_rule, init_user_rules_store, list_user_rules, set_user_rule_enabled
 from app.user_context import get_default_user_context
 from app.workout import list_workout_entries, sync_workout_batch
 from app.workout_store import init_workout_store
@@ -161,17 +162,17 @@ def _run_new_mail_sort_once(limit: int = 50) -> None:
         return
 
     try:
+        custom_rules = [r for r in list_user_rules() if r.enabled]
         emails = get_new_inbox_emails(limit=limit, unread_only=True)
-        if not emails:
-            expire_stale_important_emails()
-            return
-
-        process_new_inbox_emails(
-            emails=emails,
-            classify_rule_fn=classify_new_email_rule,
-            ai_fallback_fn=classify_new_email_ai_fallback,
-            dry_run=False,
-        )
+        if emails:
+            process_new_inbox_emails(
+                emails=emails,
+                classify_rule_fn=classify_new_email_rule,
+                ai_fallback_fn=classify_new_email_ai_fallback,
+                dry_run=False,
+                custom_rules=custom_rules,
+            )
+        apply_custom_rules_to_jarvis_emails(custom_rules)
         expire_stale_important_emails()
     finally:
         _new_mail_sort_lock.release()
@@ -192,6 +193,7 @@ def start_background_new_mail_sorter() -> None:
     init_classification_guidance()
     init_journal_store()
     init_task_store()
+    init_user_rules_store()
     init_health_store()
     init_movement_store()
     init_workout_store()
@@ -673,26 +675,6 @@ def planning_calendar_bulk_create(payload: PlanningCalendarBulkCreateRequest):
     return create_calendar_events_from_plan_items(payload.items)
 
 
-@api.get("/trails/search", response_model=TrailSearchResponse)
-def trails_search(
-    min_lat: float = Query(..., ge=-90, le=90),
-    min_lon: float = Query(..., ge=-180, le=180),
-    max_lat: float = Query(..., ge=-90, le=90),
-    max_lon: float = Query(..., ge=-180, le=180),
-    limit: int = Query(default=12, ge=1, le=60),
-):
-    try:
-        return search_openstreetmap_trails(
-            min_lat=min_lat,
-            min_lon=min_lon,
-            max_lat=max_lat,
-            max_lon=max_lon,
-            limit=limit,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @api.post("/cleanup/preview", response_model=CleanupJobStartResponse)
@@ -747,10 +729,18 @@ def apply_new_email_rules(
 
 
 @api.post("/emails/{message_id}/handle", response_model=HandleEmailResponse)
-def handle_email(message_id: str):
-    response = mark_email_handled(message_id)
+def handle_email(message_id: str, payload: HandleEmailRequest = None):
+    thread_id = payload.thread_id if payload else None
+    response = mark_email_handled(message_id, thread_id=thread_id)
     invalidate_dashboard_cache(get_default_user_context().user_id)
     return response
+
+
+@api.delete("/emails/{message_id}", response_model=DeleteEmailResponse)
+def delete_email(message_id: str):
+    trash_email(message_id)
+    invalidate_dashboard_cache(get_default_user_context().user_id)
+    return DeleteEmailResponse(message_id=message_id, status="trashed")
 
 
 @api.patch("/emails/{message_id}", response_model=EmailUpdateResponse)
@@ -764,6 +754,134 @@ def patch_email(message_id: str, payload: EmailUpdateRequest):
     )
     invalidate_dashboard_cache(get_default_user_context().user_id)
     return response
+
+
+def _rule_to_schema(rule) -> UserRule:
+    return UserRule(
+        id=rule.id,
+        name=rule.name,
+        natural_language=rule.natural_language,
+        conditions=[{"field": c.field, "operator": c.operator, "value": c.value} for c in rule.conditions],
+        target_label=rule.target_label,
+        archive=rule.archive,
+        enabled=rule.enabled,
+        created_at=rule.created_at,
+    )
+
+
+@api.get("/email-rules", response_model=UserRuleListResponse)
+def get_email_rules():
+    return UserRuleListResponse(rules=[_rule_to_schema(r) for r in list_user_rules()])
+
+
+@api.post("/email-rules", response_model=UserRule)
+def create_email_rule(payload: UserRuleCreateRequest):
+    if payload.conditions is not None and payload.target_label:
+        from app.user_rules import RuleCondition as _RC
+        name = (payload.name or payload.natural_language)[:60]
+        conditions = [_RC(field=c.field, operator=c.operator, value=c.value.lower()) for c in payload.conditions]
+        target_label = payload.target_label
+        archive = payload.archive if payload.archive is not None else True
+    else:
+        name, conditions, target_label, archive = parse_rule_to_fields(payload.natural_language)
+    if not target_label:
+        raise HTTPException(status_code=400, detail="Could not determine a target label from that description.")
+    if not conditions:
+        raise HTTPException(status_code=400, detail="Could not determine any matching conditions from that description.")
+    rule = create_user_rule(name, payload.natural_language, conditions, target_label, archive)
+    return _rule_to_schema(rule)
+
+
+@api.get("/email-rules/suggestions", response_model=RuleSuggestionResponse)
+def get_email_rule_suggestions():
+    from app.rule_suggester import suggest_rules
+    emails = get_emails_by_any_label(
+        [IMPORTANT_LABEL, UNIMPORTANT_LABEL, *LEGACY_IMPORTANT_LABELS, *LEGACY_UNIMPORTANT_LABELS],
+        limit=150,
+    )
+    existing = list_user_rules()
+    available_labels = [l.name for l in list_gmail_labels() if l.type == "user"]
+    raw = suggest_rules(emails, existing, available_labels)
+    suggestions: list[RuleSuggestion] = []
+    for s in raw:
+        try:
+            conditions = [
+                UserRuleCondition(field=str(c.get("field", "any")), operator=str(c.get("operator", "contains")), value=str(c.get("value", "")).lower())
+                for c in s.get("conditions", []) if c.get("value")
+            ]
+            if not conditions or not s.get("target_label"):
+                continue
+            suggestions.append(RuleSuggestion(
+                natural_language=str(s.get("natural_language", "")),
+                name=str(s.get("name", ""))[:60],
+                conditions=conditions,
+                target_label=str(s.get("target_label", "")),
+                archive=bool(s.get("archive", True)),
+            ))
+        except Exception:
+            pass
+    return RuleSuggestionResponse(suggestions=suggestions)
+
+
+@api.patch("/email-rules/{rule_id}", response_model=UserRule)
+def update_email_rule(rule_id: str, payload: UserRuleUpdateRequest):
+    if payload.enabled is None:
+        raise HTTPException(status_code=400, detail="Nothing to update.")
+    rule = set_user_rule_enabled(rule_id, payload.enabled)
+    if rule is None:
+        raise HTTPException(status_code=404, detail="Rule not found.")
+    return _rule_to_schema(rule)
+
+
+@api.delete("/email-rules/{rule_id}", response_model=DeleteEmailResponse)
+def delete_email_rule(rule_id: str):
+    delete_user_rule(rule_id)
+    return DeleteEmailResponse(message_id=rule_id, status="deleted")
+
+
+@api.post("/email-commands", response_model=EmailCommandResponse)
+def run_email_command(payload: EmailCommandRequest):
+    from app.command_parser import parse_command
+    from app.command_executor import execute_command
+
+    if payload.gmail_query and payload.action:
+        parsed = {
+            "action": payload.action,
+            "gmail_query": payload.gmail_query,
+            "target_label": payload.target_label,
+            "archive": payload.archive,
+            "description": f"{payload.action} — {payload.gmail_query}",
+        }
+    else:
+        parsed = parse_command(payload.command)
+
+    action = str(parsed.get("action", "")).strip()
+    gmail_query = str(parsed.get("gmail_query", "")).strip()
+    description = str(parsed.get("description", payload.command)).strip()
+    target_label = parsed.get("target_label") or payload.target_label
+    archive = bool(payload.archive if payload.archive is not None else parsed.get("archive", False))
+
+    if not action or not gmail_query:
+        raise HTTPException(status_code=400, detail="Could not parse a valid action and query from that command.")
+
+    result = execute_command(
+        action=action,
+        gmail_query=gmail_query,
+        target_label=target_label,
+        archive=archive,
+        dry_run=payload.dry_run,
+    )
+
+    return EmailCommandResponse(
+        action=action,
+        gmail_query=gmail_query,
+        description=description,
+        target_label=target_label,
+        archive=archive,
+        affected_count=result["affected_count"],
+        has_more=result.get("has_more", False),
+        dry_run=payload.dry_run,
+    )
 
 
 app.include_router(api)

@@ -20,10 +20,17 @@ import {
   ShieldCheck,
   Sparkles,
   Smartphone,
+  Trash2,
 } from "lucide-react";
 import { AssistantPanel } from "@/components/assistant-panel";
-import { MovementMap } from "@/components/movement-map";
-import { saveTerrainExplorerSession } from "@/components/terrain-explorer-session";
+import { MailCommandPanel } from "@/components/mail-command-panel";
+import { MailRulesPanel } from "@/components/mail-rules-panel";
+import dynamic from "next/dynamic";
+
+const MovementMap = dynamic(
+  () => import("@/components/movement-map").then((m) => ({ default: m.MovementMap })),
+  { ssr: false }
+);
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -36,7 +43,6 @@ const KG_TO_POUNDS = 2.20462;
 const ML_TO_FLUID_OUNCES = 0.033814;
 
 type MobileTab = "today" | "assistant" | "mail" | "tasks" | "journal" | "schedule" | "health" | "more";
-type MobileMailView = "ai" | "raw";
 
 type DashboardMailItem = {
   message_id: string;
@@ -267,34 +273,49 @@ function isGoogleAuthIssue(message: string | null | undefined) {
 }
 
 async function fetchMobileMail(
-  mailView: MobileMailView,
   selectedMailbox: "Jarvis Important" | "Jarvis Unimportant"
 ): Promise<Email[]> {
-  if (mailView === "ai") {
-    const response = await fetch(
-      `${API_BASE}/classify?limit=20&mailbox=${encodeURIComponent(selectedMailbox)}`
-    );
-    if (!response.ok) {
-      throw new Error(`Mail request failed with status ${response.status}`);
-    }
-    const data = (await response.json()) as Array<{
-      email: Email;
-      classification: Email["classification"];
-    }>;
-    return data.map((item) => ({
-      ...item.email,
-      classification: item.classification,
-    }));
-  }
-
   const response = await fetch(
-    `${API_BASE}/emails?limit=20&mailbox=${encodeURIComponent(selectedMailbox)}`
+    `${API_BASE}/emails?limit=30&mailbox=${encodeURIComponent(selectedMailbox)}`
   );
   if (!response.ok) {
     throw new Error(`Mail request failed with status ${response.status}`);
   }
   const data = (await response.json()) as EmailPageResponse;
   return data.items;
+}
+
+async function fetchMailOverview(
+  selectedMailbox: "Jarvis Important" | "Jarvis Unimportant"
+): Promise<string> {
+  const response = await fetch(
+    `${API_BASE}/classify?limit=20&mailbox=${encodeURIComponent(selectedMailbox)}`
+  );
+  if (!response.ok) {
+    throw new Error(`Overview request failed with status ${response.status}`);
+  }
+  const data = (await response.json()) as Array<{
+    email: Email;
+    classification: Email["classification"];
+  }>;
+  const important = data
+    .filter((item) => item.classification?.urgency === "high" || item.classification?.needs_reply)
+    .slice(0, 5);
+  if (!important.length && !data.length) return "No emails in this folder.";
+  const lines: string[] = [];
+  if (important.length) {
+    lines.push(`${important.length} email${important.length > 1 ? "s" : ""} need${important.length === 1 ? "s" : ""} attention:`);
+    for (const item of important) {
+      const label = item.classification?.urgency === "high" ? "urgent" : "needs reply";
+      lines.push(`• ${item.email.subject || "(No subject)"} — ${label}`);
+      if (item.classification?.short_summary) {
+        lines.push(`  ${item.classification.short_summary}`);
+      }
+    }
+  } else {
+    lines.push(`${data.length} email${data.length > 1 ? "s" : ""} in this folder, none flagged as urgent.`);
+  }
+  return lines.join("\n");
 }
 
 function parseCalendarDate(value: string | null | undefined) {
@@ -576,18 +597,6 @@ function parseGpxRoute(text: string, fallbackName: string): PlannedRouteOverlay 
   };
 }
 
-function createBaseTerrainExplorerOption() {
-  return {
-    id: "terrain-explore",
-    label: "Explore terrain",
-    detail: "Free-roam 3D terrain view centered on Provo Valley.",
-    entry: {
-      route_points: [],
-      visits: [],
-    },
-  };
-}
-
 function workoutActivityLabelFromType(activityType: string | null | undefined) {
   const normalized = (activityType || "").trim();
   const rawMatch = normalized.match(/(\d+)/);
@@ -820,9 +829,215 @@ function highlightJournalSearchText(
   );
 }
 
+type MailTabProps = {
+  mailItems: Email[];
+  loading: boolean;
+  selectedMailbox: "Jarvis Important" | "Jarvis Unimportant";
+  aiReport: string | null;
+  aiReportLoading: boolean;
+  onSelectMailbox: (mailbox: "Jarvis Important" | "Jarvis Unimportant") => void;
+  onRefresh: () => void;
+  onHandle: (email: Email) => void;
+  onDelete: (email: Email) => void;
+  onGenerateAiReport: () => void;
+};
+
+function MailTab({
+  mailItems,
+  loading,
+  selectedMailbox,
+  aiReport,
+  aiReportLoading,
+  onSelectMailbox,
+  onRefresh,
+  onHandle,
+  onDelete,
+  onGenerateAiReport,
+}: MailTabProps) {
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const lastIndexRef = React.useRef<number | null>(null);
+
+  const toggleSelect = (email: Email, index: number, shiftKey: boolean) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (shiftKey && lastIndexRef.current !== null) {
+        const start = Math.min(lastIndexRef.current, index);
+        const end = Math.max(lastIndexRef.current, index);
+        for (let i = start; i <= end; i++) {
+          if (mailItems[i]) next.add(mailItems[i].id);
+        }
+      } else {
+        if (next.has(email.id)) {
+          next.delete(email.id);
+        } else {
+          next.add(email.id);
+        }
+      }
+      return next;
+    });
+    if (!shiftKey) lastIndexRef.current = index;
+  };
+
+  const clearSelection = () => {
+    setSelectedIds(new Set());
+    lastIndexRef.current = null;
+  };
+
+  const selectAll = () => setSelectedIds(new Set(mailItems.map((e) => e.id)));
+
+  const handleSelected = () => {
+    const targets = mailItems.filter((e) => selectedIds.has(e.id));
+    clearSelection();
+    for (const email of targets) onHandle(email);
+  };
+
+  const deleteSelected = () => {
+    const targets = mailItems.filter((e) => selectedIds.has(e.id));
+    clearSelection();
+    for (const email of targets) onDelete(email);
+  };
+
+  React.useEffect(() => {
+    clearSelection();
+  }, [selectedMailbox]);
+
+  return (
+    <div className="space-y-3">
+      <Card className="rounded-[1.8rem] border border-white/8 bg-[rgba(17,19,34,0.82)]">
+        <CardContent className="p-3">
+          <div className="flex items-center gap-2">
+            <Button
+              variant={selectedMailbox === "Jarvis Important" ? "default" : "outline"}
+              className="flex-1 rounded-2xl"
+              onClick={() => onSelectMailbox("Jarvis Important")}
+            >
+              Important
+            </Button>
+            <Button
+              variant={selectedMailbox === "Jarvis Unimportant" ? "default" : "outline"}
+              className="flex-1 rounded-2xl"
+              onClick={() => onSelectMailbox("Jarvis Unimportant")}
+            >
+              Unimportant
+            </Button>
+            <Button
+              variant="outline"
+              size="icon"
+              className="shrink-0 rounded-2xl"
+              onClick={onRefresh}
+              disabled={loading}
+              title="Sync from Gmail"
+            >
+              <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {selectedIds.size > 0 ? (
+        <Card className="rounded-[1.8rem] border border-cyan-300/20 bg-cyan-400/8">
+          <CardContent className="p-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-sm font-medium text-cyan-100">{selectedIds.size} selected</span>
+              <Button size="sm" variant="outline" className="rounded-xl" onClick={selectAll}>
+                Select all
+              </Button>
+              <Button size="sm" className="rounded-xl" onClick={handleSelected}>
+                Mark handled
+              </Button>
+              <Button size="sm" variant="outline" className="rounded-xl border-red-300/20 text-red-400 hover:text-red-300" onClick={deleteSelected}>
+                Delete
+              </Button>
+              <Button size="sm" variant="ghost" className="rounded-xl" onClick={clearSelection}>
+                Clear
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {!aiReport ? (
+        <button
+          onClick={onGenerateAiReport}
+          disabled={aiReportLoading || loading}
+          className="w-full rounded-[1.4rem] border border-fuchsia-300/20 bg-fuchsia-400/8 px-4 py-2.5 text-left text-sm text-fuchsia-200 transition-colors hover:bg-fuchsia-400/12 disabled:opacity-50"
+        >
+          {aiReportLoading ? "Generating AI report…" : "Generate AI report for this folder"}
+        </button>
+      ) : (
+        <Card className="rounded-[1.8rem] border border-fuchsia-300/20 bg-fuchsia-400/8">
+          <CardContent className="p-4">
+            <div className="mb-2 flex items-center justify-between">
+              <span className="text-xs font-semibold uppercase tracking-wider text-fuchsia-300">AI Report</span>
+              <button onClick={() => onGenerateAiReport()} className="text-xs text-fuchsia-400 hover:text-fuchsia-200">Refresh</button>
+            </div>
+            <pre className="whitespace-pre-wrap text-sm leading-6 text-fuchsia-100">{aiReport}</pre>
+          </CardContent>
+        </Card>
+      )}
+
+      {mailItems.map((email, index) => {
+        const isSelected = selectedIds.has(email.id);
+        return (
+          <Card
+            key={email.id}
+            className={`rounded-[1.8rem] border transition-colors ${isSelected ? "border-cyan-400/30 bg-cyan-400/6" : "border-white/8 bg-[rgba(17,19,34,0.82)]"}`}
+          >
+            <CardContent className="space-y-2 p-4">
+              <div className="flex items-start gap-3">
+                <button
+                  onClick={(e) => toggleSelect(email, index, e.shiftKey)}
+                  className={`mt-0.5 h-5 w-5 shrink-0 rounded-full border-2 transition-colors ${isSelected ? "border-cyan-400 bg-cyan-400" : "border-white/25 bg-transparent hover:border-white/50"}`}
+                  title="Select (shift-click for range)"
+                >
+                  {isSelected ? <CheckCircle2 className="h-4 w-4 text-slate-900" /> : null}
+                </button>
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm font-semibold leading-5 text-white">{email.subject || "(No subject)"}</div>
+                  <div className="mt-0.5 text-xs text-slate-400">{email.sender}{email.date ? ` · ${email.date}` : ""}</div>
+                </div>
+              </div>
+              {email.snippet ? (
+                <p className="pl-8 text-xs leading-5 text-slate-400 line-clamp-2">{email.snippet}</p>
+              ) : null}
+              <div className="flex gap-2 pl-8">
+                <Button asChild variant="outline" size="sm" className="rounded-xl">
+                  <Link href={`/mobile/mail/${email.id}`}>Open</Link>
+                </Button>
+                <Button size="sm" className="rounded-xl" onClick={() => onHandle(email)}>
+                  Handled
+                </Button>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  className="h-8 w-8 shrink-0 rounded-xl text-slate-500 hover:border-red-400/30 hover:text-red-400"
+                  onClick={() => onDelete(email)}
+                  title="Move to trash"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        );
+      })}
+
+      {!mailItems.length && !loading ? (
+        <Card className="rounded-[1.8rem] border border-white/8 bg-[rgba(17,19,34,0.82)]">
+          <CardContent className="p-4 text-sm text-slate-400">
+            No mail in this folder. Hit refresh to sync from Gmail.
+          </CardContent>
+        </Card>
+      ) : null}
+
+      <MailRulesPanel />
+      <MailCommandPanel />
+    </div>
+  );
+}
+
 function MobilePageContent() {
   const [activeTab, setActiveTab] = useState<MobileTab>("today");
-  const [mailView, setMailView] = useState<MobileMailView>("ai");
   const [selectedMailbox, setSelectedMailbox] = useState<"Jarvis Important" | "Jarvis Unimportant">("Jarvis Important");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -836,14 +1051,14 @@ function MobilePageContent() {
   const [healthRoutesTab, setHealthRoutesTab] = useState<"overview" | "routes">("overview");
   const [plannedRouteOverlay, setPlannedRouteOverlay] = useState<PlannedRouteOverlay | null>(null);
   const [plannedRouteError, setPlannedRouteError] = useState("");
-  const [selectedTerrainExplorerId, setSelectedTerrainExplorerId] = useState<string | null>(null);
   const [tasks, setTasks] = useState<DashboardTaskItem[]>([]);
   const [journal, setJournal] = useState<JournalDayEntry[]>([]);
   const [journalQuery, setJournalQuery] = useState("");
   const [journalSearchInput, setJournalSearchInput] = useState("");
   const [mailItems, setMailItems] = useState<Email[]>([]);
+  const [aiReport, setAiReport] = useState<string | null>(null);
+  const [aiReportLoading, setAiReportLoading] = useState(false);
   const [schedule, setSchedule] = useState<CalendarAgendaItem[]>([]);
-  const [handlingEmailId, setHandlingEmailId] = useState<string | null>(null);
   const [savingTaskId, setSavingTaskId] = useState<string | null>(null);
   const [creatingTask, setCreatingTask] = useState(false);
   const [newTaskTitle, setNewTaskTitle] = useState("");
@@ -867,41 +1082,6 @@ function MobilePageContent() {
   const hasMovementMap = Boolean(
     latestMovementEntry && (latestMovementEntry.route_points.length || latestMovementEntry.visits.length)
   );
-  const terrainExplorerOptions = useMemo(
-    () => [
-      createBaseTerrainExplorerOption(),
-      ...mappedWorkoutEntries.map((workout) => ({
-        id: `workout-${workout.workout_id}`,
-        label: formatWorkoutLabel(workout.activity_label, workout.activity_type),
-        detail: formatScheduleDateTime(workout.start_date),
-        entry: workoutToMapEntry(workout),
-      })),
-    ],
-    [mappedWorkoutEntries]
-  );
-  const selectedTerrainExplorer =
-    terrainExplorerOptions.find((option) => option.id === selectedTerrainExplorerId) ??
-    terrainExplorerOptions[0] ??
-    null;
-
-  useEffect(() => {
-    if (!terrainExplorerOptions.length) {
-      setSelectedTerrainExplorerId(null);
-      return;
-    }
-
-    setSelectedTerrainExplorerId((current) =>
-      current && terrainExplorerOptions.some((option) => option.id === current)
-        ? current
-        : terrainExplorerOptions[0].id
-    );
-  }, [terrainExplorerOptions]);
-
-  useEffect(() => {
-    setPlannedRouteOverlay(null);
-    setPlannedRouteError("");
-  }, [selectedTerrainExplorerId, activeHealthDate]);
-
   const loadGoogleAuthStatus = useCallback(async () => {
     try {
       const response = await fetch(`${API_BASE}/google/oauth/status`);
@@ -1064,24 +1244,6 @@ function MobilePageContent() {
     }
   };
 
-  const openFullscreenTerrainExplorer = () => {
-    if (!terrainExplorerOptions.length) {
-      return;
-    }
-
-    const sessionId = saveTerrainExplorerSession({
-      terrainExplorerOptions,
-      selectedTerrainExplorerId,
-      plannedRouteOverlay,
-      nearbyTrails: [],
-      selectedNearbyTrailId: null,
-      terrainViewBounds: null,
-      plannerViewNonce: 0,
-      sourceContext: "mobile",
-    });
-    window.open(`/terrain-explorer?session=${encodeURIComponent(sessionId)}`, "jarvis-terrain-explorer");
-  };
-
   const refreshLiveMovement = useEffectEvent(async () => {
     try {
       const [dashboardResponse, movementResponse] = await Promise.all([
@@ -1120,8 +1282,9 @@ function MobilePageContent() {
       const run = async () => {
         setLoading(true);
         setError("");
+        setAiReport(null);
         try {
-          setMailItems(await fetchMobileMail(mailView, selectedMailbox));
+          setMailItems(await fetchMobileMail(selectedMailbox));
         } catch (err) {
           setError(err instanceof Error ? err.message : "Failed to load mail.");
         } finally {
@@ -1130,7 +1293,7 @@ function MobilePageContent() {
       };
       void run();
     }
-  }, [activeTab, mailView, selectedMailbox]);
+  }, [activeTab, selectedMailbox]);
 
   useEffect(() => {
     if (activeTab === "journal" && !hasLoadedJournalRef.current) {
@@ -1205,26 +1368,62 @@ function MobilePageContent() {
     }
   };
 
-  const handleEmail = async (messageId: string) => {
-    setHandlingEmailId(messageId);
+  const handleEmail = async (email: Email) => {
+    setMailItems((current) => current.filter((e) => e.id !== email.id));
     setError("");
     try {
-      const response = await fetch(`${API_BASE}/emails/${messageId}/handle`, {
+      const response = await fetch(`${API_BASE}/emails/${email.id}/handle`, {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ thread_id: email.thread_id }),
       });
       if (!response.ok) {
         throw new Error(`Handle request failed with status ${response.status}`);
       }
-      setMailItems((current) => current.filter((email) => email.id !== messageId));
-      const [nextMailItems] = await Promise.all([
-        fetchMobileMail(mailView, selectedMailbox),
-        loadAll(),
-      ]);
-      setMailItems(nextMailItems);
     } catch (err) {
+      setMailItems((current) => [email, ...current]);
       setError(err instanceof Error ? err.message : "Failed to mark email handled.");
+    }
+  };
+
+  const deleteEmail = async (email: Email) => {
+    setMailItems((current) => current.filter((e) => e.id !== email.id));
+    setError("");
+    try {
+      const response = await fetch(`${API_BASE}/emails/${email.id}`, {
+        method: "DELETE",
+      });
+      if (!response.ok) {
+        throw new Error(`Delete request failed with status ${response.status}`);
+      }
+    } catch (err) {
+      setMailItems((current) => [email, ...current]);
+      setError(err instanceof Error ? err.message : "Failed to delete email.");
+    }
+  };
+
+  const reloadMail = async () => {
+    setLoading(true);
+    setError("");
+    setAiReport(null);
+    try {
+      setMailItems(await fetchMobileMail(selectedMailbox));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load mail.");
     } finally {
-      setHandlingEmailId(null);
+      setLoading(false);
+    }
+  };
+
+  const generateAiReport = async () => {
+    setAiReportLoading(true);
+    setError("");
+    try {
+      setAiReport(await fetchMailOverview(selectedMailbox));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to generate AI report.");
+    } finally {
+      setAiReportLoading(false);
     }
   };
 
@@ -1583,91 +1782,18 @@ function MobilePageContent() {
             </CardContent>
           </Card>
         ) : activeTab === "mail" ? (
-          <div className="space-y-4">
-            <Card className="rounded-[1.8rem] border border-white/8 bg-[rgba(17,19,34,0.82)]">
-              <CardContent className="space-y-3 p-4">
-                <div className="grid grid-cols-2 gap-2">
-                  <Button
-                    variant={selectedMailbox === "Jarvis Important" ? "default" : "outline"}
-                    className="rounded-2xl"
-                    onClick={() => setSelectedMailbox("Jarvis Important")}
-                  >
-                    Important
-                  </Button>
-                  <Button
-                    variant={selectedMailbox === "Jarvis Unimportant" ? "default" : "outline"}
-                    className="rounded-2xl"
-                    onClick={() => setSelectedMailbox("Jarvis Unimportant")}
-                  >
-                    Unimportant
-                  </Button>
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <Button
-                    variant={mailView === "ai" ? "default" : "outline"}
-                    className="rounded-2xl"
-                    onClick={() => setMailView("ai")}
-                  >
-                    AI
-                  </Button>
-                  <Button
-                    variant={mailView === "raw" ? "default" : "outline"}
-                    className="rounded-2xl"
-                    onClick={() => setMailView("raw")}
-                  >
-                    Raw
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-
-            {mailItems.map((email) => (
-              <Card key={email.id} className="rounded-[1.8rem] border border-white/8 bg-[rgba(17,19,34,0.82)]">
-                <CardContent className="space-y-3 p-4">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="text-sm font-semibold text-white">{email.subject || "(No subject)"}</div>
-                      <div className="mt-1 text-xs text-slate-400">{email.sender}</div>
-                    </div>
-                    <Badge className="rounded-xl border border-fuchsia-300/25 bg-fuchsia-400/12 text-fuchsia-100">
-                      {selectedMailbox === "Jarvis Important" ? "Important" : "Unimportant"}
-                    </Badge>
-                  </div>
-                  {email.classification?.short_summary ? (
-                    <div className="rounded-[1rem] border border-cyan-300/20 bg-cyan-400/8 px-3 py-2 text-sm leading-6 text-cyan-50">
-                      {email.classification.short_summary}
-                    </div>
-                  ) : null}
-                  <p className="text-sm leading-6 text-slate-300">{email.snippet || "No preview available."}</p>
-                  <div className="flex justify-between gap-2">
-                    <Button asChild variant="outline" className="rounded-2xl">
-                      <Link href={`/mobile/mail/${email.id}`}>Open</Link>
-                    </Button>
-                    <Button
-                      className="rounded-2xl"
-                      onClick={() => void handleEmail(email.id)}
-                      disabled={handlingEmailId === email.id}
-                    >
-                      {selectedMailbox === "Jarvis Unimportant"
-                        ? handlingEmailId === email.id
-                          ? "Handling..."
-                          : "Handled"
-                        : handlingEmailId === email.id
-                          ? "Handling..."
-                          : "Mark handled"}
-                    </Button>
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
-            {!mailItems.length && !loading ? (
-              <Card className="rounded-[1.8rem] border border-white/8 bg-[rgba(17,19,34,0.82)]">
-                <CardContent className="p-4 text-sm text-slate-400">
-                  No mail in this folder right now.
-                </CardContent>
-              </Card>
-            ) : null}
-          </div>
+          <MailTab
+            mailItems={mailItems}
+            loading={loading}
+            selectedMailbox={selectedMailbox}
+            aiReport={aiReport}
+            aiReportLoading={aiReportLoading}
+            onSelectMailbox={setSelectedMailbox}
+            onRefresh={() => void reloadMail()}
+            onHandle={handleEmail}
+            onDelete={deleteEmail}
+            onGenerateAiReport={() => void generateAiReport()}
+          />
         ) : null}
 
         {activeTab === "tasks" ? (
@@ -1834,88 +1960,6 @@ function MobilePageContent() {
                 </div>
                 {dashboard?.health_summary || movementEntries.length ? (
                   <>
-                    {healthRoutesTab === "routes" ? (
-                      <div className="space-y-3">
-                        <div className="rounded-[1.2rem] border border-white/8 bg-white/5 px-4 py-3">
-                          <div className="text-xs uppercase tracking-[0.18em] text-slate-400">3D route explorer</div>
-                          <div className="mt-1 text-sm text-slate-300">
-                            Open the terrain explorer in a separate fullscreen window to freely explore the map, then layer in workout routes, planned hikes, and live trail overlays when you want them.
-                          </div>
-                          <div className="mt-3 flex flex-wrap gap-2">
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="outline"
-                              className="rounded-2xl"
-                              onClick={openFullscreenTerrainExplorer}
-                              disabled={!selectedTerrainExplorer}
-                            >
-                              Open fullscreen
-                            </Button>
-                          </div>
-                          <div className="mt-3 flex flex-wrap gap-2">
-                            {terrainExplorerOptions.map((option) => (
-                              <button
-                                key={option.id}
-                                type="button"
-                                onClick={() => setSelectedTerrainExplorerId(option.id)}
-                                className={`rounded-full border px-3 py-1 text-xs transition ${
-                                  selectedTerrainExplorer?.id === option.id
-                                    ? "border-emerald-300/25 bg-emerald-400/12 text-emerald-100"
-                                    : "border-white/10 bg-white/5 text-slate-300 hover:border-white/20"
-                                }`}
-                              >
-                                {option.label}
-                              </button>
-                            ))}
-                          </div>
-                          {selectedTerrainExplorer?.detail ? (
-                            <div className="mt-3 text-[11px] text-slate-500">{selectedTerrainExplorer.detail}</div>
-                          ) : null}
-                        </div>
-
-                        <div className="rounded-[1.2rem] border border-white/8 bg-white/5 px-4 py-3">
-                          <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Planned route overlay</div>
-                          <div className="mt-1 text-xs text-slate-500">
-                            Import a GPX or GeoJSON route here, then launch fullscreen to preview it on the terrain globe.
-                          </div>
-                          {plannedRouteOverlay ? (
-                            <div className="mt-2 text-xs text-emerald-200">
-                              Loaded {plannedRouteOverlay.name} with {plannedRouteOverlay.points.length} points.
-                            </div>
-                          ) : null}
-                          {plannedRouteError ? (
-                            <div className="mt-2 text-xs text-rose-200">{plannedRouteError}</div>
-                          ) : null}
-                          <div className="mt-3 flex flex-wrap gap-2">
-                            <label className="inline-flex cursor-pointer items-center rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-slate-200 transition hover:border-white/20">
-                              Import route
-                              <input
-                                type="file"
-                                accept=".gpx,.geojson,.json,application/geo+json,application/json,application/gpx+xml"
-                                onChange={handlePlannedRouteUpload}
-                                className="hidden"
-                              />
-                            </label>
-                            {plannedRouteOverlay ? (
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setPlannedRouteOverlay(null);
-                                  setPlannedRouteError("");
-                                }}
-                                className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-slate-300 transition hover:border-white/20"
-                              >
-                                Clear route
-                              </button>
-                            ) : null}
-                          </div>
-                        </div>
-                        <div className="rounded-[1.2rem] border border-white/8 bg-white/5 px-4 py-3 text-sm text-slate-300">
-                          Trail search, terrain overlays, and hike-planning controls now live only in the fullscreen explorer so the embedded mobile view stays stable.
-                        </div>
-                      </div>
-                    ) : null}
 
                     {healthRoutesTab === "overview" ? (
                       <>
@@ -1970,6 +2014,72 @@ function MobilePageContent() {
                       </>
                     ) : null}
 
+                    {selectedHealthEntry?.extra_metrics &&
+                    Object.keys(selectedHealthEntry.extra_metrics).length ? (
+                      <div className="space-y-2">
+                        <button
+                          type="button"
+                          onClick={() => setExpandedMetricsOpen((current) => !current)}
+                          className="flex w-full items-center justify-between rounded-[1.2rem] border border-white/8 bg-white/5 px-4 py-3 text-left"
+                        >
+                          <div>
+                            <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Expanded metrics</div>
+                            <div className="mt-1 text-xs text-slate-500">
+                              {expandedMetricsOpen ? "Hide detailed measurements" : "Show detailed measurements"}
+                            </div>
+                          </div>
+                          <span className="text-xs text-cyan-200">
+                            {expandedMetricsOpen ? "Hide" : "Show"}
+                          </span>
+                        </button>
+                        {expandedMetricsOpen
+                          ? Object.entries(selectedHealthEntry.extra_metrics)
+                              .filter(([, value]) => value !== null && value !== undefined)
+                              .slice(0, 12)
+                              .map(([key, value]) => (
+                                <div
+                                  key={key}
+                                  className="rounded-[1.2rem] border border-white/8 bg-white/5 px-4 py-3"
+                                >
+                                  <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">
+                                    {healthMetricLabel(key)}
+                                  </div>
+                                  <div className="mt-1 text-sm font-medium text-white">
+                                    {formatHealthMetricValue(key, value)}
+                                  </div>
+                                </div>
+                              ))
+                          : null}
+                      </div>
+                    ) : null}
+
+                    {workoutEntries[0] ? (
+                      <div className="rounded-[1.2rem] border border-white/8 bg-white/5 px-4 py-3">
+                        <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Workout spotlight</div>
+                        <div className="mt-2 flex items-center justify-between gap-3">
+                          <div className="text-sm font-medium text-white">
+                            {formatWorkoutLabel(workoutEntries[0].activity_label, workoutEntries[0].activity_type)}
+                          </div>
+                          <div className="text-xs text-slate-400">
+                            {formatHealthStat(workoutEntries[0].duration_minutes)} min
+                          </div>
+                        </div>
+                        <div className="mt-1 text-xs text-slate-400">
+                          {formatScheduleDateTime(workoutEntries[0].start_date)}
+                        </div>
+                        <div className="mt-2 flex flex-wrap gap-3 text-xs text-slate-300">
+                          <span>{formatDistanceMiles(workoutEntries[0].total_distance_km, 1)}</span>
+                          <span>{formatHealthStat(workoutEntries[0].active_energy_kcal)} Cal</span>
+                          <span>{formatHealthStat(workoutEntries[0].avg_heart_rate_bpm)} avg bpm</span>
+                        </div>
+                      </div>
+                    ) : null}
+
+                      </>
+                    ) : null}
+
+                    {healthRoutesTab === "routes" ? (
+                      <>
                     <div className="rounded-[1.3rem] border border-emerald-300/18 bg-[linear-gradient(135deg,rgba(16,185,129,0.18),rgba(17,19,34,0.56))] px-4 py-4">
                       <div className="text-[11px] uppercase tracking-[0.18em] text-emerald-100/80">Movement story</div>
                       {latestMovementEntry ? (
@@ -2035,67 +2145,6 @@ function MobilePageContent() {
                         </div>
                         <div className="mt-3 overflow-hidden rounded-[1rem] border border-white/8 bg-[radial-gradient(circle_at_top_left,rgba(16,185,129,0.14),transparent_32%),linear-gradient(180deg,rgba(9,12,22,0.96),rgba(15,18,28,0.96))]">
                           <MovementMap entry={latestMovementEntry} className="h-[380px] min-h-[380px]" />
-                        </div>
-                      </div>
-                    ) : null}
-
-                    {selectedHealthEntry?.extra_metrics &&
-                    Object.keys(selectedHealthEntry.extra_metrics).length ? (
-                      <div className="space-y-2">
-                        <button
-                          type="button"
-                          onClick={() => setExpandedMetricsOpen((current) => !current)}
-                          className="flex w-full items-center justify-between rounded-[1.2rem] border border-white/8 bg-white/5 px-4 py-3 text-left"
-                        >
-                          <div>
-                            <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Expanded metrics</div>
-                            <div className="mt-1 text-xs text-slate-500">
-                              {expandedMetricsOpen ? "Hide detailed measurements" : "Show detailed measurements"}
-                            </div>
-                          </div>
-                          <span className="text-xs text-cyan-200">
-                            {expandedMetricsOpen ? "Hide" : "Show"}
-                          </span>
-                        </button>
-                        {expandedMetricsOpen
-                          ? Object.entries(selectedHealthEntry.extra_metrics)
-                              .filter(([, value]) => value !== null && value !== undefined)
-                              .slice(0, 12)
-                              .map(([key, value]) => (
-                                <div
-                                  key={key}
-                                  className="rounded-[1.2rem] border border-white/8 bg-white/5 px-4 py-3"
-                                >
-                                  <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">
-                                    {healthMetricLabel(key)}
-                                  </div>
-                                  <div className="mt-1 text-sm font-medium text-white">
-                                    {formatHealthMetricValue(key, value)}
-                                  </div>
-                                </div>
-                              ))
-                          : null}
-                      </div>
-                    ) : null}
-
-                    {workoutEntries[0] ? (
-                      <div className="rounded-[1.2rem] border border-white/8 bg-white/5 px-4 py-3">
-                        <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Workout spotlight</div>
-                        <div className="mt-2 flex items-center justify-between gap-3">
-                          <div className="text-sm font-medium text-white">
-                            {formatWorkoutLabel(workoutEntries[0].activity_label, workoutEntries[0].activity_type)}
-                          </div>
-                          <div className="text-xs text-slate-400">
-                            {formatHealthStat(workoutEntries[0].duration_minutes)} min
-                          </div>
-                        </div>
-                        <div className="mt-1 text-xs text-slate-400">
-                          {formatScheduleDateTime(workoutEntries[0].start_date)}
-                        </div>
-                        <div className="mt-2 flex flex-wrap gap-3 text-xs text-slate-300">
-                          <span>{formatDistanceMiles(workoutEntries[0].total_distance_km, 1)}</span>
-                          <span>{formatHealthStat(workoutEntries[0].active_energy_kcal)} Cal</span>
-                          <span>{formatHealthStat(workoutEntries[0].avg_heart_rate_bpm)} avg bpm</span>
                         </div>
                       </div>
                     ) : null}

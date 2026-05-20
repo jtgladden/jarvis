@@ -28,8 +28,14 @@ import {
   Trash2,
 } from "lucide-react";
 import { AssistantPanel } from "@/components/assistant-panel";
-import { MovementMap } from "@/components/movement-map";
-import { saveTerrainExplorerSession } from "@/components/terrain-explorer-session";
+import { MailCommandPanel } from "@/components/mail-command-panel";
+import { MailRulesPanel } from "@/components/mail-rules-panel";
+import dynamic from "next/dynamic";
+
+const MovementMap = dynamic(
+  () => import("@/components/movement-map").then((m) => ({ default: m.MovementMap })),
+  { ssr: false }
+);
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -484,18 +490,6 @@ function workoutToMapEntry(workout: {
       horizontal_accuracy_m: null,
     })),
     visits: [],
-  };
-}
-
-function createBaseTerrainExplorerOption() {
-  return {
-    id: "terrain-explore",
-    label: "Explore terrain",
-    detail: "Free-roam 3D terrain view centered on Provo Valley.",
-    entry: {
-      route_points: [],
-      visits: [],
-    },
   };
 }
 
@@ -1139,56 +1133,6 @@ function HealthDetailPanel({
   const hasMovementMap = Boolean(
     selectedMovementEntry && (selectedMovementEntry.route_points.length || selectedMovementEntry.visits.length)
   );
-  const terrainExplorerOptions = useMemo(
-    () => [
-      createBaseTerrainExplorerOption(),
-      ...mappedWorkouts.map((workout) => ({
-        id: `workout-${workout.workout_id}`,
-        label: formatWorkoutLabel(workout.activity_label, workout.activity_type),
-        detail: formatScheduleDateTime(workout.start_date),
-        entry: workoutToMapEntry(workout),
-      })),
-    ],
-    [mappedWorkouts]
-  );
-  const [selectedTerrainExplorerId, setSelectedTerrainExplorerId] = useState<string | null>(
-    () => terrainExplorerOptions[0]?.id ?? null
-  );
-  useEffect(() => {
-    if (!terrainExplorerOptions.length) {
-      setSelectedTerrainExplorerId(null);
-      return;
-    }
-
-    setSelectedTerrainExplorerId((current) =>
-      current && terrainExplorerOptions.some((option) => option.id === current)
-        ? current
-        : terrainExplorerOptions[0].id
-    );
-  }, [terrainExplorerOptions]);
-  const selectedTerrainExplorer =
-    terrainExplorerOptions.find((option) => option.id === selectedTerrainExplorerId) ??
-    terrainExplorerOptions[0] ??
-    null;
-
-  const openFullscreenTerrainExplorer = () => {
-    if (!terrainExplorerOptions.length) {
-      return;
-    }
-
-    const sessionId = saveTerrainExplorerSession({
-      terrainExplorerOptions,
-      selectedTerrainExplorerId,
-      plannedRouteOverlay,
-      nearbyTrails: [],
-      selectedNearbyTrailId: null,
-      terrainViewBounds: null,
-      plannerViewNonce: 0,
-      sourceContext: "desktop",
-    });
-    window.open(`/terrain-explorer?session=${encodeURIComponent(sessionId)}`, "jarvis-terrain-explorer");
-  };
-
   const handlePlannedRouteUpload = async (
     event: React.ChangeEvent<HTMLInputElement>
   ) => {
@@ -1443,6 +1387,7 @@ function HealthDetailPanel({
                 </CardContent>
               </Card>
 
+              {healthAtlasTab === "routes" ? (
               <Card className="rounded-[1.5rem] border border-white/6 bg-[rgba(35,37,58,0.72)] shadow-none">
                 <CardHeader className="pb-2">
                   <CardTitle className="text-base">Movement journal</CardTitle>
@@ -1482,7 +1427,7 @@ function HealthDetailPanel({
                         </div>
                       </div>
 
-                      {healthAtlasTab === "routes" && hasMovementMap && selectedMovementEntry ? (
+                      {hasMovementMap ? (
                         <div className="rounded-[1.3rem] border border-white/6 bg-[rgba(17,19,34,0.45)] p-4">
                           <div className="flex items-center justify-between gap-3">
                             <div>
@@ -1504,95 +1449,8 @@ function HealthDetailPanel({
                         </div>
                       ) : null}
 
-                      {healthAtlasTab === "routes" ? (
-                        <div className="rounded-[1.3rem] border border-white/6 bg-[rgba(17,19,34,0.45)] p-4">
-                          <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                            <div>
-                              <div className="text-xs uppercase tracking-[0.18em] text-slate-400">3D terrain explorer</div>
-                              <div className="mt-1 text-sm text-slate-300">
-                                Open the terrain explorer in a separate fullscreen window to freely explore the map, then layer in workout routes, planned hikes, and live trail overlays when you want them.
-                              </div>
-                            </div>
-                            <div className="flex flex-wrap gap-2">
-                              <Button
-                                type="button"
-                                size="sm"
-                                variant="outline"
-                                className="rounded-2xl"
-                                onClick={openFullscreenTerrainExplorer}
-                                disabled={!selectedTerrainExplorer}
-                              >
-                                Open fullscreen
-                              </Button>
-                            </div>
-                          </div>
-                          <div className="mt-4 flex flex-wrap gap-2">
-                            {terrainExplorerOptions.map((option) => (
-                              <button
-                                key={option.id}
-                                type="button"
-                                onClick={() => setSelectedTerrainExplorerId(option.id)}
-                                className={`rounded-full border px-3 py-1 text-xs transition ${
-                                  selectedTerrainExplorer?.id === option.id
-                                    ? "border-emerald-300/25 bg-emerald-400/12 text-emerald-100"
-                                    : "border-white/10 bg-white/5 text-slate-300 hover:border-white/20"
-                                }`}
-                              >
-                                {option.label}
-                              </button>
-                            ))}
-                          </div>
-                          <div className="mt-4 flex flex-col gap-3 rounded-[1rem] border border-white/8 bg-black/10 p-4 lg:flex-row lg:items-center lg:justify-between">
-                            <div>
-                              <div className="text-xs uppercase tracking-[0.16em] text-slate-400">Planned route overlay</div>
-                              <div className="mt-1 text-sm text-slate-300">
-                                Import a `GPX` or `GeoJSON` track here, then launch fullscreen to preview it on the terrain globe.
-                              </div>
-                              {plannedRouteOverlay ? (
-                                <div className="mt-2 text-xs text-emerald-200">
-                                  Loaded {plannedRouteOverlay.name} with {plannedRouteOverlay.points.length} points.
-                                </div>
-                              ) : null}
-                              {plannedRouteError ? (
-                                <div className="mt-2 text-xs text-rose-200">{plannedRouteError}</div>
-                              ) : null}
-                            </div>
-                            <div className="flex flex-wrap items-center gap-2">
-                              <label className="inline-flex cursor-pointer items-center rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-slate-200 transition hover:border-white/20">
-                                Import route
-                                <input
-                                  type="file"
-                                  accept=".gpx,.geojson,.json,application/geo+json,application/json,application/gpx+xml"
-                                  onChange={handlePlannedRouteUpload}
-                                  className="hidden"
-                                />
-                              </label>
-                              {plannedRouteOverlay ? (
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setPlannedRouteOverlay(null);
-                                    setPlannedRouteError("");
-                                  }}
-                                  className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-slate-300 transition hover:border-white/20"
-                                >
-                                  Clear planned route
-                                </button>
-                              ) : null}
-                            </div>
-                          </div>
-                          {selectedTerrainExplorer?.detail ? (
-                            <div className="mt-3 text-xs text-slate-500">
-                              Selected route: {selectedTerrainExplorer.detail}
-                            </div>
-                          ) : null}
-                          <div className="mt-4 rounded-[1rem] border border-white/8 bg-black/10 p-4 text-sm text-slate-300">
-                            Trail search, terrain overlays, and hike-planning controls now live only in the fullscreen explorer so the embedded dashboard view stays stable.
-                          </div>
-                        </div>
-                      ) : null}
 
-                      {healthAtlasTab === "overview" ? (
+                      {healthAtlasTab === "routes" ? (
                         <>
                           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
                             <div className="rounded-[1.2rem] border border-white/6 bg-[rgba(17,19,34,0.45)] p-4">
@@ -1731,6 +1589,7 @@ function HealthDetailPanel({
                   )}
                 </CardContent>
               </Card>
+              ) : null}
             </div>
           ) : (
             <div className="rounded-[1.6rem] border border-dashed border-white/10 p-6 text-sm text-slate-400">
@@ -2141,7 +2000,6 @@ function EmailListItem({
   selected: boolean;
   onClick: () => void;
 }) {
-  const classification = email.classification || {};
   const cleanupDecision = email.cleanupDecision;
   const byuEmail = isByuEmail(email);
 
@@ -2154,59 +2012,34 @@ function EmailListItem({
           : "border-white/8 bg-[rgba(24,26,42,0.82)] hover:border-cyan-300/30 hover:bg-[rgba(32,35,57,0.95)] hover:ring-1 hover:ring-cyan-300/12"
       }`}
     >
-      <div className="mb-2 flex items-start justify-between gap-3">
-        <div className="min-w-0 flex-1">
-          <div className="truncate text-sm font-semibold text-slate-100">
-            {decodeHtmlEntities(email.subject) || "(No subject)"}
-          </div>
-          <div className="truncate text-xs text-slate-400">
-            {decodeHtmlEntities(email.sender) || "Unknown sender"}
-          </div>
+      <div className="mb-1.5 min-w-0">
+        <div className="truncate text-sm font-semibold text-slate-100">
+          {decodeHtmlEntities(email.subject) || "(No subject)"}
         </div>
-
-        {classification.importance_score ? (
-          <Badge variant="secondary" className="shrink-0 rounded-xl">
-            {classification.importance_score}/10
-          </Badge>
-        ) : null}
+        <div className="truncate text-xs text-slate-400">
+          {decodeHtmlEntities(email.sender) || "Unknown sender"}
+          {email.date ? ` · ${email.date}` : ""}
+        </div>
       </div>
 
-      <p className="mb-3 line-clamp-2 break-words text-sm text-slate-300">
-        {decodeHtmlEntities(email.snippet) || "No preview available."}
+      <p className="mb-2 line-clamp-2 break-words text-sm text-slate-300">
+        {decodeHtmlEntities(email.snippet) || ""}
       </p>
 
-      <div className="flex min-w-0 max-w-full flex-wrap gap-2 overflow-hidden">
-        {byuEmail ? (
-          <Badge className="max-w-full rounded-xl bg-sky-500/20 text-sky-100 hover:bg-sky-500/20">
-            BYU mail
-          </Badge>
-        ) : null}
-
-        {classification.category ? (
-          <Badge
-            variant={categoryTone[classification.category] || "secondary"}
-            className="max-w-full truncate rounded-xl"
-          >
-            {classification.category.replaceAll("_", " ")}
-          </Badge>
-        ) : null}
-
-        {classification.needs_reply ? (
-          <Badge className="max-w-full rounded-xl">needs reply</Badge>
-        ) : null}
-
-        {classification.urgency ? (
-          <Badge variant="outline" className="max-w-full rounded-xl">
-            {classification.urgency}
-          </Badge>
-        ) : null}
-
-        {cleanupDecision ? (
-          <Badge variant={decisionTone[cleanupDecision.action]} className="max-w-full truncate rounded-xl">
-            {cleanupDecision.action}
-          </Badge>
-        ) : null}
-      </div>
+      {(byuEmail || cleanupDecision) ? (
+        <div className="flex min-w-0 max-w-full flex-wrap gap-2 overflow-hidden">
+          {byuEmail ? (
+            <Badge className="max-w-full rounded-xl bg-sky-500/20 text-sky-100 hover:bg-sky-500/20">
+              BYU mail
+            </Badge>
+          ) : null}
+          {cleanupDecision ? (
+            <Badge variant={decisionTone[cleanupDecision.action]} className="max-w-full truncate rounded-xl">
+              {cleanupDecision.action}
+            </Badge>
+          ) : null}
+        </div>
+      ) : null}
     </button>
   );
 }
@@ -2290,7 +2123,7 @@ export default function HomePage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [mode, setMode] = useState<"dashboard" | "assistant" | "tasks" | "journal" | "mail" | "news" | "overview" | "schedule" | "planning" | "settings" | "health">("dashboard");
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
-  const [mailView, setMailView] = useState<"ai" | "raw">("ai");
+  const [mailView, setMailView] = useState<"ai" | "raw">("raw");
   const [mailWorkspaceTab, setMailWorkspaceTab] = useState<"triage" | "insights">("triage");
   const [scheduleWorkspaceTab, setScheduleWorkspaceTab] = useState<"agenda" | "planner">("agenda");
   const [dashboard, setDashboard] = useState<DashboardResponse | null>(null);
@@ -2390,6 +2223,18 @@ export default function HomePage() {
     setSelectedId(null);
   };
 
+  // Advance selection to the next email after removing `removedId`, or the
+  // previous one when it was the last in the list.
+  const advanceSelectedId = (currentEmails: Email[], removedId: string) => {
+    const idx = currentEmails.findIndex((e) => e.id === removedId);
+    const nextEmails = currentEmails.filter((e) => e.id !== removedId);
+    if (nextEmails.length === 0) {
+      setSelectedId(null);
+      return;
+    }
+    setSelectedId(nextEmails[Math.min(Math.max(idx, 0), nextEmails.length - 1)].id);
+  };
+
   const syncTaskDrafts = (nextTasks: DashboardTaskItem[]) => {
     setTaskDrafts(
       Object.fromEntries(
@@ -2465,7 +2310,7 @@ export default function HomePage() {
         setCleanupSummary(null);
         setCleanupJob(null);
         setSelectedId(null);
-        setError("All Mail is browse-only. Pick a specific mailbox for AI overview.");
+        setError("All Mail is browse-only. Pick a specific mailbox for AI Report.");
         return;
       }
       if (currentMode === "mail" && currentMailView === "ai" && targetsAllMail) {
@@ -2473,7 +2318,8 @@ export default function HomePage() {
         setAgenda(null);
         setCleanupSummary(null);
         setCleanupJob(null);
-        setError("All Mail is browse-only. AI summaries are disabled for it.");
+        setMailView("raw");
+        return;
         setMailView("raw");
         return;
       }
@@ -2638,6 +2484,12 @@ export default function HomePage() {
     setLoading(true);
     setMovementLoading(true);
     setError("");
+    setOverview(null);
+    setAgenda(null);
+    setEmails([]);
+    setCleanupSummary(null);
+    setCleanupJob(null);
+    setSelectedId(null);
 
     try {
       const [dashboardResponse, healthResponse, movementResponse, workoutsResponse] = await Promise.all([
@@ -2680,12 +2532,6 @@ export default function HomePage() {
       }
 
       await loadTasks(false);
-      setOverview(null);
-      setAgenda(null);
-      setEmails([]);
-      setCleanupSummary(null);
-      setCleanupJob(null);
-      setSelectedId(null);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to load dashboard.";
       setError(message);
@@ -3428,11 +3274,18 @@ export default function HomePage() {
 
     setHandleLoading(true);
     setError("");
-    const handledEmailId = selectedEmail.id;
+    const handledEmail = selectedEmail;
+
+    setEmails((currentEmails) => {
+      advanceSelectedId(currentEmails, handledEmail.id);
+      return currentEmails.filter((email) => email.id !== handledEmail.id);
+    });
 
     try {
-      const response = await fetch(`${API_BASE}/emails/${handledEmailId}/handle`, {
+      const response = await fetch(`${API_BASE}/emails/${handledEmail.id}/handle`, {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ thread_id: handledEmail.thread_id }),
       });
 
       if (!response.ok) {
@@ -3440,24 +3293,51 @@ export default function HomePage() {
           await getErrorMessage(response, `Handle request failed with status ${response.status}`)
         );
       }
-
-      setEmails((currentEmails) => {
-        const nextEmails = currentEmails.filter((email) => email.id !== handledEmailId);
-        syncSelectedId(nextEmails);
-        return nextEmails;
-      });
-      await loadLabels();
-
-      if (mode === "mail") {
-        await loadEmails("mail", selectedMailbox, undefined, mailView);
-      } else if (dashboard) {
-        await loadDashboard();
-      }
     } catch (err) {
+      setEmails((currentEmails) => {
+        const restored = [handledEmail, ...currentEmails];
+        syncSelectedId(restored);
+        return restored;
+      });
       const message = err instanceof Error ? err.message : "Failed to mark email handled.";
       setError(message);
     } finally {
       setHandleLoading(false);
+    }
+  };
+
+  const trashEmail = async () => {
+    if (!selectedEmail) return;
+
+    setEmailActionLoading(true);
+    setError("");
+    const targetEmail = selectedEmail;
+
+    setEmails((currentEmails) => {
+      advanceSelectedId(currentEmails, targetEmail.id);
+      return currentEmails.filter((email) => email.id !== targetEmail.id);
+    });
+
+    try {
+      const response = await fetch(`${API_BASE}/emails/${targetEmail.id}`, {
+        method: "DELETE",
+      });
+
+      if (!response.ok) {
+        throw new Error(
+          await getErrorMessage(response, `Delete request failed with status ${response.status}`)
+        );
+      }
+    } catch (err) {
+      setEmails((currentEmails) => {
+        const restored = [targetEmail, ...currentEmails];
+        syncSelectedId(restored);
+        return restored;
+      });
+      const message = err instanceof Error ? err.message : "Failed to delete email.";
+      setError(message);
+    } finally {
+      setEmailActionLoading(false);
     }
   };
 
@@ -3702,7 +3582,7 @@ export default function HomePage() {
       setSelectedMailbox(ALL_MAILBOX);
       setMailWorkspaceTab("triage");
       setMode("mail");
-      setMailView("ai");
+      setMailView("raw");
       setOverview(null);
       setAgenda(null);
       setCleanupSummary(null);
@@ -3844,7 +3724,7 @@ export default function HomePage() {
           const normalized = normalizeCleanupItems(data.result);
           setMailWorkspaceTab("triage");
           setMode("mail");
-          setMailView("ai");
+          setMailView("raw");
           setEmails(normalized);
           setCleanupSummary(data.result.summary);
           syncSelectedId(normalized);
@@ -4791,7 +4671,7 @@ export default function HomePage() {
                       onClick={() => {
                         setSelectedMailbox(IMPORTANT_LABEL);
                         setMailWorkspaceTab("triage");
-                        setMailView("ai");
+                        setMailView("raw");
                         setMode("mail");
                       }}
                       className="rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4 text-left transition hover:border-cyan-300/30 hover:bg-[rgba(42,45,72,0.9)]"
@@ -4844,7 +4724,7 @@ export default function HomePage() {
                       onClick={() => {
                         setSelectedMailbox(IMPORTANT_LABEL);
                         setMailWorkspaceTab("triage");
-                        setMailView("ai");
+                        setMailView("raw");
                         setMode("mail");
                       }}
                       className="rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4 text-left transition hover:border-cyan-300/30 hover:bg-[rgba(42,45,72,0.9)]"
@@ -6554,6 +6434,7 @@ export default function HomePage() {
           }`}
         >
           {!isScheduleWorkspaceMode && mailSidebarOpen ? (
+            <div className="flex min-w-0 flex-col gap-4">
             <Card className="min-w-0 rounded-[2rem] border border-white/8 bg-[rgba(17,19,34,0.82)] shadow-[0_16px_44px_rgba(6,7,14,0.36)] backdrop-blur-xl">
               <CardHeader className="pb-3">
                 <div className="flex items-start justify-between gap-3">
@@ -6582,7 +6463,7 @@ export default function HomePage() {
               </CardHeader>
 
               <CardContent className="min-w-0 overflow-hidden">
-                <ScrollArea className="h-[65vh] min-w-0">
+                <ScrollArea className="max-h-[40vh] min-w-0">
                   <div className="space-y-2 pr-3">
                     {visibleMailboxLabels.map((label) => {
                       const active = selectedMailbox === label.name;
@@ -6710,6 +6591,10 @@ export default function HomePage() {
                 </ScrollArea>
               </CardContent>
             </Card>
+
+            <MailRulesPanel />
+            <MailCommandPanel />
+            </div>
           ) : null}
 
           <Card className="min-w-0 rounded-[2rem] border border-white/8 bg-[rgba(17,19,34,0.82)] shadow-[0_16px_44px_rgba(6,7,14,0.36)] backdrop-blur-xl">
@@ -6776,45 +6661,21 @@ export default function HomePage() {
                 <div className="flex flex-wrap gap-2">
                   <Button
                     size="sm"
-                    variant={mailWorkspaceTab === "triage" ? "default" : "outline"}
-                    className="rounded-2xl"
-                    onClick={() => setMailWorkspaceTab("triage")}
-                  >
-                    Triage
-                  </Button>
-                  <Button
-                    size="sm"
                     variant={mailWorkspaceTab === "insights" ? "default" : "outline"}
                     className="rounded-2xl"
                     onClick={() => {
-                      if (selectedMailbox === ALL_MAILBOX || selectedMailbox === JARVIS_REVIEW_MAILBOX) {
-                        setSelectedMailbox(IMPORTANT_LABEL);
+                      if (mailWorkspaceTab === "insights") {
+                        setMailWorkspaceTab("triage");
+                      } else {
+                        if (selectedMailbox === ALL_MAILBOX || selectedMailbox === JARVIS_REVIEW_MAILBOX) {
+                          setSelectedMailbox(IMPORTANT_LABEL);
+                        }
+                        setMailWorkspaceTab("insights");
                       }
-                      setMailWorkspaceTab("insights");
                     }}
                   >
-                    Insights
+                    AI Report
                   </Button>
-                  {mailWorkspaceTab === "triage" ? (
-                    <>
-                      <Button
-                        size="sm"
-                        variant={mailView === "ai" ? "default" : "outline"}
-                        className="rounded-2xl"
-                        onClick={() => setMailView("ai")}
-                      >
-                        AI
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant={mailView === "raw" ? "default" : "outline"}
-                        className="rounded-2xl"
-                        onClick={() => setMailView("raw")}
-                      >
-                        Raw
-                      </Button>
-                    </>
-                  ) : null}
                 </div>
               ) : null}
 
@@ -7024,7 +6885,7 @@ export default function HomePage() {
                       </div>
                     ) : (
                       <div className="rounded-[1.6rem] border border-dashed border-white/10 p-6 text-sm text-slate-400">
-                        No cached overview yet. Open Mail in AI mode on this mailbox to build it.
+                        No cached overview yet. Click AI Report on this mailbox to build it.
                       </div>
                     )
                   ) : null}
@@ -7366,6 +7227,19 @@ export default function HomePage() {
                           disabled={handleLoading}
                         >
                           {handleLoading ? "Marking..." : "Mark handled"}
+                        </Button>
+                      ) : null}
+                      {selectedEmail ? (
+                        <Button
+                          className="rounded-2xl"
+                          size="sm"
+                          variant="outline"
+                          onClick={() => void trashEmail()}
+                          disabled={emailActionLoading}
+                          title="Move to trash"
+                        >
+                          <Trash2 className="mr-1.5 h-3.5 w-3.5" />
+                          {emailActionLoading ? "Deleting..." : "Delete"}
                         </Button>
                       ) : null}
                       {isAiMailView ? (
@@ -7789,11 +7663,11 @@ export default function HomePage() {
                   <div className="rounded-[1.6rem] border border-dashed border-white/10 bg-[rgba(20,22,37,0.45)] p-4 text-sm text-slate-400">
                     <div className="mb-2 flex items-center gap-2 font-medium text-slate-200">
                       <Trash2 className="h-4 w-4" />
-                      Safety boundary
+                      Label &amp; archive actions
                     </div>
-                    This dashboard now supports folder browsing, archive state, unread state, and
-                    relabeling. It still does not delete or trash messages.
+                    This panel supports folder browsing, archive state, unread state, relabeling, and moving messages to trash via the Delete button above.
                   </div>
+
                 </div>
               )}
             </CardContent>

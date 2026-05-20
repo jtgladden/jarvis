@@ -11,3 +11,4 @@ data/movement.db
 data/assistant_chat.db
 data/workouts.db
 data/language_learning.db
+data/user_rules.db

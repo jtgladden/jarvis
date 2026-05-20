@@ -1,7 +1,11 @@
 import base64
 import html
+import logging
 import os.path
 import re
+import time
+
+logger = logging.getLogger(__name__)
 from dataclasses import dataclass, field
 from email.utils import parsedate_to_datetime
 from datetime import datetime, timedelta, timezone
@@ -13,8 +17,9 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
-from app.classification_cache import update_cached_email
+from app.classification_cache import invalidate_cached_email, update_cached_email
 from app.classifier import IMPORTANT_LABEL, LEGACY_IMPORTANT_LABELS, LEGACY_UNIMPORTANT_LABELS, UNIMPORTANT_LABEL, canonicalize_importance_label
+from app.user_rules import UserRule, evaluate_rule
 from app.config import GMAIL_TOKEN_FILE, GMAIL_CREDENTIALS_FILE, GOOGLE_SCOPES
 from app.google_oauth import get_google_oauth_instructions
 from app.schemas import CleanupDecision, CleanupItem, CleanupResponse, CleanupSummary, EmailClassification, EmailLink, EmailPageResponse, EmailSummary, EmailUpdateResponse, GmailLabel, HandleEmailResponse, RuleDecision, RuleItem, RuleProcessResponse, RuleSummary
@@ -28,6 +33,10 @@ ALL_IMPORTANCE_LABEL_NAMES = {
 }
 
 _BLANK_LINE_RE = re.compile(r"\n{3,}")
+
+_label_maps_cache: tuple[Dict[str, str], Dict[str, str]] | None = None
+_label_maps_cache_ts: float = 0.0
+_LABEL_MAPS_TTL = 300.0
 _SPACE_BEFORE_NEWLINE_RE = re.compile(r"[ \t]+\n")
 _HORIZONTAL_WHITESPACE_RE = re.compile(r"[^\S\n]+")
 _INVISIBLE_SPACER_RE = re.compile(r"[\u2800\u3164\ufeff]+")
@@ -375,6 +384,10 @@ def _extract_content_from_payload(payload: dict) -> _PayloadContent:
 
 
 def get_label_maps(service) -> tuple[Dict[str, str], Dict[str, str]]:
+    global _label_maps_cache, _label_maps_cache_ts
+    if _label_maps_cache is not None and time.monotonic() - _label_maps_cache_ts < _LABEL_MAPS_TTL:
+        return _label_maps_cache
+
     response = service.users().labels().list(userId="me").execute()
     id_to_name: Dict[str, str] = {}
     name_to_id: Dict[str, str] = {}
@@ -385,7 +398,9 @@ def get_label_maps(service) -> tuple[Dict[str, str], Dict[str, str]]:
         id_to_name[label_id] = label_name
         name_to_id[label_name] = label_id
 
-    return id_to_name, name_to_id
+    _label_maps_cache = (id_to_name, name_to_id)
+    _label_maps_cache_ts = time.monotonic()
+    return _label_maps_cache
 
 
 def list_gmail_labels() -> List[GmailLabel]:
@@ -753,7 +768,8 @@ def _fallback_cleanup_decision(
 
 
 def _get_or_create_label_id(service, label_name: str, label_name_to_id: Dict[str, str]) -> str:
-    sanitized = " ".join(label_name.replace("/", " ").split()).strip()[:225]
+    # Gmail allows "/" as a nested-label separator; only collapse multiple spaces.
+    sanitized = " ".join(label_name.split()).strip()[:225]
     if not sanitized:
         sanitized = UNIMPORTANT_LABEL
 
@@ -761,22 +777,42 @@ def _get_or_create_label_id(service, label_name: str, label_name_to_id: Dict[str
     if existing:
         return existing
 
-    created = (
-        service.users()
-        .labels()
-        .create(
-            userId="me",
-            body={
-                "name": sanitized,
-                "labelListVisibility": "labelShow",
-                "messageListVisibility": "show",
-            },
+    try:
+        created = (
+            service.users()
+            .labels()
+            .create(
+                userId="me",
+                body={
+                    "name": sanitized,
+                    "labelListVisibility": "labelShow",
+                    "messageListVisibility": "show",
+                },
+            )
+            .execute()
         )
-        .execute()
-    )
-    label_id = created["id"]
-    label_name_to_id[sanitized] = label_id
-    return label_id
+        label_id = created["id"]
+        label_name_to_id[sanitized] = label_id
+        return label_id
+    except HttpError as exc:
+        # 409 = label already exists but wasn't in our local cache;
+        # 400 = name rejected by Gmail — fall back to re-fetching the full list.
+        if exc.resp.status in (400, 409):
+            all_labels = (
+                service.users().labels().list(userId="me").execute().get("labels", [])
+            )
+            for lbl in all_labels:
+                label_name_to_id[lbl["name"]] = lbl["id"]
+            # Exact match first, then case-insensitive fallback
+            found = label_name_to_id.get(sanitized)
+            if found:
+                return found
+            lower = sanitized.lower()
+            for name, lid in label_name_to_id.items():
+                if name.lower() == lower:
+                    label_name_to_id[sanitized] = lid
+                    return lid
+        raise
 
 
 def _apply_decision(service, item: CleanupItem, label_name_to_id: Dict[str, str]) -> None:
@@ -814,6 +850,173 @@ def _apply_decision(service, item: CleanupItem, label_name_to_id: Dict[str, str]
         )
         .execute()
     )
+
+
+def _apply_custom_rule(service, email: EmailSummary, rule: UserRule, label_name_to_id: Dict[str, str]) -> None:
+    add_label_ids: List[str] = []
+    remove_label_ids: List[str] = []
+
+    label_id = _get_or_create_label_id(service, rule.target_label, label_name_to_id)
+    if rule.target_label not in email.labels:
+        add_label_ids.append(label_id)
+
+    for existing_label in email.labels:
+        if existing_label in ALL_IMPORTANCE_LABEL_NAMES and existing_label != rule.target_label:
+            existing_label_id = label_name_to_id.get(existing_label)
+            if existing_label_id:
+                remove_label_ids.append(existing_label_id)
+
+    if rule.archive and "INBOX" in email.labels:
+        remove_label_ids.append("INBOX")
+
+    if "UNREAD" in email.labels:
+        remove_label_ids.append("UNREAD")
+
+    if not add_label_ids and not remove_label_ids:
+        return
+
+    service.users().messages().modify(
+        userId="me",
+        id=email.id,
+        body={"addLabelIds": add_label_ids, "removeLabelIds": remove_label_ids},
+    ).execute()
+
+
+def _fetch_message_metadata(service, msg_id: str, label_id_to_name: Dict[str, str]) -> EmailSummary:
+    msg = (
+        service.users()
+        .messages()
+        .get(userId="me", id=msg_id, format="metadata", metadataHeaders=["Subject", "From", "Date"])
+        .execute()
+    )
+    payload = msg.get("payload", {})
+    headers = payload.get("headers", [])
+    label_ids = msg.get("labelIds", [])
+    labels = [label_id_to_name.get(lid, lid) for lid in label_ids]
+    return EmailSummary(
+        id=msg["id"],
+        thread_id=msg["threadId"],
+        subject=_get_header(headers, "Subject"),
+        sender=_get_header(headers, "From"),
+        snippet=msg.get("snippet", ""),
+        date=_get_header(headers, "Date"),
+        labels=labels,
+        body=None,
+        links=[],
+    )
+
+
+def _rule_to_gmail_query(rule: UserRule) -> str:
+    """Convert a rule's conditions to a Gmail search query fragment."""
+    parts: List[str] = []
+    for c in rule.conditions:
+        field = c.field.lower()
+        value = c.value.strip("\"'").strip()
+        if not value:
+            continue
+        if field == "sender":
+            parts.append(f"from:{value}")
+        elif field == "subject":
+            parts.append(f'subject:("{value}")' if " " in value else f"subject:{value}")
+        elif field in ("body", "any"):
+            parts.append(f'"{value}"' if " " in value else value)
+    return " ".join(parts)
+
+
+def _search_all_message_ids(service, query: str) -> List[str]:
+    """Paginate through all Gmail search results and return every message ID."""
+    ids: List[str] = []
+    page_token: Optional[str] = None
+    while True:
+        kwargs: dict = {"userId": "me", "q": query, "maxResults": 500}
+        if page_token:
+            kwargs["pageToken"] = page_token
+        response = service.users().messages().list(**kwargs).execute()
+        for msg in response.get("messages", []):
+            ids.append(msg["id"])
+        page_token = response.get("nextPageToken")
+        if not page_token:
+            break
+    return ids
+
+
+def apply_custom_rules_to_jarvis_emails(custom_rules: List[UserRule]) -> int:
+    if not custom_rules:
+        return 0
+
+    service = get_gmail_service()
+    _, label_name_to_id = get_label_maps(service)
+
+    jarvis_label_names = [IMPORTANT_LABEL, UNIMPORTANT_LABEL, *LEGACY_IMPORTANT_LABELS, *LEGACY_UNIMPORTANT_LABELS]
+    # Gmail search uses hyphenated label names for user labels with spaces
+    jarvis_search_parts = [
+        f"label:{n.lower().replace(' ', '-')}"
+        for n in jarvis_label_names
+        if n in label_name_to_id
+    ]
+    if not jarvis_search_parts:
+        return 0
+    jarvis_constraint = f"({' OR '.join(jarvis_search_parts)})"
+
+    applied = 0
+    for rule in custom_rules:
+        condition_query = _rule_to_gmail_query(rule)
+        if not condition_query:
+            logger.warning("Rule '%s' produced an empty Gmail query — skipping", rule.name)
+            continue
+
+        query = f"{condition_query} {jarvis_constraint}"
+        try:
+            message_ids = _search_all_message_ids(service, query)
+        except Exception:
+            logger.exception("Failed to search Gmail for rule '%s'", rule.name)
+            continue
+
+        if not message_ids:
+            continue
+
+        logger.info("Rule '%s' matched %d emails via search query: %s", rule.name, len(message_ids), query)
+
+        try:
+            label_id = _get_or_create_label_id(service, rule.target_label, label_name_to_id)
+        except Exception:
+            logger.exception("Rule '%s': could not resolve target label '%s'", rule.name, rule.target_label)
+            continue
+
+        remove_label_ids = [
+            label_name_to_id[n]
+            for n in ALL_IMPORTANCE_LABEL_NAMES
+            if n in label_name_to_id and n != rule.target_label
+        ]
+        if rule.archive:
+            remove_label_ids.append("INBOX")
+        remove_label_ids.append("UNREAD")
+
+        for i in range(0, len(message_ids), 500):
+            chunk = message_ids[i : i + 500]
+            try:
+                service.users().messages().batchModify(
+                    userId="me",
+                    body={
+                        "ids": chunk,
+                        "addLabelIds": [label_id],
+                        "removeLabelIds": remove_label_ids,
+                    },
+                ).execute()
+            except Exception:
+                logger.exception("Rule '%s': batchModify failed for chunk of %d", rule.name, len(chunk))
+                continue
+
+        for msg_id in message_ids:
+            try:
+                invalidate_cached_email(msg_id)
+            except Exception:
+                pass
+
+        applied += len(message_ids)
+
+    logger.info("apply_custom_rules_to_jarvis_emails: applied %d total", applied)
+    return applied
 
 
 def _apply_rule_decision(service, email: EmailSummary, decision: RuleDecision, label_name_to_id: Dict[str, str]) -> None:
@@ -879,27 +1082,22 @@ def _modify_thread(
     )
 
 
-def mark_email_handled(message_id: str) -> HandleEmailResponse:
+def mark_email_handled(message_id: str, thread_id: str | None = None) -> HandleEmailResponse:
     service = get_gmail_service()
     label_id_to_name, label_name_to_id = get_label_maps(service)
     reviewed_label_id = _get_or_create_label_id(service, REVIEWED_LABEL, label_name_to_id)
 
-    full_msg = (
-        service.users()
-        .messages()
-        .get(userId="me", id=message_id, format="full")
-        .execute()
-    )
-    email = _to_email_summary(full_msg, label_id_to_name)
+    if thread_id is None:
+        msg_meta = (
+            service.users()
+            .messages()
+            .get(userId="me", id=message_id, format="metadata", metadataHeaders=[])
+            .execute()
+        )
+        thread_id = msg_meta["threadId"]
 
-    add_label_ids: List[str] = []
-    remove_label_ids: List[str] = []
-
-    if REVIEWED_LABEL not in email.labels:
-        add_label_ids.append(reviewed_label_id)
-
-    if "UNREAD" in email.labels:
-        remove_label_ids.append("UNREAD")
+    add_label_ids: List[str] = [reviewed_label_id]
+    remove_label_ids: List[str] = ["UNREAD"]
 
     for label_name in {
         IMPORTANT_LABEL,
@@ -908,18 +1106,17 @@ def mark_email_handled(message_id: str) -> HandleEmailResponse:
         *LEGACY_UNIMPORTANT_LABELS,
     }:
         label_id = label_name_to_id.get(label_name)
-        if label_id and label_name in email.labels:
+        if label_id:
             remove_label_ids.append(label_id)
 
     _modify_thread(
         service,
-        email.thread_id,
+        thread_id,
         add_label_ids=add_label_ids,
         remove_label_ids=remove_label_ids,
     )
 
-    updated_email = _fetch_message(service, message_id, label_id_to_name)
-    update_cached_email(updated_email)
+    invalidate_cached_email(message_id)
 
     return HandleEmailResponse(
         message_id=message_id,
@@ -927,6 +1124,20 @@ def mark_email_handled(message_id: str) -> HandleEmailResponse:
         added_label=REVIEWED_LABEL,
         status="handled",
     )
+
+
+def trash_email(message_id: str) -> None:
+    service = get_gmail_service()
+    _, name_to_id = get_label_maps(service)
+    user_label_ids = [lid for lid in name_to_id.values() if lid.startswith("Label_")]
+    if user_label_ids:
+        service.users().messages().modify(
+            userId="me",
+            id=message_id,
+            body={"removeLabelIds": user_label_ids},
+        ).execute()
+    service.users().messages().trash(userId="me", id=message_id).execute()
+    invalidate_cached_email(message_id)
 
 
 def update_email(
@@ -1110,34 +1321,48 @@ def process_new_inbox_emails(
     classify_rule_fn,
     ai_fallback_fn=None,
     dry_run: bool = True,
+    custom_rules: Optional[List[UserRule]] = None,
 ) -> RuleProcessResponse:
     service = get_gmail_service()
     _, label_name_to_id = get_label_maps(service)
     items: List[RuleItem] = []
 
     for email in emails:
-        decision = classify_rule_fn(email)
-        if decision.matched_rule == "needs_ai_review" and ai_fallback_fn is not None:
-            ai_decision = ai_fallback_fn(email)
+        matched_custom = next(
+            (rule for rule in (custom_rules or []) if evaluate_rule(email, rule)),
+            None,
+        )
+
+        if matched_custom is not None:
             decision = RuleDecision(
-                label_name=canonicalize_importance_label(ai_decision.label_name) or UNIMPORTANT_LABEL,
-                archive=ai_decision.archive,
-                matched_rule="needs_ai_review",
-                source="ai_fallback",
-                reason=ai_decision.reason,
+                label_name=matched_custom.target_label,
+                archive=matched_custom.archive,
+                matched_rule=f"custom:{matched_custom.id}",
+                reason=f"Matched custom rule: {matched_custom.name}",
             )
+            if not dry_run:
+                _apply_custom_rule(service, email, matched_custom, label_name_to_id)
         else:
-            decision = decision.model_copy(
-                update={
-                    "label_name": canonicalize_importance_label(decision.label_name) or UNIMPORTANT_LABEL,
-                }
-            )
-        item = RuleItem(email=email, decision=decision)
+            decision = classify_rule_fn(email)
+            if decision.matched_rule == "needs_ai_review" and ai_fallback_fn is not None:
+                ai_decision = ai_fallback_fn(email)
+                decision = RuleDecision(
+                    label_name=canonicalize_importance_label(ai_decision.label_name) or UNIMPORTANT_LABEL,
+                    archive=ai_decision.archive,
+                    matched_rule="needs_ai_review",
+                    source="ai_fallback",
+                    reason=ai_decision.reason,
+                )
+            else:
+                decision = decision.model_copy(
+                    update={
+                        "label_name": canonicalize_importance_label(decision.label_name) or UNIMPORTANT_LABEL,
+                    }
+                )
+            if not dry_run:
+                _apply_rule_decision(service, email, decision, label_name_to_id)
 
-        if not dry_run:
-            _apply_rule_decision(service, email, decision, label_name_to_id)
-
-        items.append(item)
+        items.append(RuleItem(email=email, decision=decision))
 
     by_label: dict[str, int] = {}
     for item in items:
