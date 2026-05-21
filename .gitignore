@@ -2,6 +2,7 @@ credentials.json
 app/__pycache__
 token.json
 .env
+.env.local
 .deriveddata/
 data/classification_cache.db
 data/journal_entries.db
@@ -12,3 +13,10 @@ data/assistant_chat.db
 data/workouts.db
 data/language_learning.db
 data/user_rules.db
+
+# Xcode per-user IDE state (not useful to other contributors)
+*.xcuserstate
+xcuserdata/
+
+# Claude Code local settings (machine-specific tool permissions)
+.claude/settings.local.json
