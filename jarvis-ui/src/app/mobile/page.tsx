@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import React, { Suspense, useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import {
   Activity,
@@ -23,6 +23,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { AssistantPanel } from "@/components/assistant-panel";
+import { warmApiCache } from "@/lib/sw-cache";
 import { MailCommandPanel } from "@/components/mail-command-panel";
 import { MailRulesPanel } from "@/components/mail-rules-panel";
 import dynamic from "next/dynamic";
@@ -1037,7 +1038,12 @@ function MailTab({
 }
 
 function MobilePageContent() {
-  const [activeTab, setActiveTab] = useState<MobileTab>("today");
+  const [activeTab, setActiveTab] = useState<MobileTab>(() => {
+    if (typeof window === "undefined") return "today";
+    const tab = new URLSearchParams(window.location.search).get("tab");
+    const valid: MobileTab[] = ["today", "assistant", "mail", "tasks", "journal", "schedule", "health", "more"];
+    return (valid.includes(tab as MobileTab) ? tab : "today") as MobileTab;
+  });
   const [selectedMailbox, setSelectedMailbox] = useState<"Jarvis Important" | "Jarvis Unimportant">("Jarvis Important");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -1063,10 +1069,12 @@ function MobilePageContent() {
   const [creatingTask, setCreatingTask] = useState(false);
   const [newTaskTitle, setNewTaskTitle] = useState("");
   const [newTaskDetail, setNewTaskDetail] = useState("");
+  const router = useRouter();
   const searchParams = useSearchParams();
   const healthSummary = dashboard?.health_summary ?? null;
   const hasLoadedJournalRef = useRef(false);
   const hasLoadedScheduleRef = useRef(false);
+  const isFirstTabSyncRef = useRef(true);
   const latestHealthDate = healthEntries[0]?.date ?? healthSummary?.today_entry?.date ?? formatLocalDateKey(new Date());
   const earliestHealthDate = healthEntries[healthEntries.length - 1]?.date ?? latestHealthDate;
   const activeHealthDate = selectedHealthDate ?? latestHealthDate;
@@ -1109,6 +1117,9 @@ function MobilePageContent() {
 
       const response = await fetch(`${API_BASE}/journal?${params.toString()}`);
       if (!response.ok) {
+        if (!navigator.onLine) {
+          throw new Error("You're offline and journal data hasn't been cached yet. Open the journal while connected first.");
+        }
         throw new Error(`Journal request failed with status ${response.status}`);
       }
 
@@ -1149,53 +1160,96 @@ function MobilePageContent() {
     setError("");
 
     try {
-      const [dashboardResponse, tasksResponse, healthResponse, movementResponse, journalResponse, workoutsResponse] = await Promise.all([
+      const MAIL_MAILBOX = "Jarvis Important";
+      const [
+        dashboardResponse, tasksResponse, healthResponse, movementResponse,
+        journalResponse, workoutsResponse, scheduleResponse, mailResponse,
+      ] = await Promise.all([
         fetch(`${API_BASE}/dashboard`),
         fetch(`${API_BASE}/tasks?include_completed=true`),
         fetch(`${API_BASE}/health?days=3650`),
         fetch(`${API_BASE}/movement?days=14`),
-        fetch(`${API_BASE}/journal?days=3`),
+        fetch(`${API_BASE}/journal?days=10`),
         fetch(`${API_BASE}/workouts?days=90&limit=30`),
+        fetch(`${API_BASE}/calendar/schedule?days=7&max_results=24`),
+        fetch(`${API_BASE}/emails?limit=30&mailbox=${encodeURIComponent(MAIL_MAILBOX)}`),
       ]);
 
-      for (const response of [dashboardResponse, tasksResponse]) {
-        if (!response.ok) {
-          throw new Error(`Mobile page request failed with status ${response.status}`);
-        }
+      // Warm the SW cache manually in case the service worker hadn't
+      // activated yet when these fetches fired (first-visit race condition).
+      void Promise.all([
+        warmApiCache(`${API_BASE}/dashboard`, dashboardResponse),
+        warmApiCache(`${API_BASE}/tasks?include_completed=true`, tasksResponse),
+        warmApiCache(`${API_BASE}/journal?days=10`, journalResponse),
+        warmApiCache(`${API_BASE}/movement?days=14`, movementResponse),
+        warmApiCache(`${API_BASE}/health?days=3650`, healthResponse),
+        warmApiCache(`${API_BASE}/workouts?days=90&limit=30`, workoutsResponse),
+        warmApiCache(`${API_BASE}/calendar/schedule?days=7&max_results=24`, scheduleResponse),
+        warmApiCache(`${API_BASE}/emails?limit=30&mailbox=${encodeURIComponent(MAIL_MAILBOX)}`, mailResponse),
+      ]);
+
+      if (!dashboardResponse.ok) {
+        throw new Error(`Dashboard request failed with status ${dashboardResponse.status}`);
       }
 
-      const [dashboardData, tasksData] = await Promise.all([
-        dashboardResponse.json() as Promise<DashboardResponse>,
-        tasksResponse.json() as Promise<TaskListResponse>,
-      ]);
-
+      const dashboardData = (await dashboardResponse.json()) as DashboardResponse;
       setDashboard(dashboardData);
-      setTasks(tasksData.tasks);
-      if (healthResponse.ok) {
-        const healthData = (await healthResponse.json()) as HealthListResponse;
-        const nextHealthEntries = [...healthData.entries].sort((left, right) => right.date.localeCompare(left.date));
-        setHealthEntries(nextHealthEntries);
-        setSelectedHealthDate((current) => current ?? nextHealthEntries[0]?.date ?? dashboardData.health_summary?.today_entry?.date ?? null);
-      } else {
-        setHealthEntries([]);
-      }
-      if (movementResponse.ok) {
-        const movementData = (await movementResponse.json()) as MovementListResponse;
-        setMovementEntries(movementData.entries);
-      } else {
-        setMovementEntries([]);
-      }
-      if (workoutsResponse.ok) {
-        const workoutData = (await workoutsResponse.json()) as WorkoutListResponse;
-        setWorkoutEntries(workoutData.workouts);
-      } else {
-        setWorkoutEntries([]);
-      }
-      if (journalResponse.ok) {
-        const journalData = (await journalResponse.json()) as JournalResponse;
-        setJournal(journalData.entries);
-        hasLoadedJournalRef.current = true;
-      }
+
+      // Process all optional responses in parallel and independently.
+      // A failure in any one (e.g. malformed JSON, Google API error) must not
+      // prevent the others from populating — journal and schedule were being
+      // silently skipped whenever an earlier response threw.
+      await Promise.allSettled([
+        (async () => {
+          if (!tasksResponse.ok) return;
+          const d = (await tasksResponse.json()) as TaskListResponse;
+          setTasks(d.tasks);
+        })(),
+        (async () => {
+          if (!healthResponse.ok) { setHealthEntries([]); return; }
+          const d = (await healthResponse.json()) as HealthListResponse;
+          const sorted = [...d.entries].sort((a, b) => b.date.localeCompare(a.date));
+          setHealthEntries(sorted);
+          setSelectedHealthDate((cur) => cur ?? sorted[0]?.date ?? dashboardData.health_summary?.today_entry?.date ?? null);
+        })(),
+        (async () => {
+          if (!movementResponse.ok) { setMovementEntries([]); return; }
+          const d = (await movementResponse.json()) as MovementListResponse;
+          setMovementEntries(d.entries);
+        })(),
+        (async () => {
+          if (!workoutsResponse.ok) { setWorkoutEntries([]); return; }
+          const d = (await workoutsResponse.json()) as WorkoutListResponse;
+          setWorkoutEntries(d.workouts);
+        })(),
+        (async () => {
+          if (!journalResponse.ok) return;
+          const d = (await journalResponse.json()) as JournalResponse;
+          setJournal(d.entries);
+          hasLoadedJournalRef.current = true;
+          // Pre-warm individual entry detail pages so they load offline.
+          // Fires in the background without blocking the rest of loadAll.
+          void Promise.allSettled(
+            d.entries.slice(0, 7).map(async (je) => {
+              try {
+                const r = await fetch(`${API_BASE}/journal/${je.date}`);
+                void warmApiCache(`${API_BASE}/journal/${je.date}`, r);
+              } catch { /* best-effort */ }
+            })
+          );
+        })(),
+        (async () => {
+          if (!scheduleResponse.ok) return;
+          const d = (await scheduleResponse.json()) as CalendarAgendaResponse;
+          setSchedule(d.items);
+          hasLoadedScheduleRef.current = true;
+        })(),
+        (async () => {
+          if (!mailResponse.ok) return;
+          const d = (await mailResponse.json()) as EmailPageResponse;
+          setMailItems(d.items);
+        })(),
+      ]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load mobile view.");
     } finally {
@@ -1313,6 +1367,18 @@ function MobilePageContent() {
       setActiveTab(tab);
     }
   }, [searchParams]);
+
+  // Sync active tab to the URL so that refresh/reopen restores the same tab.
+  // Skip the first run — the initial value already came from window.location.search,
+  // so writing it back immediately would be a no-op and could fight with the
+  // searchParams effect above on the first render.
+  useEffect(() => {
+    if (isFirstTabSyncRef.current) {
+      isFirstTabSyncRef.current = false;
+      return;
+    }
+    router.replace(`?tab=${activeTab}`, { scroll: false });
+  }, [activeTab, router]);
 
   const activeTasks = useMemo(
     () => tasks.filter((task) => !task.completed),

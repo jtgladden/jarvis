@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Dark background with rounded corners -->
+  <rect width="512" height="512" rx="96" fill="#070a12"/>
+  <!-- Subtle radial glow behind the letter -->
+  <radialGradient id="glow" cx="50%" cy="50%" r="42%">
+    <stop offset="0%" stop-color="#10b981" stop-opacity="0.22"/>
+    <stop offset="100%" stop-color="#070a12" stop-opacity="0"/>
+  </radialGradient>
+  <rect width="512" height="512" rx="96" fill="url(#glow)"/>
+  <!-- "J" logotype -->
+  <text
+    x="256"
+    y="348"
+    font-family="ui-rounded, system-ui, -apple-system, sans-serif"
+    font-size="288"
+    font-weight="700"
+    fill="#4ade80"
+    text-anchor="middle"
+    letter-spacing="-8"
+  >J</text>
+</svg>

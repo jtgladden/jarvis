@@ -31,6 +31,7 @@ import { AssistantPanel } from "@/components/assistant-panel";
 import { MailCommandPanel } from "@/components/mail-command-panel";
 import { MailRulesPanel } from "@/components/mail-rules-panel";
 import dynamic from "next/dynamic";
+import { warmApiCache } from "@/lib/sw-cache";
 
 const MovementMap = dynamic(
   () => import("@/components/movement-map").then((m) => ({ default: m.MovementMap })),
@@ -2492,11 +2493,25 @@ export default function HomePage() {
     setSelectedId(null);
 
     try {
-      const [dashboardResponse, healthResponse, movementResponse, workoutsResponse] = await Promise.all([
+      const [dashboardResponse, healthResponse, movementResponse, workoutsResponse, journalWarmResponse] = await Promise.all([
         fetch(`${API_BASE}/dashboard`),
         fetch(`${API_BASE}/health?days=3650`),
         fetch(`${API_BASE}/movement?days=14`),
         fetch(`${API_BASE}/workouts?days=90&limit=60`),
+        // Pre-warm the journal cache so the journal tab works offline.
+        // days=14 matches the default loadJournal param so the SW cache key aligns.
+        fetch(`${API_BASE}/journal?days=14`),
+      ]);
+
+      // Write all responses into the SW's Cache API directly. This ensures
+      // offline fallback works even on the first visit, before the service
+      // worker's fetch interception is active (first-visit race condition).
+      void Promise.all([
+        warmApiCache(`${API_BASE}/dashboard`, dashboardResponse),
+        warmApiCache(`${API_BASE}/health?days=3650`, healthResponse),
+        warmApiCache(`${API_BASE}/movement?days=14`, movementResponse),
+        warmApiCache(`${API_BASE}/workouts?days=90&limit=60`, workoutsResponse),
+        warmApiCache(`${API_BASE}/journal?days=14`, journalWarmResponse),
       ]);
 
       if (!dashboardResponse.ok) {
@@ -2593,6 +2608,9 @@ export default function HomePage() {
 
       const response = await fetch(`${API_BASE}/journal?${params.toString()}`);
       if (!response.ok) {
+        if (!navigator.onLine) {
+          throw new Error("You're offline and journal data hasn't been cached yet. Open the journal while connected first.");
+        }
         throw new Error(
           await getErrorMessage(response, `Journal request failed with status ${response.status}`)
         );
