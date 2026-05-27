@@ -9,6 +9,7 @@ import {
   Activity,
   Archive,
   BookOpen,
+  Briefcase,
   CalendarDays,
   ChevronLeft,
   ChevronDown,
@@ -118,6 +119,39 @@ type Email = {
 type EmailPageResponse = {
   items: Email[];
   next_page_token?: string | null;
+};
+
+type JobListing = {
+  id: string;
+  title: string;
+  company: string;
+  location: string;
+  salary_range: string | null;
+  apply_url: string | null;
+  source_email_id: string;
+  source_email_subject: string;
+  relevance_score: number;
+  relevance_reason: string;
+  qualifies: boolean;
+  qualification_note: string;
+  closes_at: string | null;
+  is_new: boolean;
+};
+
+type JobAlertsResponse = {
+  items: JobListing[];
+  total: number;
+  from_emails: number;
+};
+
+type JobAlertsJobStatus = {
+  job_id: string;
+  status: "queued" | "running" | "completed" | "failed";
+  processed: number;
+  total: number;
+  current_subject: string | null;
+  result: JobAlertsResponse | null;
+  error: string | null;
 };
 
 type ClassificationOverview = {
@@ -2122,7 +2156,7 @@ export default function HomePage() {
   const [error, setError] = useState("");
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [mode, setMode] = useState<"dashboard" | "assistant" | "tasks" | "journal" | "mail" | "news" | "overview" | "schedule" | "planning" | "settings" | "health">("dashboard");
+  const [mode, setMode] = useState<"dashboard" | "assistant" | "tasks" | "journal" | "mail" | "news" | "overview" | "schedule" | "planning" | "settings" | "health" | "jobs">("dashboard");
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const [mailView, setMailView] = useState<"ai" | "raw">("raw");
   const [mailWorkspaceTab, setMailWorkspaceTab] = useState<"triage" | "insights">("triage");
@@ -2197,6 +2231,12 @@ export default function HomePage() {
   const [planningBulkCalendarLoading, setPlanningBulkCalendarLoading] = useState(false);
   const [planningBulkCalendarMessage, setPlanningBulkCalendarMessage] = useState("");
   const [googleAuthStatus, setGoogleAuthStatus] = useState<GoogleOAuthStatus | null>(null);
+  const [jobAlerts, setJobAlerts] = useState<JobListing[]>([]);
+  const [jobAlertsError, setJobAlertsError] = useState("");
+  const [jobAlertsQualifiedOnly, setJobAlertsQualifiedOnly] = useState(false);
+  const [jobAlertsFromEmails, setJobAlertsFromEmails] = useState(0);
+  const [jobAlertsLoaded, setJobAlertsLoaded] = useState(false);
+  const [jobAlertsJob, setJobAlertsJob] = useState<JobAlertsJobStatus | null>(null);
   const activePlanningJobIdRef = useRef<string | null>(null);
   const hasLoadedDashboardRef = useRef(false);
   const hasLoadedTasksRef = useRef(false);
@@ -2279,7 +2319,7 @@ export default function HomePage() {
   };
 
   const loadEmails = async (
-    currentMode: "dashboard" | "assistant" | "tasks" | "journal" | "mail" | "news" | "overview" | "schedule" | "planning" | "settings" | "health" = mode,
+    currentMode: "dashboard" | "assistant" | "tasks" | "journal" | "mail" | "news" | "overview" | "schedule" | "planning" | "settings" | "health" | "jobs" = mode,
     mailboxOverride?: string,
     pageTokenOverride?: string | null,
     currentMailView: "ai" | "raw" = mailView
@@ -2553,6 +2593,28 @@ export default function HomePage() {
     } finally {
       setLoading(false);
       setMovementLoading(false);
+    }
+  };
+
+  const jobClosingInfo = (closesAt: string | null) => {
+    if (!closesAt) return null;
+    const days = Math.ceil((new Date(closesAt).getTime() - Date.now()) / 86400000);
+    if (days < 0) return { label: "Closed", className: "text-slate-500" };
+    if (days === 0) return { label: "Closes today", className: "text-red-400 font-semibold" };
+    if (days <= 3) return { label: `Closes in ${days}d`, className: "text-red-400 font-semibold" };
+    if (days <= 7) return { label: `Closes in ${days}d`, className: "text-amber-400" };
+    return { label: `Closes in ${days}d`, className: "text-slate-400" };
+  };
+
+  const startJobAlerts = async (force = false) => {
+    setJobAlertsError("");
+    try {
+      const res = await fetch(`${API_BASE}/job-alerts/start?force=${force}`, { method: "POST" });
+      if (!res.ok) throw new Error(await getErrorMessage(res, `Failed to start job alerts scan: ${res.status}`));
+      const data: JobAlertsJobStatus = await res.json();
+      setJobAlertsJob(data);
+    } catch (err) {
+      setJobAlertsError(err instanceof Error ? err.message : "Failed to start job alerts scan.");
     }
   };
 
@@ -3079,7 +3141,7 @@ export default function HomePage() {
 
   const fetchEmailsEffect = useEffectEvent(
     (
-      currentMode: "dashboard" | "assistant" | "tasks" | "journal" | "mail" | "news" | "overview" | "schedule" | "planning" | "settings" | "health",
+      currentMode: "dashboard" | "assistant" | "tasks" | "journal" | "mail" | "news" | "overview" | "schedule" | "planning" | "settings" | "health" | "jobs",
       mailboxName?: string,
       currentMailView: "ai" | "raw" = mailView
     ) => {
@@ -3808,6 +3870,30 @@ export default function HomePage() {
     return () => window.clearInterval(poll);
   }, [planningJob]);
 
+  useEffect(() => {
+    if (!jobAlertsJob || (jobAlertsJob.status !== "queued" && jobAlertsJob.status !== "running")) return;
+    const expectedId = jobAlertsJob.job_id;
+    const poll = window.setInterval(async () => {
+      try {
+        const res = await fetch(`${API_BASE}/job-alerts/jobs/${expectedId}`);
+        if (!res.ok) return;
+        const data: JobAlertsJobStatus = await res.json();
+        if (data.job_id !== expectedId) return;
+        setJobAlertsJob(data);
+        if (data.status === "completed" && data.result) {
+          const all: JobListing[] = data.result.items ?? [];
+          setJobAlerts(jobAlertsQualifiedOnly ? all.filter((j) => j.qualifies) : all);
+          setJobAlertsFromEmails(data.result.from_emails ?? 0);
+          setJobAlertsLoaded(true);
+        }
+        if (data.status === "failed") {
+          setJobAlertsError(data.error ?? "Scan failed.");
+        }
+      } catch { /* ignore poll errors */ }
+    }, 1500);
+    return () => window.clearInterval(poll);
+  }, [jobAlertsJob, jobAlertsQualifiedOnly]);
+
   const filteredEmails = useMemo(() => {
     const q = safeLower(query.trim());
     if (!q) return emails;
@@ -4003,7 +4089,7 @@ export default function HomePage() {
   const guidanceDirty = classificationGuidance !== savedClassificationGuidance;
 
   const setTopLevelMode = (
-    nextMode: "dashboard" | "assistant" | "tasks" | "journal" | "mail" | "news" | "overview" | "schedule" | "planning" | "settings" | "health"
+    nextMode: "dashboard" | "assistant" | "tasks" | "journal" | "mail" | "news" | "overview" | "schedule" | "planning" | "settings" | "health" | "jobs"
   ) => {
     if (nextMode === "overview") {
       setMailWorkspaceTab("insights");
@@ -4439,6 +4525,8 @@ export default function HomePage() {
                 ? "Review the exact headlines feeding the dashboard so you can open the source coverage directly."
                 : mode === "health"
                 ? "Track your synced Apple Health data with a deeper view of daily history, heart metrics, movement, and other expanded measurements."
+                : mode === "jobs"
+                ? "Scan your Job Alerts email label and rank every listing by fit for intelligence and foreign affairs roles."
                 : mode === "settings"
                 ? "Manage Jarvis classification guidance and inbox cleanup tools away from the main review workspace."
                 : isSchedulePlannerMode
@@ -4513,6 +4601,15 @@ export default function HomePage() {
             >
               <CalendarDays className="mr-2 h-4 w-4" />
               Schedule
+            </Button>
+
+            <Button
+              variant={mode === "jobs" ? "default" : "outline"}
+              className="rounded-2xl"
+              onClick={() => setTopLevelMode("jobs")}
+            >
+              <Briefcase className="mr-2 h-4 w-4" />
+              Jobs
             </Button>
 
             <div className="relative">
@@ -5076,7 +5173,181 @@ export default function HomePage() {
                   </div>
                 </CardContent>
               </Card>
+
             </div>
+          </div>
+        ) : mode === "jobs" ? (
+          <div className="space-y-6">
+            {/* header controls */}
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                {jobAlertsLoaded && !jobAlertsJob ? (
+                  <p className="text-sm text-slate-400">
+                    {jobAlertsFromEmails} email{jobAlertsFromEmails === 1 ? "" : "s"} scanned · {(jobAlerts ?? []).length} listing{(jobAlerts ?? []).length === 1 ? "" : "s"} scored ≥ 5
+                  </p>
+                ) : null}
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                {jobAlertsLoaded && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const next = !jobAlertsQualifiedOnly;
+                      setJobAlertsQualifiedOnly(next);
+                      const all = jobAlertsJob?.result?.items ?? jobAlerts ?? [];
+                      setJobAlerts(next ? all.filter((j) => j.qualifies) : all);
+                    }}
+                    className={`rounded-2xl border px-3 py-1.5 text-sm transition ${
+                      jobAlertsQualifiedOnly
+                        ? "border-emerald-400/40 bg-emerald-500/15 text-emerald-200"
+                        : "border-white/10 bg-white/5 text-slate-300 hover:border-white/20"
+                    }`}
+                  >
+                    Qualified only
+                  </button>
+                )}
+                <Button
+                  variant="outline"
+                  className="rounded-2xl"
+                  disabled={jobAlertsJob?.status === "queued" || jobAlertsJob?.status === "running"}
+                  onClick={() => void startJobAlerts(jobAlertsLoaded)}
+                >
+                  <RefreshCw className={`mr-2 h-4 w-4 ${jobAlertsJob?.status === "queued" || jobAlertsJob?.status === "running" ? "animate-spin" : ""}`} />
+                  {jobAlertsLoaded ? "Re-scan" : "Scan emails"}
+                </Button>
+              </div>
+            </div>
+
+            {/* progress bar */}
+            {(jobAlertsJob?.status === "queued" || jobAlertsJob?.status === "running") ? (
+              <Card className="rounded-[2rem] border border-white/8 bg-[rgba(17,19,34,0.82)] shadow-[0_16px_44px_rgba(6,7,14,0.36)] backdrop-blur-xl">
+                <CardContent className="pt-6">
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-slate-300">
+                        {jobAlertsJob.status === "queued" ? "Starting scan…" : `Scanning email ${(jobAlertsJob.processed ?? 0) + 1} of ${jobAlertsJob.total || "?"}`}
+                      </span>
+                      <span className="text-slate-400">
+                        {jobAlertsJob.total ? `${Math.round(((jobAlertsJob.processed ?? 0) / jobAlertsJob.total) * 100)}%` : ""}
+                      </span>
+                    </div>
+                    <div className="h-2 w-full overflow-hidden rounded-full bg-white/8">
+                      <div
+                        className="h-full rounded-full bg-cyan-400 transition-all duration-500"
+                        style={{ width: jobAlertsJob.total ? `${Math.round(((jobAlertsJob.processed ?? 0) / jobAlertsJob.total) * 100)}%` : "5%" }}
+                      />
+                    </div>
+                    {jobAlertsJob.current_subject ? (
+                      <p className="truncate text-xs text-slate-400">{jobAlertsJob.current_subject}</p>
+                    ) : null}
+                  </div>
+                </CardContent>
+              </Card>
+            ) : null}
+
+            {/* error */}
+            {jobAlertsError ? (
+              isGoogleAuthIssue(jobAlertsError) ? (
+                <div className="flex flex-col gap-3 rounded-[1.4rem] border border-cyan-300/15 bg-cyan-400/10 p-4 text-sm text-cyan-50 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2 font-medium text-white">
+                      <ShieldCheck className="h-4 w-4 text-cyan-200" />
+                      Google connection expired
+                    </div>
+                    <div className="mt-1 text-xs leading-5 text-cyan-100/85">Re-authorize Google to scan job alerts.</div>
+                  </div>
+                  <Button asChild variant="outline" className="rounded-2xl border-cyan-200/30 bg-white/5 text-cyan-50 hover:bg-white/10">
+                    <a href={`${API_BASE}/google/oauth/start`}>Reconnect</a>
+                  </Button>
+                </div>
+              ) : (
+                <div className="flex items-start gap-3 rounded-[1.4rem] border border-rose-400/20 bg-rose-500/10 p-4 text-sm text-rose-200">
+                  <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                  <div>{jobAlertsError}</div>
+                </div>
+              )
+            ) : null}
+
+            {/* empty / not yet scanned */}
+            {!jobAlertsLoaded && !jobAlertsJob ? (
+              <Card className="rounded-[2rem] border border-white/8 bg-[rgba(17,19,34,0.82)] shadow-[0_16px_44px_rgba(6,7,14,0.36)] backdrop-blur-xl">
+                <CardContent className="pt-8 pb-10 text-center">
+                  <Briefcase className="mx-auto mb-4 h-10 w-10 text-slate-500" />
+                  <p className="text-sm text-slate-400">Hit <span className="text-white font-medium">Scan emails</span> to pull up to 30 of your most recent Job Alerts emails, score every listing with AI, and rank them by fit.</p>
+                </CardContent>
+              </Card>
+            ) : (jobAlerts ?? []).length === 0 && jobAlertsLoaded ? (
+              <Card className="rounded-[2rem] border border-white/8 bg-[rgba(17,19,34,0.82)] shadow-[0_16px_44px_rgba(6,7,14,0.36)] backdrop-blur-xl">
+                <CardContent className="pt-8 pb-10 text-center text-sm text-slate-400">
+                  No listings scored ≥ 5 found. Make sure your Gmail label is named &ldquo;Job Alerts&rdquo; exactly.
+                </CardContent>
+              </Card>
+            ) : null}
+
+            {/* listings */}
+            {(jobAlerts ?? []).length > 0 ? (
+              <div className="space-y-3">
+                {(jobAlerts ?? []).map((job) => (
+                  <div
+                    key={job.id}
+                    className="rounded-[1.6rem] border border-white/6 bg-[rgba(17,19,34,0.82)] p-5 shadow-[0_8px_24px_rgba(6,7,14,0.24)]"
+                  >
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className="text-base font-semibold text-slate-100">{job.title}</span>
+                          {job.is_new && (
+                            <span className="rounded-md bg-blue-500/20 px-1.5 py-0.5 text-xs font-semibold text-blue-300">New</span>
+                          )}
+                        </div>
+                        <div className="mt-1 text-sm text-slate-400">
+                          {job.company}
+                          {job.location ? ` · ${job.location}` : ""}
+                        </div>
+                        {job.salary_range ? (
+                          <div className="mt-1 text-xs text-slate-500">{job.salary_range}</div>
+                        ) : null}
+                      </div>
+                      <div className="flex shrink-0 flex-col items-end gap-1.5">
+                        <span
+                          className={`rounded-xl px-2.5 py-0.5 text-sm font-semibold ${
+                            job.relevance_score >= 8
+                              ? "bg-emerald-500/20 text-emerald-200"
+                              : "bg-amber-500/20 text-amber-200"
+                          }`}
+                        >
+                          {job.relevance_score}/10
+                        </span>
+                        {job.qualifies ? (
+                          <span className="rounded-xl bg-cyan-500/15 px-2 py-0.5 text-xs text-cyan-200">Qualifies</span>
+                        ) : (
+                          <span className="rounded-xl bg-white/5 px-2 py-0.5 text-xs text-slate-400">May not qualify</span>
+                        )}
+                      </div>
+                    </div>
+                    <p className="mt-3 text-sm leading-6 text-slate-300">{job.relevance_reason}</p>
+                    {!job.qualifies && job.qualification_note ? (
+                      <p className="mt-1.5 text-xs leading-5 text-slate-400">{job.qualification_note}</p>
+                    ) : null}
+                    <div className="mt-4 flex flex-wrap items-center gap-3 text-xs text-slate-500">
+                      <span className="truncate">{job.source_email_subject}</span>
+                      {(() => { const ci = jobClosingInfo(job.closes_at); return ci ? <span className={ci.className}>{ci.label}</span> : null; })()}
+                      {job.apply_url ? (
+                        <a
+                          href={job.apply_url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="ml-auto inline-flex items-center gap-1.5 rounded-xl border border-cyan-300/20 bg-cyan-400/10 px-3 py-1.5 text-sm font-medium text-cyan-200 transition hover:bg-cyan-400/20"
+                        >
+                          <ExternalLink className="h-3.5 w-3.5" />
+                          Apply
+                        </a>
+                      ) : null}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : null}
           </div>
         ) : mode === "assistant" ? (
           <div className="space-y-6">

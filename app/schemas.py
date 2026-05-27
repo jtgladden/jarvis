@@ -975,3 +975,41 @@ class EmailCommandResponse(BaseModel):
 
 
 JournalDayEntry.model_rebuild()
+
+
+class JobListing(BaseModel):
+    id: str
+    title: str
+    company: str
+    location: str
+    salary_range: Optional[str] = None
+    apply_url: Optional[str] = None
+    source_email_id: str
+    source_email_subject: str
+    relevance_score: int = 5
+    relevance_reason: str = ""
+    qualifies: bool = True
+    qualification_note: str = ""
+    closes_at: Optional[str] = None
+    is_new: bool = False
+
+
+class JobAlertsResponse(BaseModel):
+    items: List[JobListing] = Field(default_factory=list)
+    total: int = 0
+    from_emails: int = 0
+
+
+class JobAlertsJobStartResponse(BaseModel):
+    job_id: str
+    status: Literal["queued", "running"]
+
+
+class JobAlertsJobStatus(BaseModel):
+    job_id: str
+    status: Literal["queued", "running", "completed", "failed"]
+    processed: int = 0
+    total: int = 0
+    current_subject: Optional[str] = None
+    result: Optional[JobAlertsResponse] = None
+    error: Optional[str] = None

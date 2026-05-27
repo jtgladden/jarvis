@@ -21,6 +21,7 @@ from app.gmail_client import apply_custom_rules_to_jarvis_emails, cleanup_inbox,
 from app.google_oauth import begin_google_oauth, finish_google_oauth, get_google_oauth_instructions
 from app.health import list_health_entries, sync_health_daily_entry
 from app.health_store import init_health_store
+from app.job_alerts import clear_email_parse_cache, get_job_alerts_cached, invalidate_job_alerts_cache, run_job_alerts_job
 from app.journal import extract_journal_day_citations, get_journal, get_journal_day, save_journal_day
 from app.journal_store import init_journal_store
 from app.language_learning import create_language_conversation_reply, create_language_session, create_language_vocab, delete_language_vocab, explain_language_word, generate_language_practice, get_language_dashboard, get_language_pronunciation_feedback, get_language_writing_feedback, normalize_existing_language_vocab, review_language_vocab, synthesize_language_speech, update_language_profile, update_language_vocab
@@ -29,7 +30,7 @@ from app.movement import list_movement_entries, sync_movement_daily_entry
 from app.movement_store import init_movement_store
 from app.planner import generate_schedule_plan
 from app.rules import classify_new_email_rule
-from app.schemas import AssistantAskRequest, AssistantAskResponse, AssistantChatListResponse, AssistantChatThread, CalendarAgendaResponse, CalendarEventCreateResponse, CalendarEventPreview, CalendarQuickAddRequest, CalendarQuickAddResponse, ClassifiedEmailResponse, ClassificationGuidanceRequest, ClassificationGuidanceResponse, ClassificationOverviewResponse, CleanupJobStartResponse, CleanupJobStatus, CleanupResponse, DashboardResponse, DashboardTaskItem, DeleteEmailResponse, EmailCommandRequest, EmailCommandResponse, EmailPageResponse, EmailSummary, EmailUpdateRequest, EmailUpdateResponse, GmailLabel, HandleEmailRequest, HandleEmailResponse, HealthDailySyncRequest, HealthDailySyncResponse, HealthListResponse, JournalDayEntry, JournalDayNoteUpdateRequest, JournalResponse, LanguageCode, LanguageConversationRequest, LanguageConversationResponse, LanguageDashboardResponse, LanguageFeedbackResponse, LanguagePracticeGenerateRequest, LanguagePracticeGenerateResponse, LanguagePracticeSession, LanguagePracticeSessionCreateRequest, LanguageProfile, LanguageProfileUpdateRequest, LanguageSpeechRequest, LanguageVocabCreateRequest, LanguageVocabItem, LanguageVocabNormalizeResponse, LanguageVocabReviewRequest, LanguageVocabUpdateRequest, LanguageWordExplainRequest, LanguageWordExplainResponse, LanguageWritingFeedbackRequest, MovementDailySyncRequest, MovementDailySyncResponse, MovementListResponse, PlanningCalendarBulkCreateRequest, PlanningCalendarBulkCreateResponse, PlanningCalendarCreateRequest, PlanningCalendarCreateResponse, PlanningJobStartResponse, PlanningJobStatus, PlanningRequest, PlanningResponse, RuleSuggestion, RuleSuggestionResponse, RuleProcessResponse, TaskCreateRequest, TaskListResponse, TaskUpdateRequest, UserRule, UserRuleCondition, UserRuleCreateRequest, UserRuleListResponse, UserRuleUpdateRequest, WorkoutBatchSyncRequest, WorkoutBatchSyncResponse, WorkoutListResponse
+from app.schemas import AssistantAskRequest, JobAlertsJobStartResponse, JobAlertsJobStatus, JobAlertsResponse, JobListing, AssistantAskResponse, AssistantChatListResponse, AssistantChatThread, CalendarAgendaResponse, CalendarEventCreateResponse, CalendarEventPreview, CalendarQuickAddRequest, CalendarQuickAddResponse, ClassifiedEmailResponse, ClassificationGuidanceRequest, ClassificationGuidanceResponse, ClassificationOverviewResponse, CleanupJobStartResponse, CleanupJobStatus, CleanupResponse, DashboardResponse, DashboardTaskItem, DeleteEmailResponse, EmailCommandRequest, EmailCommandResponse, EmailPageResponse, EmailSummary, EmailUpdateRequest, EmailUpdateResponse, GmailLabel, HandleEmailRequest, HandleEmailResponse, HealthDailySyncRequest, HealthDailySyncResponse, HealthListResponse, JournalDayEntry, JournalDayNoteUpdateRequest, JournalResponse, LanguageCode, LanguageConversationRequest, LanguageConversationResponse, LanguageDashboardResponse, LanguageFeedbackResponse, LanguagePracticeGenerateRequest, LanguagePracticeGenerateResponse, LanguagePracticeSession, LanguagePracticeSessionCreateRequest, LanguageProfile, LanguageProfileUpdateRequest, LanguageSpeechRequest, LanguageVocabCreateRequest, LanguageVocabItem, LanguageVocabNormalizeResponse, LanguageVocabReviewRequest, LanguageVocabUpdateRequest, LanguageWordExplainRequest, LanguageWordExplainResponse, LanguageWritingFeedbackRequest, MovementDailySyncRequest, MovementDailySyncResponse, MovementListResponse, PlanningCalendarBulkCreateRequest, PlanningCalendarBulkCreateResponse, PlanningCalendarCreateRequest, PlanningCalendarCreateResponse, PlanningJobStartResponse, PlanningJobStatus, PlanningRequest, PlanningResponse, RuleSuggestion, RuleSuggestionResponse, RuleProcessResponse, TaskCreateRequest, TaskListResponse, TaskUpdateRequest, UserRule, UserRuleCondition, UserRuleCreateRequest, UserRuleListResponse, UserRuleUpdateRequest, WorkoutBatchSyncRequest, WorkoutBatchSyncResponse, WorkoutListResponse
 from app.rule_parser import parse_rule_to_fields
 from app.task_service import create_task, delete_task, list_tasks, update_task
 from app.task_store import init_task_store
@@ -54,6 +55,8 @@ _cleanup_jobs: dict[str, CleanupJobStatus] = {}
 _cleanup_jobs_lock = Lock()
 _planning_jobs: dict[str, PlanningJobStatus] = {}
 _planning_jobs_lock = Lock()
+_job_alerts_jobs: dict[str, JobAlertsJobStatus] = {}
+_job_alerts_jobs_lock = Lock()
 _new_mail_sort_lock = Lock()
 
 
@@ -882,6 +885,68 @@ def run_email_command(payload: EmailCommandRequest):
         has_more=result.get("has_more", False),
         dry_run=payload.dry_run,
     )
+
+
+def _set_job_alerts_job(job_id: str, **updates) -> JobAlertsJobStatus:
+    with _job_alerts_jobs_lock:
+        job = _job_alerts_jobs[job_id]
+        _job_alerts_jobs[job_id] = job.model_copy(update=updates)
+        return _job_alerts_jobs[job_id]
+
+
+def _start_job_alerts_job() -> JobAlertsJobStartResponse:
+    job_id = uuid4().hex
+    with _job_alerts_jobs_lock:
+        _job_alerts_jobs[job_id] = JobAlertsJobStatus(job_id=job_id, status="queued")
+
+    def on_progress(processed: int, total: int, subject: str) -> None:
+        _set_job_alerts_job(job_id, status="running", processed=processed, total=total, current_subject=subject)
+
+    def on_done(result: JobAlertsResponse) -> None:
+        _set_job_alerts_job(job_id, status="completed", processed=result.from_emails, total=result.from_emails, result=result, current_subject=None)
+
+    def on_error(msg: str) -> None:
+        _set_job_alerts_job(job_id, status="failed", error=msg, current_subject=None)
+
+    thread = Thread(
+        target=run_job_alerts_job,
+        args=(job_id, on_progress, on_done, on_error),
+        daemon=True,
+    )
+    thread.start()
+    return JobAlertsJobStartResponse(job_id=job_id, status="queued")
+
+
+@api.get("/job-alerts", response_model=JobAlertsResponse)
+def job_alerts_cached():
+    cached = get_job_alerts_cached()
+    if cached is None:
+        return JobAlertsResponse()
+    return cached
+
+
+@api.post("/job-alerts/start", response_model=JobAlertsJobStartResponse)
+def job_alerts_start(force: bool = Query(default=False)):
+    if force:
+        invalidate_job_alerts_cache()
+        clear_email_parse_cache()
+    cached = get_job_alerts_cached()
+    if cached is not None:
+        return JobAlertsJobStartResponse(job_id="cached", status="queued")
+    return _start_job_alerts_job()
+
+
+@api.get("/job-alerts/jobs/{job_id}", response_model=JobAlertsJobStatus)
+def job_alerts_status(job_id: str):
+    if job_id == "cached":
+        cached = get_job_alerts_cached()
+        result = cached or JobAlertsResponse()
+        return JobAlertsJobStatus(job_id="cached", status="completed", result=result)
+    with _job_alerts_jobs_lock:
+        job = _job_alerts_jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job
 
 
 app.include_router(api)
