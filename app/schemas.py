@@ -1013,3 +1013,108 @@ class JobAlertsJobStatus(BaseModel):
     current_subject: Optional[str] = None
     result: Optional[JobAlertsResponse] = None
     error: Optional[str] = None
+
+
+# ── Nutrition / Food Log ───────────────────────────────────────────────────────
+
+class FoodLogEntry(BaseModel):
+    id: str
+    date: str
+    name: str
+    calories: float = 0
+    protein_g: float = 0
+    carbs_g: float = 0
+    fat_g: float = 0
+    meal: str = "Other"
+    logged_at: str
+
+
+class ManualWorkoutLog(BaseModel):
+    id: str
+    date: str
+    type: str
+    duration_minutes: int = 0
+    notes: str = ""
+    logged_at: str
+
+
+class MealPrepItem(BaseModel):
+    id: str
+    name: str
+    calories: float = 0
+    protein_g: float = 0
+    carbs_g: float = 0
+    fat_g: float = 0
+    notes: str = ""
+    created_at: str
+
+
+class MacroTargets(BaseModel):
+    calories: float = 2600
+    protein_g: float = 155
+    carbs_g: float = 320
+    fat_g: float = 75
+
+
+class DailyFoodLog(BaseModel):
+    date: str
+    entries: List[FoodLogEntry] = Field(default_factory=list)
+    manual_workout: Optional[ManualWorkoutLog] = None
+    targets: MacroTargets = Field(default_factory=MacroTargets)
+
+
+class FoodLogAddRequest(BaseModel):
+    name: str
+    calories: float = 0
+    protein_g: float = 0
+    carbs_g: float = 0
+    fat_g: float = 0
+    meal: str = "Other"
+
+
+class ManualWorkoutLogRequest(BaseModel):
+    type: str
+    duration_minutes: int = 0
+    notes: str = ""
+
+
+class MealPrepCreateRequest(BaseModel):
+    name: str
+    calories: float = 0
+    protein_g: float = 0
+    carbs_g: float = 0
+    fat_g: float = 0
+    notes: str = ""
+
+
+class MacroTargetsUpdateRequest(BaseModel):
+    calories: float
+    protein_g: float
+    carbs_g: float
+    fat_g: float
+
+
+class FoodLogHistoryResponse(BaseModel):
+    days: List[DailyFoodLog] = Field(default_factory=list)
+
+
+class FoodParseRequest(BaseModel):
+    text: str
+
+
+class FoodParseResponse(BaseModel):
+    name: str
+    calories: float = 0
+    protein_g: float = 0
+    carbs_g: float = 0
+    fat_g: float = 0
+    meal: str = "Other"
+
+
+class FoodLogUpdateRequest(BaseModel):
+    name: str
+    calories: float = 0
+    protein_g: float = 0
+    carbs_g: float = 0
+    fat_g: float = 0
+    meal: str = "Other"

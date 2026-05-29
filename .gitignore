@@ -13,6 +13,8 @@ data/assistant_chat.db
 data/workouts.db
 data/language_learning.db
 data/user_rules.db
+data/food_log.db
+data/job_alerts_email_cache.json
 
 # Xcode per-user IDE state (not useful to other contributors)
 *.xcuserstate

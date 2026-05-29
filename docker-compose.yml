@@ -19,6 +19,10 @@ services:
       LANGUAGE_DB: /data/language_learning.db
       CLASSIFICATION_CACHE_DB: /data/classification_cache.db
       CLASSIFICATION_GUIDANCE_FILE: /data/classification_guidance.json
+      JOB_ALERTS_EMAIL_CACHE_FILE: /data/job_alerts_email_cache.json
+      FOOD_LOG_DB: /data/food_log.db
+      USAJOBS_API_KEY: ${USAJOBS_API_KEY:-}
+      USAJOBS_USER_AGENT: ${USAJOBS_USER_AGENT:-}
       OPENAI_MAX_EMAILS_PER_RUN: ${OPENAI_MAX_EMAILS_PER_RUN:-15}
       OPENAI_EMAIL_BODY_PREVIEW_CHARS: ${OPENAI_EMAIL_BODY_PREVIEW_CHARS:-0}
       OPENAI_LANGUAGE_MODEL: ${OPENAI_LANGUAGE_MODEL:-gpt-4.1-mini}

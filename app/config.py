@@ -33,6 +33,8 @@ OPENAI_ASSISTANT_MAX_TOKENS = int(os.getenv("OPENAI_ASSISTANT_MAX_TOKENS", "1400
 DASHBOARD_CACHE_TTL_SECONDS = int(os.getenv("DASHBOARD_CACHE_TTL_SECONDS", "600"))
 USAJOBS_API_KEY = os.getenv("USAJOBS_API_KEY", "")
 USAJOBS_USER_AGENT = os.getenv("USAJOBS_USER_AGENT", "")
+JOB_ALERTS_EMAIL_CACHE_FILE = os.getenv("JOB_ALERTS_EMAIL_CACHE_FILE", "data/job_alerts_email_cache.json")
+FOOD_LOG_DB = os.getenv("FOOD_LOG_DB", "data/food_log.db")
 
 CORS_ALLOWED_ORIGINS = [
     origin.strip()

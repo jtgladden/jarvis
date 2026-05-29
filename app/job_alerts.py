@@ -10,7 +10,7 @@ from typing import Callable, List, Optional
 
 from openai import OpenAI
 
-from app.config import OPENAI_API_KEY, USAJOBS_API_KEY, USAJOBS_USER_AGENT
+from app.config import JOB_ALERTS_EMAIL_CACHE_FILE, OPENAI_API_KEY, USAJOBS_API_KEY, USAJOBS_USER_AGENT
 from app.gmail_client import get_emails_by_label
 from app.schemas import EmailSummary, JobAlertsJobStartResponse, JobAlertsJobStatus, JobAlertsResponse, JobListing
 
@@ -26,7 +26,7 @@ _CACHE_TTL = 1800.0  # 30 minutes
 
 # ── Per-email parse cache (persisted to disk) ──────────────────────────────────
 
-_EMAIL_CACHE_FILE = "data/job_alerts_email_cache.json"
+_EMAIL_CACHE_FILE = JOB_ALERTS_EMAIL_CACHE_FILE
 _email_cache: dict[str, list] = {}
 _email_cache_lock = threading.Lock()
 

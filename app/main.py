@@ -21,6 +21,8 @@ from app.gmail_client import apply_custom_rules_to_jarvis_emails, cleanup_inbox,
 from app.google_oauth import begin_google_oauth, finish_google_oauth, get_google_oauth_instructions
 from app.health import list_health_entries, sync_health_daily_entry
 from app.health_store import init_health_store
+from app.food_log import add_food_log_entry, add_meal_prep_item, get_daily_food_log, get_food_log_history, get_meal_prep_library, get_user_macro_targets, log_manual_workout, parse_food_description, remove_food_log_entry, remove_meal_prep_item, update_food_log_entry, update_user_macro_targets
+from app.food_log_store import init_food_log_store
 from app.job_alerts import clear_email_parse_cache, get_job_alerts_cached, invalidate_job_alerts_cache, run_job_alerts_job
 from app.journal import extract_journal_day_citations, get_journal, get_journal_day, save_journal_day
 from app.journal_store import init_journal_store
@@ -30,7 +32,7 @@ from app.movement import list_movement_entries, sync_movement_daily_entry
 from app.movement_store import init_movement_store
 from app.planner import generate_schedule_plan
 from app.rules import classify_new_email_rule
-from app.schemas import AssistantAskRequest, JobAlertsJobStartResponse, JobAlertsJobStatus, JobAlertsResponse, JobListing, AssistantAskResponse, AssistantChatListResponse, AssistantChatThread, CalendarAgendaResponse, CalendarEventCreateResponse, CalendarEventPreview, CalendarQuickAddRequest, CalendarQuickAddResponse, ClassifiedEmailResponse, ClassificationGuidanceRequest, ClassificationGuidanceResponse, ClassificationOverviewResponse, CleanupJobStartResponse, CleanupJobStatus, CleanupResponse, DashboardResponse, DashboardTaskItem, DeleteEmailResponse, EmailCommandRequest, EmailCommandResponse, EmailPageResponse, EmailSummary, EmailUpdateRequest, EmailUpdateResponse, GmailLabel, HandleEmailRequest, HandleEmailResponse, HealthDailySyncRequest, HealthDailySyncResponse, HealthListResponse, JournalDayEntry, JournalDayNoteUpdateRequest, JournalResponse, LanguageCode, LanguageConversationRequest, LanguageConversationResponse, LanguageDashboardResponse, LanguageFeedbackResponse, LanguagePracticeGenerateRequest, LanguagePracticeGenerateResponse, LanguagePracticeSession, LanguagePracticeSessionCreateRequest, LanguageProfile, LanguageProfileUpdateRequest, LanguageSpeechRequest, LanguageVocabCreateRequest, LanguageVocabItem, LanguageVocabNormalizeResponse, LanguageVocabReviewRequest, LanguageVocabUpdateRequest, LanguageWordExplainRequest, LanguageWordExplainResponse, LanguageWritingFeedbackRequest, MovementDailySyncRequest, MovementDailySyncResponse, MovementListResponse, PlanningCalendarBulkCreateRequest, PlanningCalendarBulkCreateResponse, PlanningCalendarCreateRequest, PlanningCalendarCreateResponse, PlanningJobStartResponse, PlanningJobStatus, PlanningRequest, PlanningResponse, RuleSuggestion, RuleSuggestionResponse, RuleProcessResponse, TaskCreateRequest, TaskListResponse, TaskUpdateRequest, UserRule, UserRuleCondition, UserRuleCreateRequest, UserRuleListResponse, UserRuleUpdateRequest, WorkoutBatchSyncRequest, WorkoutBatchSyncResponse, WorkoutListResponse
+from app.schemas import AssistantAskRequest, DailyFoodLog, FoodLogAddRequest, FoodLogEntry, FoodLogHistoryResponse, FoodLogUpdateRequest, FoodParseRequest, FoodParseResponse, JobAlertsJobStartResponse, JobAlertsJobStatus, JobAlertsResponse, JobListing, MacroTargets, MacroTargetsUpdateRequest, ManualWorkoutLog, ManualWorkoutLogRequest, MealPrepCreateRequest, MealPrepItem, AssistantAskResponse, AssistantChatListResponse, AssistantChatThread, CalendarAgendaResponse, CalendarEventCreateResponse, CalendarEventPreview, CalendarQuickAddRequest, CalendarQuickAddResponse, ClassifiedEmailResponse, ClassificationGuidanceRequest, ClassificationGuidanceResponse, ClassificationOverviewResponse, CleanupJobStartResponse, CleanupJobStatus, CleanupResponse, DashboardResponse, DashboardTaskItem, DeleteEmailResponse, EmailCommandRequest, EmailCommandResponse, EmailPageResponse, EmailSummary, EmailUpdateRequest, EmailUpdateResponse, GmailLabel, HandleEmailRequest, HandleEmailResponse, HealthDailySyncRequest, HealthDailySyncResponse, HealthListResponse, JournalDayEntry, JournalDayNoteUpdateRequest, JournalResponse, LanguageCode, LanguageConversationRequest, LanguageConversationResponse, LanguageDashboardResponse, LanguageFeedbackResponse, LanguagePracticeGenerateRequest, LanguagePracticeGenerateResponse, LanguagePracticeSession, LanguagePracticeSessionCreateRequest, LanguageProfile, LanguageProfileUpdateRequest, LanguageSpeechRequest, LanguageVocabCreateRequest, LanguageVocabItem, LanguageVocabNormalizeResponse, LanguageVocabReviewRequest, LanguageVocabUpdateRequest, LanguageWordExplainRequest, LanguageWordExplainResponse, LanguageWritingFeedbackRequest, MovementDailySyncRequest, MovementDailySyncResponse, MovementListResponse, PlanningCalendarBulkCreateRequest, PlanningCalendarBulkCreateResponse, PlanningCalendarCreateRequest, PlanningCalendarCreateResponse, PlanningJobStartResponse, PlanningJobStatus, PlanningRequest, PlanningResponse, RuleSuggestion, RuleSuggestionResponse, RuleProcessResponse, TaskCreateRequest, TaskListResponse, TaskUpdateRequest, UserRule, UserRuleCondition, UserRuleCreateRequest, UserRuleListResponse, UserRuleUpdateRequest, WorkoutBatchSyncRequest, WorkoutBatchSyncResponse, WorkoutListResponse
 from app.rule_parser import parse_rule_to_fields
 from app.task_service import create_task, delete_task, list_tasks, update_task
 from app.task_store import init_task_store
@@ -202,6 +204,7 @@ def start_background_new_mail_sorter() -> None:
     init_workout_store()
     init_assistant_chat_store()
     init_language_store()
+    init_food_log_store()
     thread = Thread(target=_new_mail_sort_loop, daemon=True)
     thread.start()
     Thread(target=purge_kana_in_romanization_records, daemon=True).start()
@@ -947,6 +950,69 @@ def job_alerts_status(job_id: str):
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
     return job
+
+
+@api.get("/nutrition/log/{entry_date}", response_model=DailyFoodLog)
+def get_nutrition_log(entry_date: str):
+    return get_daily_food_log(entry_date)
+
+
+@api.post("/nutrition/log/{entry_date}/entries", response_model=FoodLogEntry)
+def add_nutrition_entry(entry_date: str, payload: FoodLogAddRequest):
+    return add_food_log_entry(entry_date, payload)
+
+
+@api.delete("/nutrition/log/{entry_date}/entries/{entry_id}", status_code=204)
+def delete_nutrition_entry(entry_date: str, entry_id: str):
+    remove_food_log_entry(entry_date, entry_id)
+
+
+@api.post("/nutrition/log/{entry_date}/workout", response_model=ManualWorkoutLog)
+def log_nutrition_workout(entry_date: str, payload: ManualWorkoutLogRequest):
+    return log_manual_workout(entry_date, payload)
+
+
+@api.get("/nutrition/history", response_model=FoodLogHistoryResponse)
+def nutrition_history(days: int = Query(default=14, ge=1, le=60)):
+    return get_food_log_history(days)
+
+
+@api.get("/nutrition/meal-prep", response_model=list[MealPrepItem])
+def get_nutrition_meal_prep():
+    return get_meal_prep_library()
+
+
+@api.post("/nutrition/meal-prep", response_model=MealPrepItem)
+def post_nutrition_meal_prep(payload: MealPrepCreateRequest):
+    return add_meal_prep_item(payload)
+
+
+@api.delete("/nutrition/meal-prep/{item_id}", status_code=204)
+def delete_nutrition_meal_prep(item_id: str):
+    remove_meal_prep_item(item_id)
+
+
+@api.get("/nutrition/targets", response_model=MacroTargets)
+def get_nutrition_targets():
+    return get_user_macro_targets()
+
+
+@api.put("/nutrition/targets", response_model=MacroTargets)
+def put_nutrition_targets(payload: MacroTargetsUpdateRequest):
+    return update_user_macro_targets(payload)
+
+
+@api.post("/nutrition/parse-food", response_model=FoodParseResponse)
+def post_parse_food(payload: FoodParseRequest):
+    return parse_food_description(payload)
+
+
+@api.put("/nutrition/log/{entry_date}/entries/{entry_id}", response_model=FoodLogEntry)
+def put_nutrition_entry(entry_date: str, entry_id: str, payload: FoodLogUpdateRequest):
+    entry = update_food_log_entry(entry_date, entry_id, payload)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Entry not found")
+    return entry
 
 
 app.include_router(api)

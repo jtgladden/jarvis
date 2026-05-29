@@ -1124,6 +1124,67 @@ type DashboardResponse = {
   tasks: DashboardTaskItem[];
 };
 
+const WORKOUT_PLAN = {
+  profile: { age: 22, height: "5'8\"", weight: "140 lbs", goal: "Lean bulk — bigger chest and abs", bodyFat: "5.8%", skeletalMuscle: "71.7 lbs" },
+  schedule: [
+    { day: "Monday", label: "Chest + Triceps", color: "blue" as const, exercises: [
+      { name: "Push-ups (weighted or elevated)", sets: 4, reps: "12" },
+      { name: "Dumbbell bench press", sets: 4, reps: "10" },
+      { name: "Incline dumbbell press", sets: 3, reps: "10" },
+      { name: "Cable flyes or dumbbell flyes", sets: 3, reps: "12" },
+      { name: "Tricep dips", sets: 3, reps: "12" },
+      { name: "Overhead tricep extension", sets: 3, reps: "12" },
+    ]},
+    { day: "Tuesday", label: "Rock Climbing", color: "emerald" as const, notes: "30 min climbing session · After: 10 min core work (planks, hollow holds, leg raises)" },
+    { day: "Wednesday", label: "Handstand + Shoulders", color: "violet" as const, exercises: [
+      { name: "Frog pose holds", sets: 5, reps: "30 sec" },
+      { name: "Pike push-ups", sets: 4, reps: "10" },
+      { name: "Wall handstand holds", sets: 5, reps: "20–30 sec" },
+      { name: "Dumbbell shoulder press", sets: 3, reps: "10" },
+      { name: "Lateral raises", sets: 3, reps: "15" },
+    ]},
+    { day: "Thursday", label: "Back + Biceps", color: "cyan" as const, exercises: [
+      { name: "Pull-ups or assisted pull-ups", sets: 4, reps: "8" },
+      { name: "Dumbbell rows (each side)", sets: 4, reps: "10" },
+      { name: "Face pulls", sets: 3, reps: "15" },
+      { name: "Bicep curls", sets: 3, reps: "12" },
+      { name: "Hammer curls", sets: 3, reps: "12" },
+    ]},
+    { day: "Friday", label: "Rock Climbing", color: "emerald" as const, notes: "30 min climbing session · After: light stretching + hip flexor work for frog pose" },
+    { day: "Saturday", label: "Legs + Abs", color: "amber" as const, exercises: [
+      { name: "Squats", sets: 4, reps: "10" },
+      { name: "Romanian deadlifts", sets: 3, reps: "10" },
+      { name: "Lunges (each leg)", sets: 3, reps: "12" },
+      { name: "Plank", sets: 3, reps: "60 sec" },
+      { name: "Hollow body hold", sets: 3, reps: "30 sec" },
+      { name: "Ab wheel or hanging leg raises", sets: 3, reps: "12" },
+    ]},
+    { day: "Sunday", label: "Rest", color: "slate" as const, notes: "Full rest or light walk · Focus on sleep (7–9 hrs) and hitting protein target" },
+  ],
+  goals: [
+    "Weight: 140 → ~146 lbs",
+    "Skeletal muscle mass: 71.7 → ~76 lbs",
+    "Body fat: stay controlled under ~10%",
+    "Handstand: frog pose → tuck hold → wall handstand",
+  ],
+  notes: [
+    "Progressive overload: add reps or small weight every 1–2 weeks on main lifts",
+    "Weigh in daily at same time (morning, before eating); use weekly average",
+    "Face pulls on Thursday protect shoulder health given climbing volume",
+    "Do not add heavy pulling work the day after a climbing session",
+    "Retest InBody in ~12 weeks to track muscle vs fat changes",
+  ],
+} as const;
+
+const PLAN_COLORS: Record<string, { border: string; bg: string; text: string; badge: string }> = {
+  blue:   { border: "border-blue-300/16",   bg: "bg-[rgba(37,99,235,0.10)]",   text: "text-blue-200",   badge: "bg-blue-400/15 text-blue-200" },
+  emerald:{ border: "border-emerald-300/16", bg: "bg-[rgba(16,185,129,0.10)]", text: "text-emerald-200", badge: "bg-emerald-400/15 text-emerald-200" },
+  violet: { border: "border-violet-300/16",  bg: "bg-[rgba(139,92,246,0.10)]", text: "text-violet-200",  badge: "bg-violet-400/15 text-violet-200" },
+  cyan:   { border: "border-cyan-300/16",    bg: "bg-[rgba(6,182,212,0.10)]",  text: "text-cyan-200",   badge: "bg-cyan-400/15 text-cyan-200" },
+  amber:  { border: "border-amber-300/16",   bg: "bg-[rgba(245,158,11,0.10)]", text: "text-amber-200",  badge: "bg-amber-400/15 text-amber-200" },
+  slate:  { border: "border-white/8",        bg: "bg-[rgba(30,32,50,0.60)]",   text: "text-slate-300",  badge: "bg-white/8 text-slate-300" },
+};
+
 function HealthDetailPanel({
   dashboard,
   healthEntries,
@@ -1148,10 +1209,137 @@ function HealthDetailPanel({
   onUseTrailForPlanner?: (trail: NearbyTrailItem) => void;
 }) {
   const healthSummary = dashboard?.health_summary ?? null;
-  const [healthAtlasTab, setHealthAtlasTab] = useState<"overview" | "routes">("overview");
+  const [healthAtlasTab, setHealthAtlasTab] = useState<"overview" | "routes" | "nutrition" | "plan">("overview");
+
+  // ── Nutrition state ──────────────────────────────────────────────────────────
+  type FoodLogEntry = { id: string; date: string; name: string; calories: number; protein_g: number; carbs_g: number; fat_g: number; meal: string; logged_at: string };
+  type ManualWorkoutLog = { id: string; date: string; type: string; duration_minutes: number; notes: string; logged_at: string };
+  type MacroTargets = { calories: number; protein_g: number; carbs_g: number; fat_g: number };
+  type DailyFoodLog = { date: string; entries: FoodLogEntry[]; manual_workout: ManualWorkoutLog | null; targets: MacroTargets };
+  type MealPrepItem = { id: string; name: string; calories: number; protein_g: number; carbs_g: number; fat_g: number; notes: string; created_at: string };
+
+  const [nutritionTab, setNutritionTab] = useState<"today" | "log" | "meal-prep" | "history">("today");
+  const [foodLog, setFoodLog] = useState<DailyFoodLog | null>(null);
+  const [mealPrepItems, setMealPrepItems] = useState<MealPrepItem[]>([]);
+  const [foodLogHistory, setFoodLogHistory] = useState<DailyFoodLog[]>([]);
+  const [nutritionLoading, setNutritionLoading] = useState(false);
+  const [nutritionError, setNutritionError] = useState("");
+  const [nutritionFeedback, setNutritionFeedback] = useState("");
+  const [nutritionFeedbackLoading, setNutritionFeedbackLoading] = useState(false);
+  // food form
+  const [fName, setFName] = useState(""); const [fCal, setFCal] = useState(""); const [fPro, setFPro] = useState(""); const [fCarb, setFCarb] = useState(""); const [fFat, setFFat] = useState(""); const [fMeal, setFMeal] = useState("Other");
+  // AI parse
+  const [aiParseText, setAiParseText] = useState(""); const [aiParsing, setAiParsing] = useState(false);
+  // inline edit
+  const [editingEntryId, setEditingEntryId] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState({ name: "", cal: "", pro: "", carb: "", fat: "", meal: "Other" });
+  // workout form
+  const [wType, setWType] = useState("Chest + triceps"); const [wDur, setWDur] = useState(""); const [wNotes, setWNotes] = useState("");
+  // meal prep form
+  const [mpName, setMpName] = useState(""); const [mpCal, setMpCal] = useState(""); const [mpPro, setMpPro] = useState(""); const [mpCarb, setMpCarb] = useState(""); const [mpFat, setMpFat] = useState(""); const [mpNotes, setMpNotes] = useState("");
+
+  const loadFoodLog = async (date: string) => {
+    setNutritionLoading(true); setNutritionError("");
+    try {
+      const res = await fetch(`${API_BASE}/nutrition/log/${date}`);
+      if (!res.ok) throw new Error(`${res.status}`);
+      setFoodLog(await res.json());
+    } catch { setNutritionError("Failed to load food log."); }
+    finally { setNutritionLoading(false); }
+  };
+
+  const loadMealPrep = async () => {
+    try { const res = await fetch(`${API_BASE}/nutrition/meal-prep`); if (res.ok) setMealPrepItems(await res.json()); } catch { /* silent */ }
+  };
+
+  const loadHistory = async () => {
+    try { const res = await fetch(`${API_BASE}/nutrition/history?days=14`); if (res.ok) { const d = await res.json(); setFoodLogHistory(d.days ?? []); } } catch { /* silent */ }
+  };
+
+  const addFood = async () => {
+    if (!fName.trim()) return;
+    try {
+      const res = await fetch(`${API_BASE}/nutrition/log/${activeHealthDate}/entries`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: fName, calories: parseFloat(fCal)||0, protein_g: parseFloat(fPro)||0, carbs_g: parseFloat(fCarb)||0, fat_g: parseFloat(fFat)||0, meal: fMeal }) });
+      if (res.ok) { setFName(""); setFCal(""); setFPro(""); setFCarb(""); setFFat(""); await loadFoodLog(activeHealthDate); }
+    } catch { /* silent */ }
+  };
+
+  const deleteFood = async (id: string) => {
+    try { await fetch(`${API_BASE}/nutrition/log/${activeHealthDate}/entries/${id}`, { method: "DELETE" }); await loadFoodLog(activeHealthDate); } catch { /* silent */ }
+  };
+
+  const startEdit = (f: FoodLogEntry) => {
+    setEditingEntryId(f.id);
+    setEditForm({ name: f.name, cal: String(f.calories), pro: String(f.protein_g), carb: String(f.carbs_g), fat: String(f.fat_g), meal: f.meal });
+  };
+
+  const saveEdit = async () => {
+    if (!editingEntryId) return;
+    try {
+      const res = await fetch(`${API_BASE}/nutrition/log/${activeHealthDate}/entries/${editingEntryId}`, {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: editForm.name, calories: parseFloat(editForm.cal)||0, protein_g: parseFloat(editForm.pro)||0, carbs_g: parseFloat(editForm.carb)||0, fat_g: parseFloat(editForm.fat)||0, meal: editForm.meal }),
+      });
+      if (res.ok) { setEditingEntryId(null); await loadFoodLog(activeHealthDate); }
+    } catch { /* silent */ }
+  };
+
+  const parseFood = async () => {
+    if (!aiParseText.trim()) return;
+    setAiParsing(true);
+    try {
+      const res = await fetch(`${API_BASE}/nutrition/parse-food`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: aiParseText }) });
+      if (res.ok) {
+        const d = await res.json();
+        setFName(d.name ?? ""); setFCal(String(d.calories ?? "")); setFPro(String(d.protein_g ?? "")); setFCarb(String(d.carbs_g ?? "")); setFFat(String(d.fat_g ?? "")); setFMeal(d.meal ?? "Other");
+        setAiParseText("");
+      }
+    } catch { /* silent */ }
+    finally { setAiParsing(false); }
+  };
+
+  const logWorkout = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/nutrition/log/${activeHealthDate}/workout`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ type: wType, duration_minutes: parseInt(wDur)||0, notes: wNotes }) });
+      if (res.ok) { setWDur(""); setWNotes(""); await loadFoodLog(activeHealthDate); }
+    } catch { /* silent */ }
+  };
+
+  const quickAdd = async (item: MealPrepItem) => {
+    try {
+      await fetch(`${API_BASE}/nutrition/log/${activeHealthDate}/entries`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: item.name, calories: item.calories, protein_g: item.protein_g, carbs_g: item.carbs_g, fat_g: item.fat_g, meal: "Meal prep" }) });
+      await loadFoodLog(activeHealthDate);
+    } catch { /* silent */ }
+  };
+
+  const saveMealPrep = async () => {
+    if (!mpName.trim()) return;
+    try {
+      const res = await fetch(`${API_BASE}/nutrition/meal-prep`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: mpName, calories: parseFloat(mpCal)||0, protein_g: parseFloat(mpPro)||0, carbs_g: parseFloat(mpCarb)||0, fat_g: parseFloat(mpFat)||0, notes: mpNotes }) });
+      if (res.ok) { setMpName(""); setMpCal(""); setMpPro(""); setMpCarb(""); setMpFat(""); setMpNotes(""); await loadMealPrep(); }
+    } catch { /* silent */ }
+  };
+
+  const deleteMealPrep = async (id: string) => {
+    try { await fetch(`${API_BASE}/nutrition/meal-prep/${id}`, { method: "DELETE" }); await loadMealPrep(); } catch { /* silent */ }
+  };
+
+  const getNutritionFeedback = async () => {
+    if (!foodLog) return;
+    setNutritionFeedbackLoading(true); setNutritionFeedback("");
+    const totals = foodLog.entries.reduce((a, f) => ({ cal: a.cal + f.calories, pro: a.pro + f.protein_g, carb: a.carb + f.carbs_g, fat: a.fat + f.fat_g }), { cal: 0, pro: 0, carb: 0, fat: 0 });
+    const foodLines = foodLog.entries.map(f => `- ${f.name} (${Math.round(f.calories)} cal, ${Math.round(f.protein_g)}g P, ${Math.round(f.carbs_g)}g C, ${Math.round(f.fat_g)}g F) — ${f.meal}`).join("\n");
+    const workoutLine = foodLog.manual_workout ? `Workout: ${foodLog.manual_workout.type}${foodLog.manual_workout.duration_minutes ? ` — ${foodLog.manual_workout.duration_minutes} min` : ""}${foodLog.manual_workout.notes ? `\nNotes: ${foodLog.manual_workout.notes}` : ""}` : "No workout logged.";
+    const t = foodLog.targets;
+    const question = `Here's my nutrition log for ${activeHealthDate}:\n\nTotals: ${Math.round(totals.cal)} cal / ${Math.round(totals.pro)}g protein / ${Math.round(totals.carb)}g carbs / ${Math.round(totals.fat)}g fat\nTargets: ${t.calories} cal / ${t.protein_g}g protein / ${t.carbs_g}g carbs / ${t.fat_g}g fat\n\nFoods:\n${foodLines || "None logged"}\n\n${workoutLine}\n\nGive me brief, actionable coaching feedback on today's nutrition. Be direct and specific.`;
+    try {
+      const res = await fetch(`${API_BASE}/assistant/ask`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question }) });
+      if (res.ok) { const d = await res.json(); setNutritionFeedback(d.answer || ""); }
+    } catch { /* silent */ }
+    finally { setNutritionFeedbackLoading(false); }
+  };
+
   const [expandedMetricsOpen, setExpandedMetricsOpen] = useState(false);
-  const [plannedRouteOverlay, setPlannedRouteOverlay] = useState<PlannedRouteOverlay | null>(null);
-  const [plannedRouteError, setPlannedRouteError] = useState("");
   const latestHealthDate = healthEntries[0]?.date ?? healthSummary?.today_entry?.date ?? formatLocalDateKey(new Date());
   const earliestHealthDate = healthEntries[healthEntries.length - 1]?.date ?? latestHealthDate;
   const activeHealthDate = selectedHealthDate ?? latestHealthDate;
@@ -1168,56 +1356,13 @@ function HealthDetailPanel({
   const hasMovementMap = Boolean(
     selectedMovementEntry && (selectedMovementEntry.route_points.length || selectedMovementEntry.visits.length)
   );
-  const handlePlannedRouteUpload = async (
-    event: React.ChangeEvent<HTMLInputElement>
-  ) => {
-    const file = event.target.files?.[0];
-    if (!file) {
-      return;
-    }
-
-    try {
-      const text = await file.text();
-      const baseName = file.name.replace(/\.[^.]+$/, "") || "Planned route";
-      const lowerName = file.name.toLowerCase();
-      const parsedRoute =
-        lowerName.endsWith(".gpx")
-          ? parseGpxRoute(text, baseName)
-          : parseGeoJsonRoute(text, baseName);
-
-      if (!parsedRoute?.points.length) {
-        throw new Error("No route points were found in that GPX or GeoJSON file.");
-      }
-
-      setPlannedRouteOverlay(parsedRoute);
-      setPlannedRouteError("");
-    } catch (error) {
-      setPlannedRouteOverlay(null);
-      setPlannedRouteError(
-        error instanceof Error ? error.message : "Unable to import the selected route file."
-      );
-    } finally {
-      event.target.value = "";
-    }
-  };
 
   return (
     <div className="space-y-6">
       <Card className="overflow-hidden rounded-[2rem] border border-white/8 bg-[linear-gradient(180deg,rgba(19,24,42,0.94),rgba(13,15,28,0.94))] shadow-[0_16px_44px_rgba(6,7,14,0.36)] backdrop-blur-xl">
         <CardHeader className="pb-3">
-          <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
-            <div>
-              <div className="inline-flex items-center gap-2 rounded-full border border-cyan-300/18 bg-cyan-400/10 px-3 py-1 text-[11px] uppercase tracking-[0.2em] text-cyan-100">
-                <Activity className="h-4 w-4" />
-                Health Atlas
-              </div>
-              <CardTitle className="mt-3 text-xl text-white">
-                Daily health, workouts, and movement together
-              </CardTitle>
-              <p className="mt-2 text-sm leading-6 text-slate-300">
-                A calmer view of body signals, logged workouts, and your location-based movement story.
-              </p>
-            </div>
+          <div className="flex items-center justify-between gap-4">
+            <CardTitle className="text-xl text-white">Health</CardTitle>
             {onBackToDashboard ? (
               <Button variant="outline" className="rounded-2xl" onClick={onBackToDashboard}>
                 Back to dashboard
@@ -1228,9 +1373,6 @@ function HealthDetailPanel({
             <div>
               <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Selected day</div>
               <div className="mt-1 text-base font-semibold text-white">{formatSelectedDayLabel(activeHealthDate)}</div>
-              <div className="mt-1 text-xs text-slate-400">
-                Use the arrows for day-by-day review or jump with the calendar.
-              </div>
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <Button
@@ -1271,366 +1413,610 @@ function HealthDetailPanel({
                   : "border-white/10 bg-white/5 text-slate-300 hover:border-white/20"
               }`}
             >
-              Overview
+              Body
             </button>
             <button
               type="button"
-              onClick={() => setHealthAtlasTab("routes")}
+              onClick={() => { setHealthAtlasTab("routes"); void loadFoodLog(activeHealthDate); }}
               className={`rounded-full border px-3 py-1.5 text-xs uppercase tracking-[0.18em] transition ${
                 healthAtlasTab === "routes"
                   ? "border-emerald-300/25 bg-emerald-400/12 text-emerald-100"
                   : "border-white/10 bg-white/5 text-slate-300 hover:border-white/20"
               }`}
             >
-              Routes
+              Activity
+            </button>
+            <button
+              type="button"
+              onClick={() => { setHealthAtlasTab("nutrition"); void loadFoodLog(activeHealthDate); void loadMealPrep(); }}
+              className={`rounded-full border px-3 py-1.5 text-xs uppercase tracking-[0.18em] transition ${
+                healthAtlasTab === "nutrition"
+                  ? "border-orange-300/25 bg-orange-400/12 text-orange-100"
+                  : "border-white/10 bg-white/5 text-slate-300 hover:border-white/20"
+              }`}
+            >
+              Nutrition
+            </button>
+            <button
+              type="button"
+              onClick={() => setHealthAtlasTab("plan")}
+              className={`rounded-full border px-3 py-1.5 text-xs uppercase tracking-[0.18em] transition ${
+                healthAtlasTab === "plan"
+                  ? "border-violet-300/25 bg-violet-400/12 text-violet-100"
+                  : "border-white/10 bg-white/5 text-slate-300 hover:border-white/20"
+              }`}
+            >
+              Plan
             </button>
           </div>
         </CardHeader>
         <CardContent>
-          {selectedHealthEntry || selectedMovementEntry ? (
-            <div className="space-y-5">
-              {healthSummary ? (
-                <div className="grid gap-3 xl:grid-cols-[1.35fr_0.85fr_0.85fr_0.95fr]">
-                  <div className="rounded-[1.6rem] border border-cyan-300/16 bg-[linear-gradient(135deg,rgba(37,99,235,0.16),rgba(17,19,34,0.64))] p-5">
-                    <div className="text-xs uppercase tracking-[0.2em] text-cyan-100/80">Day baseline</div>
-                    <div className="mt-3 text-3xl font-semibold text-white">
-                      {formatHealthStat(selectedHealthEntry?.steps)}
-                    </div>
-                    <div className="mt-2 flex flex-wrap gap-2 text-xs text-cyan-100">
-                      <span className="rounded-full border border-cyan-300/25 bg-black/10 px-3 py-1">
-                        7-day avg {formatHealthStat(healthSummary.seven_day_avg_steps)}
-                      </span>
-                      <span className="rounded-full border border-cyan-300/25 bg-black/10 px-3 py-1">
-                        {healthSummary.streak_days} day streak
-                      </span>
-                    </div>
-                  </div>
-                  <div className="rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4">
-                    <div className="text-xs uppercase tracking-wide text-slate-400">Active energy</div>
-                    <div className="mt-2 text-2xl font-semibold text-white">
-                      {formatHealthStat(selectedHealthEntry?.active_energy_kcal)} Cal
-                    </div>
-                    <div className="mt-2 text-xs text-slate-400">
-                      {healthSummary.streak_days} day movement streak
-                    </div>
-                  </div>
-                  <div className="rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4">
-                    <div className="text-xs uppercase tracking-wide text-slate-400">Sleep average</div>
-                    <div className="mt-2 text-2xl font-semibold text-white">
-                      {formatHealthStat(healthSummary.seven_day_avg_sleep_hours, 1)} hr
-                    </div>
-                    <div className="mt-2 text-xs text-slate-400">
-                      Workouts logged {formatHealthStat(selectedHealthEntry?.workouts)}
-                    </div>
-                  </div>
-                  <div className="rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4">
-                    <div className="text-xs uppercase tracking-wide text-slate-400">Resting heart rate</div>
-                    <div className="mt-2 text-2xl font-semibold text-white">
-                      {formatHealthStat(selectedHealthEntry?.resting_heart_rate)} bpm
-                    </div>
-                    <div className="mt-2 text-xs text-slate-400">
-                      Latest sync {healthSummary.last_synced_at ? formatScheduleDateTime(healthSummary.last_synced_at) : "unknown"}
-                    </div>
-                  </div>
-                </div>
-              ) : null}
 
-              {healthSummary ? (
-                <div className="rounded-[1.5rem] border border-cyan-300/15 bg-[linear-gradient(135deg,rgba(56,189,248,0.12),rgba(35,37,58,0.85))] p-4">
-                  <div className="flex flex-wrap items-center gap-2 text-xs text-cyan-100">
+          {/* ── BODY TAB ── */}
+          {healthAtlasTab === "overview" && (
+            selectedHealthEntry ? (
+              <div className="space-y-5">
+                {healthSummary ? (
+                  <div className="grid gap-3 xl:grid-cols-[1.35fr_0.85fr_0.85fr_0.95fr]">
+                    <div className="rounded-[1.6rem] border border-cyan-300/16 bg-[linear-gradient(135deg,rgba(37,99,235,0.16),rgba(17,19,34,0.64))] p-5">
+                      <div className="text-xs uppercase tracking-[0.2em] text-cyan-100/80">Steps</div>
+                      <div className="mt-3 text-3xl font-semibold text-white">
+                        {formatHealthStat(selectedHealthEntry?.steps)}
+                      </div>
+                      <div className="mt-2 flex flex-wrap gap-2 text-xs text-cyan-100">
+                        <span className="rounded-full border border-cyan-300/25 bg-black/10 px-3 py-1">
+                          7-day avg {formatHealthStat(healthSummary.seven_day_avg_steps)}
+                        </span>
+                        <span className="rounded-full border border-cyan-300/25 bg-black/10 px-3 py-1">
+                          {healthSummary.streak_days} day streak
+                        </span>
+                      </div>
+                    </div>
+                    <div className="rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4">
+                      <div className="text-xs uppercase tracking-wide text-slate-400">Active energy</div>
+                      <div className="mt-2 text-2xl font-semibold text-white">
+                        {formatHealthStat(selectedHealthEntry?.active_energy_kcal)} Cal
+                      </div>
+                      <div className="mt-2 text-xs text-slate-400">
+                        {healthSummary.streak_days} day streak
+                      </div>
+                    </div>
+                    <div className="rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4">
+                      <div className="text-xs uppercase tracking-wide text-slate-400">Sleep average</div>
+                      <div className="mt-2 text-2xl font-semibold text-white">
+                        {formatHealthStat(healthSummary.seven_day_avg_sleep_hours, 1)} hr
+                      </div>
+                      <div className="mt-2 text-xs text-slate-400">
+                        7-day average
+                      </div>
+                    </div>
+                    <div className="rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4">
+                      <div className="text-xs uppercase tracking-wide text-slate-400">Resting heart rate</div>
+                      <div className="mt-2 text-2xl font-semibold text-white">
+                        {formatHealthStat(selectedHealthEntry?.resting_heart_rate)} bpm
+                      </div>
+                      <div className="mt-2 text-xs text-slate-400">
+                        Synced {healthSummary.last_synced_at ? formatScheduleDateTime(healthSummary.last_synced_at) : "unknown"}
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+
+                {healthSummary ? (
+                  <div className="flex flex-wrap gap-2">
                     {healthSummary.latest_date ? (
-                      <span className="rounded-full border border-cyan-300/25 bg-cyan-400/10 px-2.5 py-1">
-                        Latest data date {healthSummary.latest_date}
+                      <span className="rounded-full border border-cyan-300/25 bg-cyan-400/10 px-2.5 py-1 text-xs text-cyan-100">
+                        Latest data {healthSummary.latest_date}
                       </span>
                     ) : null}
-                    <span className="rounded-full border border-cyan-300/25 bg-cyan-400/10 px-2.5 py-1">
+                    <span className="rounded-full border border-cyan-300/25 bg-cyan-400/10 px-2.5 py-1 text-xs text-cyan-100">
                       {healthSummary.recent_entries.length} synced day{healthSummary.recent_entries.length === 1 ? "" : "s"}
                     </span>
                   </div>
-                </div>
-              ) : null}
+                ) : null}
 
-              {selectedHealthEntry?.extra_metrics &&
-              Object.keys(selectedHealthEntry.extra_metrics).length ? (
-                <div className="rounded-[1.5rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4">
-                  <button
-                    type="button"
-                    onClick={() => setExpandedMetricsOpen((current) => !current)}
-                    className="flex w-full items-center justify-between gap-3 text-left"
-                  >
-                    <div>
+                {selectedHealthEntry?.extra_metrics &&
+                Object.keys(selectedHealthEntry.extra_metrics).length ? (
+                  <div className="rounded-[1.5rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4">
+                    <button
+                      type="button"
+                      onClick={() => setExpandedMetricsOpen((current) => !current)}
+                      className="flex w-full items-center justify-between gap-3 text-left"
+                    >
                       <div className="text-xs uppercase tracking-wide text-slate-400">Expanded metrics</div>
-                      <div className="mt-1 text-xs text-slate-500">
-                        {expandedMetricsOpen ? "Hide detailed measurements" : "Show detailed measurements"}
+                      <span className="text-xs text-cyan-200">{expandedMetricsOpen ? "Hide" : "Show"}</span>
+                    </button>
+                    {expandedMetricsOpen ? (
+                      <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+                        {Object.entries(selectedHealthEntry.extra_metrics)
+                          .filter(([, value]) => value !== null && value !== undefined)
+                          .map(([key, value]) => (
+                            <div key={key} className="rounded-[1rem] border border-white/6 bg-[rgba(17,19,34,0.45)] px-3 py-2">
+                              <div className="text-xs uppercase tracking-wide text-slate-400">{healthMetricLabel(key)}</div>
+                              <div className="mt-1 text-sm font-medium text-slate-100">{formatHealthMetricValue(key, value)}</div>
+                            </div>
+                          ))}
                       </div>
-                    </div>
-                    <span className="text-xs text-cyan-200">
-                      {expandedMetricsOpen ? "Hide" : "Show"}
-                    </span>
-                  </button>
-                  {expandedMetricsOpen ? (
-                    <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-                      {Object.entries(selectedHealthEntry.extra_metrics)
-                        .filter(([, value]) => value !== null && value !== undefined)
-                        .map(([key, value]) => (
-                          <div
-                            key={key}
-                            className="rounded-[1rem] border border-white/6 bg-[rgba(17,19,34,0.45)] px-3 py-2"
-                          >
-                            <div className="text-xs uppercase tracking-wide text-slate-400">
-                              {healthMetricLabel(key)}
-                            </div>
-                            <div className="mt-1 text-sm font-medium text-slate-100">
-                              {formatHealthMetricValue(key, value)}
-                            </div>
-                          </div>
-                        ))}
-                    </div>
-                  ) : null}
-                </div>
-              ) : null}
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+            ) : (
+              <div className="rounded-[1.6rem] border border-dashed border-white/10 p-6 text-sm text-slate-400">
+                {loading ? "Loading health data…" : "No Apple Health data synced yet. Use the iPhone app to send data into Jarvis."}
+              </div>
+            )
+          )}
 
-              <Card className="rounded-[1.5rem] border border-white/6 bg-[rgba(35,37,58,0.72)] shadow-none">
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-base">Workout spotlight</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  {featuredWorkout ? (
-                    <div className="rounded-[1.2rem] border border-white/6 bg-[rgba(17,19,34,0.45)] px-4 py-4">
+          {/* ── ACTIVITY TAB ── */}
+          {healthAtlasTab === "routes" && (
+            <div className="space-y-5">
+              {/* Manual workout */}
+              <div className="rounded-[1.5rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-5">
+                <div className="mb-3 text-xs uppercase tracking-[0.2em] text-slate-400">Logged workout — {activeHealthDate}</div>
+                {nutritionLoading ? (
+                  <div className="text-sm text-slate-400">Loading…</div>
+                ) : foodLog?.manual_workout ? (
+                  <div>
+                    <span className="rounded-full bg-emerald-500/15 px-2.5 py-1 text-xs font-medium text-emerald-300">
+                      {foodLog.manual_workout.type}
+                    </span>
+                    {foodLog.manual_workout.duration_minutes ? (
+                      <span className="ml-2 text-sm text-slate-400">{foodLog.manual_workout.duration_minutes} min</span>
+                    ) : null}
+                    {foodLog.manual_workout.notes ? (
+                      <div className="mt-2 text-sm text-slate-300">{foodLog.manual_workout.notes}</div>
+                    ) : null}
+                  </div>
+                ) : (
+                  <div className="text-sm text-slate-500">
+                    No workout logged for this day. Use <span className="text-slate-300">Nutrition → Log Food</span> to add one.
+                  </div>
+                )}
+              </div>
+
+              {/* HealthKit workouts */}
+              {selectedWorkoutEntries.length > 0 && (
+                <div className="space-y-3">
+                  <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Apple Health workouts</div>
+                  {selectedWorkoutEntries.map((workout) => (
+                    <div key={workout.workout_id} className="rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4">
                       <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
                         <div>
                           <div className="text-sm font-medium text-slate-100">
-                            {formatWorkoutLabel(featuredWorkout.activity_label, featuredWorkout.activity_type)}
+                            {formatWorkoutLabel(workout.activity_label, workout.activity_type)}
                           </div>
-                          <div className="mt-1 text-xs text-slate-400">
-                            {formatScheduleDateTime(featuredWorkout.start_date)}
-                          </div>
+                          <div className="mt-1 text-xs text-slate-400">{formatScheduleDateTime(workout.start_date)}</div>
                         </div>
                         <div className="flex flex-wrap gap-3 text-xs text-slate-300">
-                          <span>{formatHealthStat(featuredWorkout.duration_minutes, 0)} min</span>
-                          <span>{formatDistanceMiles(featuredWorkout.total_distance_km, 1)}</span>
-                          <span>{formatHealthStat(featuredWorkout.active_energy_kcal)} Cal</span>
-                          <span>{formatHealthStat(featuredWorkout.avg_heart_rate_bpm)} avg bpm</span>
+                          <span>{formatHealthStat(workout.duration_minutes, 0)} min</span>
+                          <span>{formatDistanceMiles(workout.total_distance_km, 1)}</span>
+                          <span>{formatHealthStat(workout.active_energy_kcal)} Cal</span>
+                          <span>{formatHealthStat(workout.avg_heart_rate_bpm)} avg bpm</span>
                         </div>
                       </div>
+                      {workout.route_points.length > 1 && (
+                        <div className="mt-3 overflow-hidden rounded-[1.2rem] border border-white/8">
+                          <MovementMap entry={workoutToMapEntry(workout)} className="h-[280px]" />
+                        </div>
+                      )}
                     </div>
-                  ) : (
-                    <div className="rounded-[1rem] border border-dashed border-white/10 px-4 py-3 text-sm text-slate-400">
-                      No workout history has been synced yet.
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
+                  ))}
+                </div>
+              )}
 
-              {healthAtlasTab === "routes" ? (
-              <Card className="rounded-[1.5rem] border border-white/6 bg-[rgba(35,37,58,0.72)] shadow-none">
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-base">Movement journal</CardTitle>
-                  <p className="text-sm leading-6 text-slate-300">
-                    A more narrative look at your day: where you went, how the day flowed, and the shape of your movement.
-                  </p>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  {selectedMovementEntry ? (
-                    <>
-                      <div className="rounded-[1.5rem] border border-emerald-300/15 bg-[linear-gradient(135deg,rgba(16,185,129,0.16),rgba(14,18,30,0.92))] p-5">
-                        <div className="text-xs uppercase tracking-[0.22em] text-emerald-100/80">Movement story</div>
-                        <div className="mt-3 text-lg font-semibold text-white">
-                          {formatMovementStoryText(selectedMovementEntry.movement_story, {
-                            selectedDate: activeHealthDate,
-                          })}
-                        </div>
-                        <div className="mt-4 grid gap-3 md:grid-cols-3">
-                          <div className="rounded-[1.1rem] border border-white/8 bg-black/10 px-4 py-3">
-                            <div className="text-[11px] uppercase tracking-[0.18em] text-slate-300">Distance</div>
-                            <div className="mt-1 text-xl font-semibold text-white">
-                              {formatDistanceMiles(selectedMovementEntry.total_distance_km, 1)}
-                            </div>
-                          </div>
-                          <div className="rounded-[1.1rem] border border-white/8 bg-black/10 px-4 py-3">
-                            <div className="text-[11px] uppercase tracking-[0.18em] text-slate-300">Away from home</div>
-                            <div className="mt-1 text-xl font-semibold text-white">
-                              {formatMinutes(selectedMovementEntry.time_away_minutes)}
-                            </div>
-                          </div>
-                          <div className="rounded-[1.1rem] border border-white/8 bg-black/10 px-4 py-3">
-                            <div className="text-[11px] uppercase tracking-[0.18em] text-slate-300">Visited places</div>
-                            <div className="mt-1 text-xl font-semibold text-white">
-                              {selectedMovementEntry.visited_places_count}
-                            </div>
-                          </div>
-                        </div>
+              {/* Movement journal */}
+              {selectedMovementEntry ? (
+                <div className="space-y-4">
+                  <div className="rounded-[1.5rem] border border-emerald-300/15 bg-[linear-gradient(135deg,rgba(16,185,129,0.16),rgba(14,18,30,0.92))] p-5">
+                    <div className="text-xs uppercase tracking-[0.22em] text-emerald-100/80">Movement story</div>
+                    <div className="mt-3 text-lg font-semibold text-white">
+                      {formatMovementStoryText(selectedMovementEntry.movement_story, { selectedDate: activeHealthDate })}
+                    </div>
+                    <div className="mt-4 grid gap-3 md:grid-cols-3">
+                      <div className="rounded-[1.1rem] border border-white/8 bg-black/10 px-4 py-3">
+                        <div className="text-[11px] uppercase tracking-[0.18em] text-slate-300">Distance</div>
+                        <div className="mt-1 text-xl font-semibold text-white">{formatDistanceMiles(selectedMovementEntry.total_distance_km, 1)}</div>
                       </div>
+                      <div className="rounded-[1.1rem] border border-white/8 bg-black/10 px-4 py-3">
+                        <div className="text-[11px] uppercase tracking-[0.18em] text-slate-300">Away from home</div>
+                        <div className="mt-1 text-xl font-semibold text-white">{formatMinutes(selectedMovementEntry.time_away_minutes)}</div>
+                      </div>
+                      <div className="rounded-[1.1rem] border border-white/8 bg-black/10 px-4 py-3">
+                        <div className="text-[11px] uppercase tracking-[0.18em] text-slate-300">Visited places</div>
+                        <div className="mt-1 text-xl font-semibold text-white">{selectedMovementEntry.visited_places_count}</div>
+                      </div>
+                    </div>
+                  </div>
 
-                      {hasMovementMap ? (
-                        <div className="rounded-[1.3rem] border border-white/6 bg-[rgba(17,19,34,0.45)] p-4">
-                          <div className="flex items-center justify-between gap-3">
-                            <div>
-                              <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Route postcard</div>
-                              <div className="mt-1 text-sm text-slate-300">A quiet geographic view of today&apos;s movement path.</div>
-                            </div>
-                            <div className="text-xs text-slate-400">
-                              {selectedMovementEntry.route_points.length || selectedMovementEntry.visits.length} points
-                            </div>
+                  {hasMovementMap ? (
+                    <div className="overflow-hidden rounded-[1.3rem] border border-white/6 bg-[rgba(17,19,34,0.45)]">
+                      <MovementMap entry={selectedMovementEntry} className="h-[440px] xl:h-[500px]" />
+                      <div className="flex flex-wrap gap-2 px-4 py-3 text-xs text-slate-300">
+                        <span className="rounded-full border border-emerald-300/20 bg-emerald-400/10 px-3 py-1">Start</span>
+                        <span className="rounded-full border border-cyan-300/20 bg-cyan-400/10 px-3 py-1">End</span>
+                        <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1">{selectedMovementEntry.place_labels.length} labeled places</span>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                    {[
+                      { label: "Travel", val: formatDistanceMiles(selectedMovementEntry.total_distance_km, 1), sub: `${selectedMovementEntry.route_points.length} route points` },
+                      { label: "Away time", val: formatMinutes(selectedMovementEntry.time_away_minutes), sub: `${selectedMovementEntry.visited_places_count} visit event${selectedMovementEntry.visited_places_count === 1 ? "" : "s"}` },
+                      { label: "Commute window", val: formatMovementWindow(selectedMovementEntry.commute_start, selectedMovementEntry.commute_end), sub: selectedMovementEntry.synced_at ? `Synced ${formatScheduleDateTime(selectedMovementEntry.synced_at)}` : "" },
+                      { label: "Places", val: String(selectedMovementEntry.place_labels.length), sub: "labels captured" },
+                    ].map(({ label, val, sub }) => (
+                      <div key={label} className="rounded-[1.2rem] border border-white/6 bg-[rgba(17,19,34,0.45)] p-4">
+                        <div className="text-xs uppercase tracking-wide text-slate-400">{label}</div>
+                        <div className="mt-2 text-xl font-semibold text-white">{val}</div>
+                        <div className="mt-1 text-xs text-slate-400">{sub}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {selectedMovementEntry.place_labels.length ? (
+                    <div className="flex flex-wrap gap-2">
+                      {selectedMovementEntry.place_labels.map((label) => (
+                        <span key={label} className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-slate-300">{label}</span>
+                      ))}
+                    </div>
+                  ) : null}
+
+                  <div className="rounded-[1.3rem] border border-white/6 bg-[rgba(17,19,34,0.45)] p-4">
+                    <div className="mb-3 text-xs uppercase tracking-[0.18em] text-slate-400">Movement storyboard</div>
+                    <div className="space-y-3">
+                      {movementStoryboard.length ? movementStoryboard.map((item, index) => (
+                        <div key={item.id} className="flex gap-3 rounded-[1rem] border border-white/6 bg-[rgba(255,255,255,0.03)] px-4 py-3">
+                          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-emerald-400/15 text-xs font-semibold text-emerald-100">
+                            {index + 1}
                           </div>
-                          <div className="mt-4 overflow-hidden rounded-[1.2rem] border border-white/8 bg-[radial-gradient(circle_at_top_left,rgba(16,185,129,0.14),transparent_32%),linear-gradient(180deg,rgba(9,12,22,0.96),rgba(15,18,28,0.96))]">
-                            <MovementMap entry={selectedMovementEntry} className="h-[460px] xl:h-[520px]" />
-                          </div>
-                          <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-300">
-                            <span className="rounded-full border border-emerald-300/20 bg-emerald-400/10 px-3 py-1">Start</span>
-                            <span className="rounded-full border border-cyan-300/20 bg-cyan-400/10 px-3 py-1">End</span>
-                            <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1">{selectedMovementEntry.place_labels.length} labeled places</span>
+                          <div className="min-w-0">
+                            <div className="text-sm font-medium text-slate-100">{item.title}</div>
+                            <div className="mt-1 text-sm text-slate-300">{item.detail}</div>
+                            {item.meta ? <div className="mt-1 text-xs text-slate-500">{item.meta}</div> : null}
                           </div>
                         </div>
-                      ) : null}
+                      )) : (
+                        <div className="rounded-[1rem] border border-dashed border-white/10 px-4 py-3 text-sm text-slate-400">
+                          No movement storyboard yet.
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ) : !featuredWorkout && !foodLog?.manual_workout && !nutritionLoading ? (
+                <div className="rounded-[1.6rem] border border-dashed border-white/10 p-6 text-sm text-slate-400">
+                  {movementLoading ? "Loading activity data…" : "No activity data for this day. Log a workout in the Nutrition tab, or sync Apple Health workouts via the iPhone app."}
+                </div>
+              ) : null}
+            </div>
+          )}
 
+          {/* ── NUTRITION TAB ── */}
+          {healthAtlasTab === "nutrition" ? (
+            <div className="space-y-4">
+              {/* Sub-nav */}
+              <div className="flex flex-wrap gap-2">
+                {(["today", "log", "meal-prep", "history"] as const).map((t) => (
+                  <button key={t} type="button"
+                    onClick={() => { setNutritionTab(t); if (t === "history") void loadHistory(); if (t === "meal-prep") void loadMealPrep(); }}
+                    className={`rounded-full border px-3 py-1.5 text-xs uppercase tracking-[0.18em] transition ${nutritionTab === t ? "border-orange-300/25 bg-orange-400/12 text-orange-100" : "border-white/10 bg-white/5 text-slate-300 hover:border-white/20"}`}
+                  >
+                    {t === "log" ? "Log Food" : t === "meal-prep" ? "Meal Prep" : t.charAt(0).toUpperCase() + t.slice(1)}
+                  </button>
+                ))}
+              </div>
 
-                      {healthAtlasTab === "routes" ? (
-                        <>
-                          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                            <div className="rounded-[1.2rem] border border-white/6 bg-[rgba(17,19,34,0.45)] p-4">
-                              <div className="text-xs uppercase tracking-wide text-slate-400">Travel</div>
-                              <div className="mt-2 text-2xl font-semibold text-white">
-                                {formatDistanceMiles(selectedMovementEntry.total_distance_km, 1)}
-                              </div>
-                              <div className="mt-2 text-xs text-slate-400">
-                                {selectedMovementEntry.route_points.length} route points
-                              </div>
-                            </div>
-                            <div className="rounded-[1.2rem] border border-white/6 bg-[rgba(17,19,34,0.45)] p-4">
-                              <div className="text-xs uppercase tracking-wide text-slate-400">Away time</div>
-                              <div className="mt-2 text-2xl font-semibold text-white">
-                                {formatMinutes(selectedMovementEntry.time_away_minutes)}
-                              </div>
-                              <div className="mt-2 text-xs text-slate-400">
-                                {selectedMovementEntry.visited_places_count} visit event{selectedMovementEntry.visited_places_count === 1 ? "" : "s"}
-                              </div>
-                            </div>
-                            <div className="rounded-[1.2rem] border border-white/6 bg-[rgba(17,19,34,0.45)] p-4">
-                              <div className="text-xs uppercase tracking-wide text-slate-400">Commute window</div>
-                              <div className="mt-2 text-sm font-semibold text-white">
-                                {formatMovementWindow(selectedMovementEntry.commute_start, selectedMovementEntry.commute_end)}
-                              </div>
-                              <div className="mt-2 text-xs text-slate-400">
-                                Synced {selectedMovementEntry.synced_at ? formatScheduleDateTime(selectedMovementEntry.synced_at) : "unknown"}
-                              </div>
-                            </div>
-                            <div className="rounded-[1.2rem] border border-white/6 bg-[rgba(17,19,34,0.45)] p-4">
-                              <div className="text-xs uppercase tracking-wide text-slate-400">Places</div>
-                              <div className="mt-2 text-2xl font-semibold text-white">
-                                {selectedMovementEntry.place_labels.length}
-                              </div>
-                              <div className="mt-2 text-xs text-slate-400">
-                                labels captured
-                              </div>
-                            </div>
-                          </div>
+              {nutritionError ? <div className="rounded-xl bg-red-500/10 px-4 py-2 text-sm text-red-300">{nutritionError}</div> : null}
 
-                          {selectedMovementEntry.place_labels.length ? (
-                            <div className="flex flex-wrap gap-2">
-                              {selectedMovementEntry.place_labels.map((label) => (
-                                <span
-                                  key={label}
-                                  className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-slate-300"
-                                >
-                                  {label}
-                                </span>
-                              ))}
-                            </div>
-                          ) : null}
+              {/* TODAY TAB */}
+              {nutritionTab === "today" && (() => {
+                const t = foodLog?.targets ?? { calories: 2600, protein_g: 155, carbs_g: 320, fat_g: 75 };
+                const totals = (foodLog?.entries ?? []).reduce((a, f) => ({ cal: a.cal + f.calories, pro: a.pro + f.protein_g, carb: a.carb + f.carbs_g, fat: a.fat + f.fat_g }), { cal: 0, pro: 0, carb: 0, fat: 0 });
+                const pct = (v: number, max: number) => Math.min(100, Math.round((v / max) * 100));
+                return (
+                  <div className="space-y-4">
+                    {nutritionLoading ? <div className="text-sm text-slate-400">Loading...</div> : null}
+                    <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                      {[
+                        { label: "Calories", val: Math.round(totals.cal), target: t.calories, unit: "kcal", color: "text-blue-300" },
+                        { label: "Protein", val: Math.round(totals.pro), target: t.protein_g, unit: "g", color: "text-emerald-300" },
+                        { label: "Carbs", val: Math.round(totals.carb), target: t.carbs_g, unit: "g", color: "text-amber-300" },
+                        { label: "Fat", val: Math.round(totals.fat), target: t.fat_g, unit: "g", color: "text-pink-300" },
+                      ].map(({ label, val, target, unit, color }) => (
+                        <div key={label} className="rounded-[1.2rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4">
+                          <div className="text-xs text-slate-400">{label}</div>
+                          <div className={`mt-1 text-2xl font-semibold ${color}`}>{val}<span className="ml-1 text-sm font-normal text-slate-400">{unit}</span></div>
+                          <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/10"><div className="h-full rounded-full bg-current opacity-70 transition-all" style={{ width: `${pct(val, target)}%` }} /></div>
+                          <div className="mt-1 text-xs text-slate-500">{pct(val, target)}% of {target}{unit}</div>
+                        </div>
+                      ))}
+                    </div>
 
-                          <div className="rounded-[1.3rem] border border-white/6 bg-[rgba(17,19,34,0.45)] p-4">
-                            <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Movement storyboard</div>
-                            <div className="mt-3 space-y-3">
-                              {movementStoryboard.length ? movementStoryboard.map((item, index) => (
-                                <div
-                                  key={item.id}
-                                  className="flex gap-3 rounded-[1rem] border border-white/6 bg-[rgba(255,255,255,0.03)] px-4 py-3"
-                                >
-                                  <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-emerald-400/15 text-xs font-semibold text-emerald-100">
-                                    {index + 1}
+                    <div className="rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4">
+                      <div className="mb-3 text-xs uppercase tracking-[0.18em] text-slate-400">Food log — {activeHealthDate}</div>
+                      {(foodLog?.entries ?? []).length === 0 ? (
+                        <div className="text-sm text-slate-500">Nothing logged yet. Use the Log Food tab to add entries.</div>
+                      ) : (
+                        <div className="space-y-2">
+                          {(foodLog?.entries ?? []).map((f) => (
+                            <div key={f.id} className="rounded-xl border border-white/5 bg-white/3 px-4 py-2">
+                              {editingEntryId === f.id ? (
+                                <div className="space-y-2">
+                                  <input value={editForm.name} onChange={e => setEditForm(p => ({ ...p, name: e.target.value }))} placeholder="Food name" className="w-full rounded-lg border border-white/10 bg-white/5 px-2 py-1.5 text-sm text-slate-100 outline-none focus:border-orange-300/40" />
+                                  <div className="grid grid-cols-2 gap-2">
+                                    {([["Cal", "cal"], ["Protein g", "pro"], ["Carbs g", "carb"], ["Fat g", "fat"]] as const).map(([label, key]) => (
+                                      <input key={key} type="number" value={editForm[key]} onChange={e => setEditForm(p => ({ ...p, [key]: e.target.value }))} placeholder={label} min="0" className="rounded-lg border border-white/10 bg-white/5 px-2 py-1.5 text-sm text-slate-100 outline-none focus:border-orange-300/40" />
+                                    ))}
                                   </div>
-                                  <div className="min-w-0">
-                                    <div className="text-sm font-medium text-slate-100">{item.title}</div>
-                                    <div className="mt-1 text-sm text-slate-300">{item.detail}</div>
-                                    {item.meta ? (
-                                      <div className="mt-1 text-xs text-slate-500">{item.meta}</div>
-                                    ) : null}
+                                  <select value={editForm.meal} onChange={e => setEditForm(p => ({ ...p, meal: e.target.value }))} className="w-full rounded-lg border border-white/10 bg-[rgba(20,22,37,0.88)] px-2 py-1.5 text-sm text-slate-100 outline-none">
+                                    {["Breakfast","Lunch","Pre-workout","Dinner","Snack","Other"].map(m => <option key={m}>{m}</option>)}
+                                  </select>
+                                  <div className="flex gap-2">
+                                    <button onClick={() => void saveEdit()} disabled={!editForm.name.trim()} className="flex-1 rounded-xl border border-orange-300/20 bg-orange-400/10 py-1.5 text-xs text-orange-200 hover:bg-orange-400/20 disabled:opacity-50">Save</button>
+                                    <button onClick={() => setEditingEntryId(null)} className="flex-1 rounded-xl border border-white/10 bg-white/5 py-1.5 text-xs text-slate-400 hover:bg-white/10">Cancel</button>
                                   </div>
                                 </div>
-                              )) : (
-                                <div className="rounded-[1rem] border border-dashed border-white/10 px-4 py-3 text-sm text-slate-400">
-                                  No visits have been turned into a movement storyboard yet.
+                              ) : (
+                                <div className="flex items-center justify-between gap-4">
+                                  <div>
+                                    <div className="text-sm text-slate-100">{f.name}</div>
+                                    <div className="text-xs text-slate-500">{f.meal} · {Math.round(f.calories)} cal · {Math.round(f.protein_g)}g P · {Math.round(f.carbs_g)}g C · {Math.round(f.fat_g)}g F</div>
+                                  </div>
+                                  <div className="flex shrink-0 gap-2">
+                                    <button onClick={() => startEdit(f)} className="text-slate-500 hover:text-slate-200" title="Edit">✎</button>
+                                    <button onClick={() => void deleteFood(f.id)} className="text-slate-500 hover:text-red-400" title="Delete">✕</button>
+                                  </div>
                                 </div>
                               )}
                             </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4">
+                      <div className="mb-3 text-xs uppercase tracking-[0.18em] text-slate-400">Workout — {activeHealthDate}</div>
+                      {foodLog?.manual_workout ? (
+                        <div className="text-sm text-slate-200">
+                          <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-xs text-emerald-300">{foodLog.manual_workout.type}</span>
+                          {foodLog.manual_workout.duration_minutes ? <span className="ml-2 text-slate-400">{foodLog.manual_workout.duration_minutes} min</span> : null}
+                          {foodLog.manual_workout.notes ? <div className="mt-1 text-xs text-slate-400">{foodLog.manual_workout.notes}</div> : null}
+                        </div>
+                      ) : (
+                        <div className="text-sm text-slate-500">No workout logged. Use the Log Food tab to add one.</div>
+                      )}
+                    </div>
+
+                    <div className="rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4">
+                      <div className="mb-3 text-xs uppercase tracking-[0.18em] text-slate-400">AI coaching feedback</div>
+                      {nutritionFeedback ? (
+                        <p className="text-sm leading-7 text-slate-200">{nutritionFeedback}</p>
+                      ) : (
+                        <button onClick={() => void getNutritionFeedback()} disabled={nutritionFeedbackLoading || !foodLog}
+                          className="rounded-2xl border border-orange-300/20 bg-orange-400/10 px-4 py-2 text-sm text-orange-200 transition hover:bg-orange-400/20 disabled:opacity-50">
+                          {nutritionFeedbackLoading ? "Getting feedback…" : "Get coaching feedback →"}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* LOG FOOD TAB */}
+              {nutritionTab === "log" && (
+                <div className="space-y-4">
+                  {mealPrepItems.length > 0 && (
+                    <div className="rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4">
+                      <div className="mb-3 text-xs uppercase tracking-[0.18em] text-slate-400">Quick add from meal prep</div>
+                      <div className="space-y-2">
+                        {mealPrepItems.map((item) => (
+                          <div key={item.id} className="flex items-center justify-between gap-4 rounded-xl border border-white/5 bg-white/3 px-4 py-2">
+                            <div>
+                              <div className="text-sm text-slate-100">{item.name}</div>
+                              <div className="text-xs text-slate-500">{Math.round(item.calories)} cal · {Math.round(item.protein_g)}g P · {Math.round(item.carbs_g)}g C · {Math.round(item.fat_g)}g F</div>
+                            </div>
+                            <button onClick={() => void quickAdd(item)} className="rounded-xl border border-cyan-300/20 bg-cyan-400/10 px-3 py-1 text-xs text-cyan-200 hover:bg-cyan-400/20">Add</button>
                           </div>
-                        </>
-                      ) : null}
-
-                      {healthAtlasTab === "routes" ? (
-                        <Card className="rounded-[1.5rem] border border-white/6 bg-[rgba(35,37,58,0.72)] shadow-none">
-                          <CardHeader className="pb-2">
-                            <CardTitle className="text-base">Workout routes</CardTitle>
-                            <p className="text-sm leading-6 text-slate-300">
-                              Mapped workouts stay separate from passive movement so hikes and runs read like distinct events.
-                            </p>
-                          </CardHeader>
-                          <CardContent className="space-y-3">
-                            {mappedWorkouts.length ? (
-                              <div className="grid gap-4 xl:grid-cols-2">
-                                {mappedWorkouts.map((workout) => (
-                                  <div
-                                    key={`${workout.workout_id}-map`}
-                                    className="overflow-hidden rounded-[1.2rem] border border-white/6 bg-[rgba(17,19,34,0.45)]"
-                                  >
-                                    <div className="flex items-center justify-between gap-3 px-4 py-3">
-                                      <div>
-                                        <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Workout route</div>
-                                        <div className="mt-1 text-sm font-medium text-slate-100">{formatWorkoutLabel(workout.activity_label, workout.activity_type)}</div>
-                                      </div>
-                                      <div className="text-xs text-slate-400">
-                                        {formatDistanceMiles(workout.total_distance_km, 1)}
-                                      </div>
-                                    </div>
-                                    <MovementMap entry={workoutToMapEntry(workout)} className="h-[320px]" />
-                                    <div className="flex flex-wrap gap-2 px-4 py-3 text-xs text-slate-300">
-                                      <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1">
-                                        {formatScheduleDateTime(workout.start_date)}
-                                      </span>
-                                      <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1">
-                                        {workout.route_points.length} route point{workout.route_points.length === 1 ? "" : "s"}
-                                      </span>
-                                    </div>
-                                  </div>
-                                ))}
-                              </div>
-                            ) : (
-                              <div className="rounded-[1rem] border border-dashed border-white/10 px-4 py-3 text-sm text-slate-400">
-                                No mapped workout routes available yet.
-                              </div>
-                            )}
-                          </CardContent>
-                        </Card>
-                      ) : null}
-
-                    </>
-                  ) : (
-                    <div className="rounded-[1.2rem] border border-dashed border-white/10 p-4 text-sm text-slate-400">
-                      {movementLoading
-                        ? "Loading movement journal..."
-                        : "No movement journal has been synced yet. The iPhone app can send distance, visits, commute timing, and daily movement stories here."}
+                        ))}
+                      </div>
                     </div>
                   )}
-                </CardContent>
-              </Card>
-              ) : null}
+
+                  <div className="rounded-[1.4rem] border border-cyan-300/12 bg-[linear-gradient(135deg,rgba(6,78,200,0.12),rgba(17,19,34,0.72))] p-4 space-y-3">
+                    <div className="text-xs uppercase tracking-[0.18em] text-cyan-200/80">AI parse</div>
+                    <textarea
+                      value={aiParseText}
+                      onChange={e => setAiParseText(e.target.value)}
+                      placeholder={'Describe what you ate… e.g. "2 scrambled eggs, toast with butter, and a glass of OJ"'}
+                      rows={2}
+                      className="w-full resize-none rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-100 outline-none focus:border-cyan-300/40"
+                    />
+                    <button onClick={() => void parseFood()} disabled={aiParsing || !aiParseText.trim()} className="w-full rounded-2xl border border-cyan-300/20 bg-cyan-400/10 py-2 text-sm text-cyan-200 hover:bg-cyan-400/20 disabled:opacity-50">
+                      {aiParsing ? "Parsing…" : "Parse with AI → fills form below"}
+                    </button>
+                  </div>
+
+                  <div className="rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4 space-y-3">
+                    <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Log custom food</div>
+                    <div className="grid gap-2 md:grid-cols-2">
+                      <input value={fName} onChange={e => setFName(e.target.value)} placeholder="Food name" className="col-span-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-100 outline-none focus:border-orange-300/40" />
+                      {[["Calories", fCal, setFCal], ["Protein (g)", fPro, setFPro], ["Carbs (g)", fCarb, setFCarb], ["Fat (g)", fFat, setFFat]].map(([label, val, setter]) => (
+                        <input key={label as string} type="number" value={val as string} onChange={e => (setter as (v: string) => void)(e.target.value)} placeholder={label as string} min="0" className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-100 outline-none focus:border-orange-300/40" />
+                      ))}
+                      <select value={fMeal} onChange={e => setFMeal(e.target.value)} className="rounded-xl border border-white/10 bg-[rgba(20,22,37,0.88)] px-3 py-2 text-sm text-slate-100 outline-none focus:border-orange-300/40">
+                        {["Breakfast","Lunch","Pre-workout","Dinner","Snack","Other"].map(m => <option key={m}>{m}</option>)}
+                      </select>
+                    </div>
+                    <button onClick={() => void addFood()} disabled={!fName.trim()} className="w-full rounded-2xl border border-orange-300/20 bg-orange-400/10 py-2 text-sm text-orange-200 hover:bg-orange-400/20 disabled:opacity-50">Log food</button>
+                  </div>
+
+                  <div className="rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4 space-y-3">
+                    <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Log workout</div>
+                    <select value={wType} onChange={e => setWType(e.target.value)} className="w-full rounded-xl border border-white/10 bg-[rgba(20,22,37,0.88)] px-3 py-2 text-sm text-slate-100 outline-none focus:border-orange-300/40">
+                      {["Chest + triceps","Rock climbing","Handstand + shoulders","Back + biceps","Legs + abs","Rest day","Other"].map(t => <option key={t}>{t}</option>)}
+                    </select>
+                    <input type="number" value={wDur} onChange={e => setWDur(e.target.value)} placeholder="Duration (min)" min="0" className="w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-100 outline-none focus:border-orange-300/40" />
+                    <textarea value={wNotes} onChange={e => setWNotes(e.target.value)} placeholder="Sets, reps, PRs, how it felt..." rows={3} className="w-full resize-none rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-100 outline-none focus:border-orange-300/40" />
+                    <button onClick={() => void logWorkout()} className="w-full rounded-2xl border border-emerald-300/20 bg-emerald-400/10 py-2 text-sm text-emerald-200 hover:bg-emerald-400/20">Log workout</button>
+                  </div>
+                </div>
+              )}
+
+              {/* MEAL PREP TAB */}
+              {nutritionTab === "meal-prep" && (
+                <div className="space-y-4">
+                  <div className="rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4">
+                    <div className="mb-3 text-xs uppercase tracking-[0.18em] text-slate-400">Saved recipes</div>
+                    {mealPrepItems.length === 0 ? (
+                      <div className="text-sm text-slate-500">No saved meal preps yet.</div>
+                    ) : (
+                      <div className="space-y-2">
+                        {mealPrepItems.map((item) => (
+                          <div key={item.id} className="flex items-start justify-between gap-4 rounded-xl border border-white/5 bg-white/3 px-4 py-3">
+                            <div>
+                              <div className="text-sm font-medium text-slate-100">{item.name}</div>
+                              <div className="mt-0.5 text-xs text-slate-500">{Math.round(item.calories)} cal · {Math.round(item.protein_g)}g P · {Math.round(item.carbs_g)}g C · {Math.round(item.fat_g)}g F</div>
+                              {item.notes ? <div className="mt-1 text-xs text-slate-400">{item.notes}</div> : null}
+                            </div>
+                            <button onClick={() => void deleteMealPrep(item.id)} className="text-slate-500 hover:text-red-400">✕</button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4 space-y-3">
+                    <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Save new recipe</div>
+                    <input value={mpName} onChange={e => setMpName(e.target.value)} placeholder="Recipe name" className="w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-100 outline-none focus:border-orange-300/40" />
+                    <div className="grid gap-2 md:grid-cols-2">
+                      {[["Calories", mpCal, setMpCal], ["Protein (g)", mpPro, setMpPro], ["Carbs (g)", mpCarb, setMpCarb], ["Fat (g)", mpFat, setMpFat]].map(([label, val, setter]) => (
+                        <input key={label as string} type="number" value={val as string} onChange={e => (setter as (v: string) => void)(e.target.value)} placeholder={label as string} min="0" className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-100 outline-none focus:border-orange-300/40" />
+                      ))}
+                    </div>
+                    <textarea value={mpNotes} onChange={e => setMpNotes(e.target.value)} placeholder="Ingredients, prep notes, servings..." rows={2} className="w-full resize-none rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-100 outline-none focus:border-orange-300/40" />
+                    <button onClick={() => void saveMealPrep()} disabled={!mpName.trim()} className="w-full rounded-2xl border border-orange-300/20 bg-orange-400/10 py-2 text-sm text-orange-200 hover:bg-orange-400/20 disabled:opacity-50">Save to library</button>
+                  </div>
+                </div>
+              )}
+
+              {/* HISTORY TAB */}
+              {nutritionTab === "history" && (
+                <div className="space-y-3">
+                  {foodLogHistory.length === 0 ? (
+                    <div className="rounded-[1.4rem] border border-dashed border-white/10 p-6 text-sm text-slate-400">No history yet — start logging to see trends.</div>
+                  ) : foodLogHistory.filter(d => d.entries.length > 0 || d.manual_workout).map((day) => {
+                    const totals = day.entries.reduce((a, f) => ({ cal: a.cal + f.calories, pro: a.pro + f.protein_g }), { cal: 0, pro: 0 });
+                    const pctCal = Math.min(100, Math.round((totals.cal / day.targets.calories) * 100));
+                    return (
+                      <div key={day.date} className="rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] px-4 py-3">
+                        <div className="flex items-center justify-between gap-4">
+                          <div className="text-sm font-medium text-slate-100">{day.date}</div>
+                          <div className="flex items-center gap-2">
+                            {day.manual_workout ? <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-xs text-emerald-300">{day.manual_workout.type}</span> : null}
+                            <span className="text-xs text-slate-400">{Math.round(totals.cal)} cal · {pctCal}% target</span>
+                          </div>
+                        </div>
+                        <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/10">
+                          <div className="h-full rounded-full bg-blue-400/60 transition-all" style={{ width: `${pctCal}%` }} />
+                        </div>
+                        <div className="mt-1 text-xs text-slate-500">{Math.round(totals.pro)}g protein · {day.entries.length} item{day.entries.length === 1 ? "" : "s"} logged</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
-          ) : (
-            <div className="rounded-[1.6rem] border border-dashed border-white/10 p-6 text-sm text-slate-400">
-              {loading
-                ? "Loading health data..."
-                : "No synced health data yet. Use the iPhone app to send Apple Health data into Jarvis."}
+          ) : null}
+
+          {/* ── PLAN TAB ── */}
+          {healthAtlasTab === "plan" && (
+            <div className="space-y-5">
+              {/* Profile strip */}
+              <div className="grid grid-cols-3 gap-3 md:grid-cols-6">
+                {[
+                  { label: "Age", val: String(WORKOUT_PLAN.profile.age) },
+                  { label: "Height", val: WORKOUT_PLAN.profile.height },
+                  { label: "Weight", val: WORKOUT_PLAN.profile.weight },
+                  { label: "Body fat", val: WORKOUT_PLAN.profile.bodyFat },
+                  { label: "Muscle mass", val: WORKOUT_PLAN.profile.skeletalMuscle },
+                  { label: "Goal", val: "Lean bulk" },
+                ].map(({ label, val }) => (
+                  <div key={label} className="rounded-[1.2rem] border border-white/6 bg-[rgba(35,37,58,0.72)] px-3 py-3 text-center">
+                    <div className="text-[10px] uppercase tracking-wide text-slate-400">{label}</div>
+                    <div className="mt-1 text-sm font-semibold text-white">{val}</div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Weekly schedule */}
+              <div>
+                <div className="mb-3 text-xs uppercase tracking-[0.18em] text-slate-400">Weekly schedule</div>
+                <div className="space-y-3">
+                  {WORKOUT_PLAN.schedule.map((day) => {
+                    const c = PLAN_COLORS[day.color];
+                    return (
+                      <div key={day.day} className={`rounded-[1.4rem] border ${c.border} ${c.bg} p-4`}>
+                        <div className="flex items-center gap-3">
+                          <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${c.badge}`}>{day.day}</span>
+                          <span className={`text-sm font-semibold ${c.text}`}>{day.label}</span>
+                        </div>
+                        {"exercises" in day && day.exercises ? (
+                          <div className="mt-3 overflow-hidden rounded-[1rem] border border-white/6">
+                            <table className="w-full text-xs">
+                              <thead>
+                                <tr className="border-b border-white/6 text-left text-slate-400">
+                                  <th className="px-3 py-2 font-normal">Exercise</th>
+                                  <th className="px-3 py-2 font-normal text-center">Sets</th>
+                                  <th className="px-3 py-2 font-normal text-center">Reps</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {day.exercises.map((ex, i) => (
+                                  <tr key={ex.name} className={i % 2 === 0 ? "bg-white/2" : ""}>
+                                    <td className="px-3 py-2 text-slate-200">{ex.name}</td>
+                                    <td className="px-3 py-2 text-center text-slate-300">{ex.sets}</td>
+                                    <td className="px-3 py-2 text-center text-slate-300">{ex.reps}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        ) : "notes" in day && day.notes ? (
+                          <div className="mt-2 text-sm text-slate-300">{day.notes}</div>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* 12-week goals */}
+              <div className="rounded-[1.4rem] border border-violet-300/16 bg-[rgba(139,92,246,0.08)] p-4">
+                <div className="mb-3 text-xs uppercase tracking-[0.18em] text-violet-200/80">12-week goals</div>
+                <ul className="space-y-2">
+                  {WORKOUT_PLAN.goals.map((g) => (
+                    <li key={g} className="flex items-start gap-2 text-sm text-slate-200">
+                      <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-violet-400" />
+                      {g}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+
+              {/* Notes */}
+              <div className="rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4">
+                <div className="mb-3 text-xs uppercase tracking-[0.18em] text-slate-400">Notes</div>
+                <ul className="space-y-2">
+                  {WORKOUT_PLAN.notes.map((n) => (
+                    <li key={n} className="flex items-start gap-2 text-sm text-slate-300">
+                      <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-slate-500" />
+                      {n}
+                    </li>
+                  ))}
+                </ul>
+              </div>
             </div>
           )}
         </CardContent>
