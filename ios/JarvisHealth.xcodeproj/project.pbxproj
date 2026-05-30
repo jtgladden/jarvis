@@ -12,6 +12,14 @@
 		A10000030000000000000001 /* HealthKitManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000130000000000000001 /* HealthKitManager.swift */; };
 		A10000050000000000000001 /* MovementManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000180000000000000001 /* MovementManager.swift */; };
 		A10000040000000000000001 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A10000140000000000000001 /* Assets.xcassets */; };
+		A100000A0000000000000001 /* JarvisModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100001A0000000000000001 /* JarvisModels.swift */; };
+		A100000B0000000000000001 /* JarvisAPIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100001B0000000000000001 /* JarvisAPIClient.swift */; };
+		A100000C0000000000000001 /* NutritionViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100001C0000000000000001 /* NutritionViewModel.swift */; };
+		A100000D0000000000000001 /* NutritionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100001D0000000000000001 /* NutritionView.swift */; };
+		A100000E0000000000000001 /* AssistantView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100001E0000000000000001 /* AssistantView.swift */; };
+		A100000F0000000000000001 /* DashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100001F0000000000000001 /* DashboardView.swift */; };
+		A100000G0000000000000001 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100001G0000000000000001 /* SettingsView.swift */; };
+		A100000H0000000000000001 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100001H0000000000000001 /* RootView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -23,6 +31,14 @@
 		A10000160000000000000001 /* JarvisHealth.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = JarvisHealth.entitlements; sourceTree = "<group>"; };
 		A10000170000000000000001 /* JarvisHealth.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = JarvisHealth.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A10000180000000000000001 /* MovementManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MovementManager.swift; sourceTree = "<group>"; };
+		A100001A0000000000000001 /* JarvisModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JarvisModels.swift; sourceTree = "<group>"; };
+		A100001B0000000000000001 /* JarvisAPIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JarvisAPIClient.swift; sourceTree = "<group>"; };
+		A100001C0000000000000001 /* NutritionViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NutritionViewModel.swift; sourceTree = "<group>"; };
+		A100001D0000000000000001 /* NutritionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NutritionView.swift; sourceTree = "<group>"; };
+		A100001E0000000000000001 /* AssistantView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantView.swift; sourceTree = "<group>"; };
+		A100001F0000000000000001 /* DashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardView.swift; sourceTree = "<group>"; };
+		A100001G0000000000000001 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		A100001H0000000000000001 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -48,9 +64,17 @@
 			isa = PBXGroup;
 			children = (
 				A10000110000000000000001 /* JarvisHealthApp.swift */,
+				A100001H0000000000000001 /* RootView.swift */,
+				A100001F0000000000000001 /* DashboardView.swift */,
+				A100001D0000000000000001 /* NutritionView.swift */,
+				A100001C0000000000000001 /* NutritionViewModel.swift */,
+				A100001E0000000000000001 /* AssistantView.swift */,
 				A10000120000000000000001 /* ContentView.swift */,
 				A10000130000000000000001 /* HealthKitManager.swift */,
 				A10000180000000000000001 /* MovementManager.swift */,
+				A100001G0000000000000001 /* SettingsView.swift */,
+				A100001A0000000000000001 /* JarvisModels.swift */,
+				A100001B0000000000000001 /* JarvisAPIClient.swift */,
 				A10000140000000000000001 /* Assets.xcassets */,
 				A10000150000000000000001 /* Info.plist */,
 				A10000160000000000000001 /* JarvisHealth.entitlements */,
@@ -136,10 +160,18 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A10000010000000000000001 /* JarvisHealthApp.swift in Sources */,
+				A100000H0000000000000001 /* RootView.swift in Sources */,
+				A100000F0000000000000001 /* DashboardView.swift in Sources */,
+				A100000D0000000000000001 /* NutritionView.swift in Sources */,
+				A100000C0000000000000001 /* NutritionViewModel.swift in Sources */,
+				A100000E0000000000000001 /* AssistantView.swift in Sources */,
 				A10000020000000000000001 /* ContentView.swift in Sources */,
 				A10000030000000000000001 /* HealthKitManager.swift in Sources */,
 				A10000050000000000000001 /* MovementManager.swift in Sources */,
-				A10000010000000000000001 /* JarvisHealthApp.swift in Sources */,
+				A100000G0000000000000001 /* SettingsView.swift in Sources */,
+				A100000A0000000000000001 /* JarvisModels.swift in Sources */,
+				A100000B0000000000000001 /* JarvisAPIClient.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

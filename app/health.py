@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 
 from app.health_store import init_health_store, list_health_daily_entries, upsert_health_daily_entry
 from app.schemas import HealthDailyEntry, HealthDailySyncRequest, HealthDailySyncResponse, HealthListResponse
@@ -27,4 +27,14 @@ def list_health_entries(days: int = 7) -> HealthListResponse:
     init_health_store()
     user_id = get_default_user_context().user_id
     entries: list[HealthDailyEntry] = list_health_daily_entries(days=days, user_id=user_id)
-    return HealthListResponse(entries=entries)
+
+    today = date.today()
+    existing_dates = {e.date for e in entries}
+    all_entries: list[HealthDailyEntry] = list(entries)
+    for offset in range(days):
+        d = (today - timedelta(days=offset)).isoformat()
+        if d not in existing_dates:
+            all_entries.append(HealthDailyEntry(date=d, source="none"))
+
+    all_entries.sort(key=lambda e: e.date, reverse=True)
+    return HealthListResponse(entries=all_entries)

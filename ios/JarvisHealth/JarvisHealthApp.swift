@@ -7,7 +7,7 @@ struct JarvisHealthApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            RootView()
                 .environmentObject(healthKitManager)
                 .environmentObject(movementManager)
         }

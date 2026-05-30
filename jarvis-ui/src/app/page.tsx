@@ -1667,7 +1667,7 @@ function HealthDetailPanel({
                     <div className="mb-3 text-xs uppercase tracking-[0.18em] text-slate-400">Movement storyboard</div>
                     <div className="space-y-3">
                       {movementStoryboard.length ? movementStoryboard.map((item, index) => (
-                        <div key={item.id} className="flex gap-3 rounded-[1rem] border border-white/6 bg-[rgba(255,255,255,0.03)] px-4 py-3">
+                        <div key={`${item.id}-${index}`} className="flex gap-3 rounded-[1rem] border border-white/6 bg-[rgba(255,255,255,0.03)] px-4 py-3">
                           <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-emerald-400/15 text-xs font-semibold text-emerald-100">
                             {index + 1}
                           </div>
@@ -2543,7 +2543,6 @@ export default function HomePage() {
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [mode, setMode] = useState<"dashboard" | "assistant" | "tasks" | "journal" | "mail" | "news" | "overview" | "schedule" | "planning" | "settings" | "health" | "jobs">("dashboard");
-  const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const [mailView, setMailView] = useState<"ai" | "raw">("raw");
   const [mailWorkspaceTab, setMailWorkspaceTab] = useState<"triage" | "insights">("triage");
   const [scheduleWorkspaceTab, setScheduleWorkspaceTab] = useState<"agenda" | "planner">("agenda");
@@ -2627,13 +2626,6 @@ export default function HomePage() {
   const hasLoadedDashboardRef = useRef(false);
   const hasLoadedTasksRef = useRef(false);
   const hasLoadedJournalRef = useRef(false);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    if (window.innerWidth <= 768) {
-      router.replace("/mobile");
-    }
-  }, [router]);
 
   useEffect(() => {
     void loadGoogleAuthStatus();
@@ -4481,7 +4473,7 @@ export default function HomePage() {
       setMailWorkspaceTab("insights");
       setMode("mail");
       setError("");
-      setMoreMenuOpen(false);
+  
       if (selectedMailbox === ALL_MAILBOX || selectedMailbox === JARVIS_REVIEW_MAILBOX) {
         setSelectedMailbox(IMPORTANT_LABEL);
       }
@@ -4492,7 +4484,7 @@ export default function HomePage() {
       setScheduleWorkspaceTab("planner");
       setMode("schedule");
       setError("");
-      setMoreMenuOpen(false);
+  
       return;
     }
 
@@ -4506,7 +4498,7 @@ export default function HomePage() {
 
     setError("");
     setMode(nextMode);
-    setMoreMenuOpen(false);
+
   };
 
   const correctClassification = async (targetLabel: "important" | "unimportant") => {
@@ -4888,171 +4880,52 @@ export default function HomePage() {
   );
 
   return (
-    <div className="min-h-screen p-4 text-slate-100 md:p-6">
-      <div className="mx-auto max-w-[1500px] space-y-6">
-        <div className="relative z-20 overflow-visible rounded-[2rem] border border-white/8 bg-[linear-gradient(135deg,rgba(34,36,58,0.94),rgba(17,19,34,0.92))] px-6 py-6 shadow-[0_24px_80px_rgba(6,7,14,0.48)] backdrop-blur-xl">
-          <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(189,147,249,0.2),transparent_34%),radial-gradient(circle_at_bottom_right,rgba(139,233,253,0.16),transparent_30%)]" />
-          <div className="relative flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-          <div>
-            <div className="mb-3 inline-flex items-center rounded-full border border-fuchsia-400/20 bg-fuchsia-400/10 px-3 py-1 text-[11px] font-medium uppercase tracking-[0.24em] text-fuchsia-200">
-              Dracula Control Center
-            </div>
-            <h1 className="text-3xl font-bold tracking-tight text-white md:text-4xl">Jarvis</h1>
-            <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-300">
-              {mode === "dashboard"
-                ? "Start here for a centralized briefing with your day, important mail, current headlines, and a focused task list."
-                : mode === "assistant"
-                ? "Ask Jarvis questions in plain English and get grounded answers using your dashboard, tasks, journal, health, movement, calendar, and important mail context."
-                : mode === "tasks"
-                ? "Review, edit, complete, and add tasks from one place."
-                : mode === "journal"
-                ? "Keep a lightweight daily journal with calendar-based summaries, a world event snapshot, and room for your own reflection."
-                : mode === "news"
-                ? "Review the exact headlines feeding the dashboard so you can open the source coverage directly."
-                : mode === "health"
-                ? "Track your synced Apple Health data with a deeper view of daily history, heart metrics, movement, and other expanded measurements."
-                : mode === "jobs"
-                ? "Scan your Job Alerts email label and rank every listing by fit for intelligence and foreign affairs roles."
-                : mode === "settings"
-                ? "Manage Jarvis classification guidance and inbox cleanup tools away from the main review workspace."
-                : isSchedulePlannerMode
-                ? "Turn your goals for the day or week into a realistic schedule that fits around your calendar."
-                : isScheduleAgendaMode
-                ? "Review what is already on your calendar, then add events or turn them into tasks."
-                : isMailInsightsMode
-                ? "See saved AI trends and action signals for one mailbox without rerunning triage every time."
-                : "Work through your inbox from one Mail tab, then switch between AI triage, raw Gmail controls, and saved insights whenever you need them."}
-            </p>
-          </div>
+    <div className="min-h-screen text-slate-100">
+      <nav className="sticky top-0 z-20 border-b border-white/8 bg-[rgba(11,13,26,0.96)] backdrop-blur-xl">
+        <div className="mx-auto flex max-w-[1500px] flex-wrap items-center gap-1 px-3 py-1.5">
+          <span className="mr-2 text-[10px] font-bold tracking-[0.25em] text-white/40">JARVIS</span>
 
-          <div className="flex flex-wrap items-center gap-2">
+          <Button variant={mode === "dashboard" ? "default" : "ghost"} size="sm" className="h-7 rounded-xl px-2.5 text-xs" onClick={() => setTopLevelMode("dashboard")}>
+            <Sparkles className="mr-1.5 h-3 w-3" />Dashboard
+          </Button>
+          <Button variant={mode === "assistant" ? "default" : "ghost"} size="sm" className="h-7 rounded-xl px-2.5 text-xs" onClick={() => setTopLevelMode("assistant")}>
+            <Sparkles className="mr-1.5 h-3 w-3" />Ask
+          </Button>
+          <Button variant={isMailWorkspaceMode ? "default" : "ghost"} size="sm" className="h-7 rounded-xl px-2.5 text-xs" onClick={() => setTopLevelMode("mail")}>
+            <Inbox className="mr-1.5 h-3 w-3" />Mail
+          </Button>
+          <Button variant={mode === "journal" ? "default" : "ghost"} size="sm" className="h-7 rounded-xl px-2.5 text-xs" onClick={() => setTopLevelMode("journal")}>
+            <BookOpen className="mr-1.5 h-3 w-3" />Journal
+          </Button>
+          <Button variant={mode === "tasks" ? "default" : "ghost"} size="sm" className="h-7 rounded-xl px-2.5 text-xs" onClick={() => setTopLevelMode("tasks")}>
+            <ShieldCheck className="mr-1.5 h-3 w-3" />Tasks
+          </Button>
+          <Button variant={mode === "health" ? "default" : "ghost"} size="sm" className="h-7 rounded-xl px-2.5 text-xs" onClick={() => setTopLevelMode("health")}>
+            <Activity className="mr-1.5 h-3 w-3" />Health
+          </Button>
+          <Button variant={isScheduleWorkspaceMode ? "default" : "ghost"} size="sm" className="h-7 rounded-xl px-2.5 text-xs" onClick={() => setTopLevelMode("schedule")}>
+            <CalendarDays className="mr-1.5 h-3 w-3" />Schedule
+          </Button>
+          <Button variant={mode === "jobs" ? "default" : "ghost"} size="sm" className="h-7 rounded-xl px-2.5 text-xs" onClick={() => setTopLevelMode("jobs")}>
+            <Briefcase className="mr-1.5 h-3 w-3" />Jobs
+          </Button>
+          <Button variant={mode === "news" ? "default" : "ghost"} size="sm" className="h-7 rounded-xl px-2.5 text-xs" onClick={() => setTopLevelMode("news")}>
+            <Newspaper className="mr-1.5 h-3 w-3" />News
+          </Button>
+          <Button asChild variant="ghost" size="sm" className="h-7 rounded-xl px-2.5 text-xs">
+            <Link href="/language">
+              <Languages className="mr-1.5 h-3 w-3" />Language
+            </Link>
+          </Button>
+          <Button variant={mode === "settings" ? "default" : "ghost"} size="sm" className="h-7 rounded-xl px-2.5 text-xs" onClick={() => setTopLevelMode("settings")}>
+            <SlidersHorizontal className="mr-1.5 h-3 w-3" />Settings
+          </Button>
+
+          <div className="ml-auto flex items-center gap-1">
             <Button
-              variant={mode === "dashboard" ? "default" : "outline"}
-              className="rounded-2xl"
-              onClick={() => setTopLevelMode("dashboard")}
-            >
-              <Sparkles className="mr-2 h-4 w-4" />
-              Dashboard
-            </Button>
-
-            <Button
-              variant={mode === "assistant" ? "default" : "outline"}
-              className="rounded-2xl"
-              onClick={() => setTopLevelMode("assistant")}
-            >
-              <Sparkles className="mr-2 h-4 w-4" />
-              Ask
-            </Button>
-
-            <Button
-              variant={isMailWorkspaceMode ? "default" : "outline"}
-              className="rounded-2xl"
-              onClick={() => setTopLevelMode("mail")}
-            >
-              <Inbox className="mr-2 h-4 w-4" />
-              Mail
-            </Button>
-
-            <Button
-              variant={mode === "journal" ? "default" : "outline"}
-              className="rounded-2xl"
-              onClick={() => setTopLevelMode("journal")}
-            >
-              <BookOpen className="mr-2 h-4 w-4" />
-              Journal
-            </Button>
-
-            <Button
-              variant={mode === "tasks" ? "default" : "outline"}
-              className="rounded-2xl"
-              onClick={() => setTopLevelMode("tasks")}
-            >
-              <ShieldCheck className="mr-2 h-4 w-4" />
-              Tasks
-            </Button>
-
-            <Button
-              variant={mode === "health" ? "default" : "outline"}
-              className="rounded-2xl"
-              onClick={() => setTopLevelMode("health")}
-            >
-              <Activity className="mr-2 h-4 w-4" />
-              Health
-            </Button>
-
-            <Button
-              variant={isScheduleWorkspaceMode ? "default" : "outline"}
-              className="rounded-2xl"
-              onClick={() => setTopLevelMode("schedule")}
-            >
-              <CalendarDays className="mr-2 h-4 w-4" />
-              Schedule
-            </Button>
-
-            <Button
-              variant={mode === "jobs" ? "default" : "outline"}
-              className="rounded-2xl"
-              onClick={() => setTopLevelMode("jobs")}
-            >
-              <Briefcase className="mr-2 h-4 w-4" />
-              Jobs
-            </Button>
-
-            <div className="relative">
-              <Button
-                variant={(mode === "news" || mode === "settings") ? "default" : "outline"}
-                className="rounded-2xl"
-                onClick={() => setMoreMenuOpen((current) => !current)}
-              >
-                More
-                <ChevronDown className={`ml-2 h-4 w-4 transition ${moreMenuOpen ? "rotate-180" : ""}`} />
-              </Button>
-              {moreMenuOpen ? (
-                <div className="absolute right-0 top-[calc(100%+0.5rem)] z-50 w-56 rounded-[1.4rem] border border-white/8 bg-[rgba(17,19,34,0.96)] p-2 shadow-[0_18px_48px_rgba(6,7,14,0.42)] backdrop-blur-xl">
-                  <div className="grid gap-1">
-                    <Button
-                      asChild
-                      variant="ghost"
-                      className="justify-start rounded-xl"
-                    >
-                      <Link href="/language" onClick={() => setMoreMenuOpen(false)}>
-                        <Languages className="mr-2 h-4 w-4" />
-                        Language
-                      </Link>
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      className="justify-start rounded-xl"
-                      onClick={() => setTopLevelMode("news")}
-                    >
-                      <Newspaper className="mr-2 h-4 w-4" />
-                      News
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      className="justify-start rounded-xl"
-                      onClick={() => setTopLevelMode("settings")}
-                    >
-                      <SlidersHorizontal className="mr-2 h-4 w-4" />
-                      Settings
-                    </Button>
-                    <Button
-                      asChild
-                      variant="ghost"
-                      className="justify-start rounded-xl"
-                    >
-                      <Link href="/mobile" onClick={() => setMoreMenuOpen(false)}>
-                        iPhone view
-                      </Link>
-                    </Button>
-                  </div>
-                </div>
-              ) : null}
-            </div>
-
-            <Button
-              className="rounded-2xl px-3"
-              variant="outline"
+              size="sm"
+              className="h-7 w-7 rounded-xl p-0"
+              variant="ghost"
               onClick={() => {
                 setRawPageToken(null);
                 setRawNextPageToken(null);
@@ -5106,13 +4979,12 @@ export default function HomePage() {
               aria-label="Refresh current page"
               title="Refresh current page"
             >
-              <RefreshCw
-                className={`h-4 w-4 ${loading || labelsLoading || planningLoading ? "animate-spin" : ""}`}
-              />
+              <RefreshCw className={`h-3.5 w-3.5 ${loading || labelsLoading || planningLoading ? "animate-spin" : ""}`} />
             </Button>
           </div>
         </div>
-        </div>
+      </nav>
+      <div className="mx-auto max-w-[1500px] space-y-6 p-4 md:p-6">
 
         {mode === "dashboard" ? (
           <div className="grid gap-6 lg:grid-cols-[1.2fr_0.8fr]">

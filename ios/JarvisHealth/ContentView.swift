@@ -623,7 +623,7 @@ struct ContentView: View {
     }
 }
 
-private struct JarvisCard<Content: View>: View {
+struct JarvisCard<Content: View>: View {
     @ViewBuilder let content: Content
 
     var body: some View {
@@ -642,7 +642,7 @@ private struct JarvisCard<Content: View>: View {
     }
 }
 
-private struct JarvisBadge: View {
+struct JarvisBadge: View {
     let title: String
     let systemImage: String
 
@@ -667,7 +667,7 @@ private struct JarvisBadge: View {
     }
 }
 
-private enum JarvisPalette {
+enum JarvisPalette {
     static let background = Color(red: 10 / 255, green: 14 / 255, blue: 25 / 255)
     static let card = Color(red: 22 / 255, green: 28 / 255, blue: 46 / 255).opacity(0.88)
     static let cyan = Color(red: 85 / 255, green: 197 / 255, blue: 255 / 255)
