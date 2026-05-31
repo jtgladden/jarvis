@@ -647,7 +647,7 @@ class AssistantAskRequest(BaseModel):
 class AssistantSource(BaseModel):
     id: str
     label: str
-    kind: Literal["dashboard", "mail", "tasks", "calendar", "health", "movement", "workout", "journal", "news", "web", "system"] = "system"
+    kind: Literal["dashboard", "mail", "tasks", "calendar", "health", "movement", "workout", "journal", "nutrition", "news", "web", "system"] = "system"
     detail: Optional[str] = None
     url: Optional[str] = None
 

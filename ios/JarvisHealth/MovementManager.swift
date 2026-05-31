@@ -280,21 +280,35 @@ final class MovementManager: NSObject, ObservableObject {
         )
     }
 
+    // MARK: - Journal file storage (too large for UserDefaults)
+
+    private static var journalFileURL: URL {
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        return docs.appendingPathComponent("movement_journal.json")
+    }
+
     private func saveTodayJournal(_ journal: LocalMovementDayJournal) {
         var journals = loadAllJournals()
         journals[journal.date] = journal
         if let data = try? JSONEncoder().encode(journals) {
-            userDefaults.set(data, forKey: StorageKeys.movementJournal)
+            try? data.write(to: Self.journalFileURL, options: .atomic)
         }
     }
 
     private func loadAllJournals() -> [String: LocalMovementDayJournal] {
-        guard
-            let data = userDefaults.data(forKey: StorageKeys.movementJournal),
-            let decoded = try? JSONDecoder().decode([String: LocalMovementDayJournal].self, from: data)
-        else {
-            return [:]
+        // Migrate from UserDefaults if legacy data exists
+        if let legacyData = userDefaults.data(forKey: StorageKeys.movementJournal),
+           let decoded = try? JSONDecoder().decode([String: LocalMovementDayJournal].self, from: legacyData) {
+            if let migrated = try? JSONEncoder().encode(decoded) {
+                try? migrated.write(to: Self.journalFileURL, options: .atomic)
+            }
+            userDefaults.removeObject(forKey: StorageKeys.movementJournal)
+            return decoded
         }
+        guard
+            let data = try? Data(contentsOf: Self.journalFileURL),
+            let decoded = try? JSONDecoder().decode([String: LocalMovementDayJournal].self, from: data)
+        else { return [:] }
         return decoded
     }
 

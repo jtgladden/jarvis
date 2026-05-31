@@ -7,7 +7,7 @@ final class AssistantViewModel: ObservableObject {
     @Published var isLoading = false
     @Published var error: String?
 
-    private var threadId: String?
+    private var chatId: String?
 
     func send(baseURL: String) async {
         let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -16,8 +16,8 @@ final class AssistantViewModel: ObservableObject {
         messages.append(ChatMessage(role: .user, content: text))
         isLoading = true; error = nil
         do {
-            let response = try await JarvisAPIClient.ask(baseURL: baseURL, question: text, threadId: threadId)
-            threadId = response.thread_id
+            let response = try await JarvisAPIClient.ask(baseURL: baseURL, question: text, chatId: chatId)
+            chatId = response.chat_id
             messages.append(ChatMessage(role: .assistant, content: response.answer))
         } catch {
             self.error = error.localizedDescription
@@ -27,7 +27,7 @@ final class AssistantViewModel: ObservableObject {
 
     func clear() {
         messages = []
-        threadId = nil
+        chatId = nil
     }
 }
 

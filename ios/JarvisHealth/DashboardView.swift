@@ -5,22 +5,21 @@ final class DashboardViewModel: ObservableObject {
     @Published var healthSummary: HealthSummaryResponse?
     @Published var todayFoodLog: DailyFoodLog?
     @Published var tasks: [TaskItem] = []
+    @Published var calendarEvents: [CalendarAgendaItem] = []
     @Published var isLoading = false
     @Published var error: String?
 
     func load(baseURL: String) async {
         isLoading = true; error = nil
         let today = isoToday()
-        do {
-            async let health = JarvisAPIClient.getHealthSummary(baseURL: baseURL)
-            async let food = JarvisAPIClient.getFoodLog(baseURL: baseURL, date: today)
-            async let taskList = JarvisAPIClient.getTasks(baseURL: baseURL)
-            healthSummary = try await health
-            todayFoodLog = try await food
-            tasks = (try await taskList).tasks.filter { $0.status != "done" }
-        } catch {
-            self.error = error.localizedDescription
-        }
+        async let health = JarvisAPIClient.getHealthSummary(baseURL: baseURL)
+        async let food = JarvisAPIClient.getFoodLog(baseURL: baseURL, date: today)
+        async let taskList = JarvisAPIClient.getTasks(baseURL: baseURL)
+        async let calendar = JarvisAPIClient.getCalendarSchedule(baseURL: baseURL)
+        do { healthSummary = try await health } catch {}
+        do { todayFoodLog = try await food } catch {}
+        do { tasks = (try await taskList).tasks.filter { !$0.completed } } catch {}
+        do { calendarEvents = (try await calendar).items.filter { !$0.removed } } catch {}
         isLoading = false
     }
 
@@ -60,6 +59,7 @@ struct DashboardView: View {
                         healthCard
                         nutritionCard
                         taskCard
+                        calendarCard
                         movementCard
                     }
                     .padding(.horizontal, 18)
@@ -93,7 +93,15 @@ struct DashboardView: View {
                     .tracking(1.5)
                     .foregroundStyle(JarvisPalette.cyan)
 
-                if let entry = vm.healthSummary?.today_entry {
+                let displayEntry = vm.healthSummary?.today_entry ?? vm.healthSummary?.recent_entries.last
+                let isToday = vm.healthSummary?.today_entry != nil
+
+                if let entry = displayEntry {
+                    if !isToday {
+                        Text("Last synced: \(entry.date)")
+                            .font(.system(size: 10, design: .rounded))
+                            .foregroundStyle(JarvisPalette.subtleText)
+                    }
                     HStack(spacing: 0) {
                         statCell(value: formatted(entry.steps), label: "Steps", color: JarvisPalette.cyan)
                         Divider().frame(height: 40).background(.white.opacity(0.1))
@@ -105,7 +113,7 @@ struct DashboardView: View {
                     Text(summary)
                         .font(.system(size: 13, design: .rounded))
                         .foregroundStyle(JarvisPalette.secondaryText)
-                } else {
+                } else if !vm.isLoading {
                     Text("No health data — sync via the Health tab.")
                         .font(.system(size: 13, design: .rounded))
                         .foregroundStyle(JarvisPalette.secondaryText)
@@ -180,8 +188,8 @@ struct DashboardView: View {
                                     .foregroundStyle(.white)
                                     .lineLimit(1)
                                 Spacer(minLength: 0)
-                                if let due = task.due_date {
-                                    Text(shortDate(due))
+                                if let due = task.due_text, !due.isEmpty {
+                                    Text(due)
                                         .font(.system(size: 11, design: .rounded))
                                         .foregroundStyle(JarvisPalette.subtleText)
                                 }
@@ -190,6 +198,44 @@ struct DashboardView: View {
 
                         if vm.tasks.count > 4 {
                             Text("+\(vm.tasks.count - 4) more")
+                                .font(.system(size: 12, design: .rounded))
+                                .foregroundStyle(JarvisPalette.subtleText)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private var calendarCard: some View {
+        Group {
+            if !vm.calendarEvents.isEmpty {
+                JarvisCard {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Label("Upcoming", systemImage: "calendar")
+                            .font(.system(size: 11, weight: .semibold, design: .rounded))
+                            .tracking(1.5)
+                            .foregroundStyle(JarvisPalette.cyan)
+
+                        ForEach(vm.calendarEvents.prefix(4)) { event in
+                            HStack(spacing: 10) {
+                                Rectangle()
+                                    .fill(JarvisPalette.cyan)
+                                    .frame(width: 3, height: 28).cornerRadius(2)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(event.title)
+                                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                                        .foregroundStyle(.white).lineLimit(1)
+                                    Text(event.is_all_day ? "All day · \(shortEventDate(event.start))" : "\(shortEventDate(event.start)) · \(formatEventTime(event.start))")
+                                        .font(.system(size: 11, design: .rounded))
+                                        .foregroundStyle(JarvisPalette.subtleText)
+                                }
+                                Spacer(minLength: 0)
+                            }
+                        }
+
+                        if vm.calendarEvents.count > 4 {
+                            Text("+\(vm.calendarEvents.count - 4) more")
                                 .font(.system(size: 12, design: .rounded))
                                 .foregroundStyle(JarvisPalette.subtleText)
                         }
@@ -249,12 +295,21 @@ struct DashboardView: View {
         return val >= 1000 ? String(format: "%.0f", val) : String(format: "%.0f", val)
     }
 
-    private func shortDate(_ iso: String) -> String {
-        let fmt = DateFormatter()
-        fmt.dateFormat = "yyyy-MM-dd"
-        guard let date = fmt.date(from: iso) else { return iso }
-        let out = DateFormatter()
-        out.dateFormat = "MMM d"
-        return out.string(from: date)
+    private func shortEventDate(_ iso: String) -> String {
+        let prefix = String(iso.prefix(10))
+        let fmt = DateFormatter(); fmt.dateFormat = "yyyy-MM-dd"; fmt.locale = Locale(identifier: "en_US_POSIX")
+        guard let d = fmt.date(from: prefix) else { return prefix }
+        if Calendar.current.isDateInToday(d) { return "Today" }
+        if Calendar.current.isDateInTomorrow(d) { return "Tomorrow" }
+        let out = DateFormatter(); out.dateFormat = "EEE MMM d"
+        return out.string(from: d)
+    }
+
+    private func formatEventTime(_ iso: String) -> String {
+        let fmt = DateFormatter(); fmt.locale = Locale(identifier: "en_US_POSIX")
+        fmt.dateFormat = "yyyy-MM-dd'T'HH:mm:ssZ"
+        guard let d = fmt.date(from: iso) else { return "" }
+        let out = DateFormatter(); out.dateFormat = "h:mm a"
+        return out.string(from: d)
     }
 }

@@ -38,6 +38,9 @@ struct NutritionView: View {
             .navigationTitle("Nutrition")
             .navigationBarTitleDisplayMode(.large)
             .task { await vm.load(baseURL: hk.selectedBaseURL) }
+            .onChange(of: vm.selectedDate) { _, _ in
+                Task { await vm.load(baseURL: hk.selectedBaseURL) }
+            }
         }
     }
 
@@ -66,11 +69,209 @@ struct NutritionView: View {
 
     private var todayContent: some View {
         VStack(spacing: 14) {
+            datePicker
             if vm.isLoading {
                 ProgressView().tint(JarvisPalette.orange)
             }
             macroRings
+            workoutsForDayCard
             foodLogList
+            coachingCard
+        }
+    }
+
+    @FocusState private var coachInputFocused: Bool
+
+    private var coachingCard: some View {
+        JarvisCard {
+            VStack(alignment: .leading, spacing: 12) {
+                Label("Health coach", systemImage: "sparkles")
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .tracking(1.5)
+                    .foregroundStyle(JarvisPalette.cyan)
+
+                if vm.coachingMessages.isEmpty {
+                    Text("Analyzes the last 3 days of nutrition and recent workouts.")
+                        .font(.system(size: 12, design: .rounded))
+                        .foregroundStyle(JarvisPalette.secondaryText)
+                    Button {
+                        Task { await vm.getCoachingFeedback(baseURL: hk.selectedBaseURL) }
+                    } label: {
+                        HStack {
+                            if vm.coachingLoading { ProgressView().tint(.white).scaleEffect(0.75) }
+                            Text(vm.coachingLoading ? "Getting feedback…" : "Get coaching feedback →")
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(JarvisPrimaryButtonStyle(color: JarvisPalette.cyan))
+                    .disabled(vm.coachingLoading)
+                } else {
+                    // Message thread
+                    ScrollViewReader { proxy in
+                        ScrollView(showsIndicators: false) {
+                            LazyVStack(alignment: .leading, spacing: 10) {
+                                ForEach(vm.coachingMessages) { msg in
+                                    coachBubble(msg).id(msg.id)
+                                }
+                                if vm.coachingLoading {
+                                    HStack(spacing: 6) {
+                                        ForEach(0..<3, id: \.self) { i in
+                                            Circle().fill(JarvisPalette.cyan.opacity(0.6)).frame(width: 6, height: 6)
+                                                .animation(.easeInOut(duration: 0.5).repeatForever().delay(Double(i) * 0.15), value: vm.coachingLoading)
+                                        }
+                                    }
+                                    .padding(.leading, 8)
+                                }
+                                Color.clear.frame(height: 1).id("coachBottom")
+                            }
+                        }
+                        .frame(maxHeight: 300)
+                        .onChange(of: vm.coachingMessages.count) { _, _ in withAnimation { proxy.scrollTo("coachBottom") } }
+                        .onChange(of: vm.coachingLoading) { _, _ in withAnimation { proxy.scrollTo("coachBottom") } }
+                    }
+
+                    // Input bar
+                    HStack(alignment: .bottom, spacing: 8) {
+                        TextField("Ask a follow-up…", text: $vm.coachingInput, axis: .vertical)
+                            .lineLimit(1...4)
+                            .jarvisTextField()
+                            .focused($coachInputFocused)
+                        Button {
+                            Task { await vm.sendCoachingMessage(baseURL: hk.selectedBaseURL) }
+                        } label: {
+                            Image(systemName: "arrow.up.circle.fill")
+                                .font(.system(size: 30))
+                                .foregroundStyle(
+                                    vm.coachingInput.trimmingCharacters(in: .whitespaces).isEmpty
+                                    ? JarvisPalette.subtleText : JarvisPalette.cyan
+                                )
+                        }
+                        .disabled(vm.coachingInput.trimmingCharacters(in: .whitespaces).isEmpty || vm.coachingLoading)
+                    }
+                }
+            }
+        }
+    }
+
+    private func coachBubble(_ msg: ChatMessage) -> some View {
+        HStack(alignment: .top) {
+            if msg.role == .user { Spacer(minLength: 40) }
+            Text(msg.content)
+                .font(.system(size: 13, design: .rounded))
+                .foregroundStyle(msg.role == .user ? .white : JarvisPalette.secondaryText)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 9)
+                .background(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .fill(msg.role == .user
+                              ? JarvisPalette.cyan.opacity(0.2)
+                              : Color.white.opacity(0.06))
+                )
+                .fixedSize(horizontal: false, vertical: true)
+            if msg.role == .assistant { Spacer(minLength: 40) }
+        }
+    }
+
+    private var datePicker: some View {
+        HStack {
+            Button { vm.previousDay() } label: {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(JarvisPalette.secondaryText)
+            }
+            Spacer()
+            Text(dateNavLabel)
+                .font(.system(size: 14, weight: .semibold, design: .rounded))
+                .foregroundStyle(.white)
+            Spacer()
+            Button { vm.nextDay() } label: {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(vm.isViewingToday ? JarvisPalette.subtleText : JarvisPalette.secondaryText)
+            }
+            .disabled(vm.isViewingToday)
+        }
+        .padding(.horizontal, 4)
+    }
+
+    private var dateNavLabel: String {
+        if vm.isViewingToday { return "Today" }
+        if Calendar.current.isDateInYesterday(vm.selectedDate) { return "Yesterday" }
+        let fmt = DateFormatter(); fmt.dateFormat = "EEE, MMM d"
+        return fmt.string(from: vm.selectedDate)
+    }
+
+    @ViewBuilder
+    private var workoutsForDayCard: some View {
+        let workouts = vm.workoutsForSelectedDate
+        let manual = vm.foodLog?.manual_workout
+        if !workouts.isEmpty || manual != nil {
+            JarvisCard {
+                VStack(alignment: .leading, spacing: 12) {
+                    Label("Workouts", systemImage: "figure.mixed.cardio")
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .tracking(1.5)
+                        .foregroundStyle(JarvisPalette.emerald)
+
+                    if let manual {
+                        HStack(spacing: 12) {
+                            ZStack {
+                                Circle().fill(JarvisPalette.emerald.opacity(0.15)).frame(width: 36, height: 36)
+                                Image(systemName: "dumbbell")
+                                    .font(.system(size: 14))
+                                    .foregroundStyle(JarvisPalette.emerald)
+                            }
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(manual.type)
+                                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                                    .foregroundStyle(.white)
+                                if manual.duration_minutes > 0 {
+                                    Text("\(manual.duration_minutes) min · logged manually")
+                                        .font(.system(size: 11, design: .rounded))
+                                        .foregroundStyle(JarvisPalette.secondaryText)
+                                }
+                            }
+                        }
+                    }
+
+                    ForEach(workouts) { workout in
+                        HStack(spacing: 12) {
+                            ZStack {
+                                Circle().fill(Color.blue.opacity(0.15)).frame(width: 36, height: 36)
+                                Image(systemName: workoutIcon(workout.activity_label))
+                                    .font(.system(size: 14))
+                                    .foregroundStyle(Color.blue)
+                            }
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(workout.activity_label)
+                                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                                    .foregroundStyle(.white)
+                                HStack(spacing: 8) {
+                                    if workout.duration_minutes > 0 {
+                                        Label("\(Int(workout.duration_minutes)) min", systemImage: "clock")
+                                            .font(.system(size: 11, design: .rounded))
+                                            .foregroundStyle(JarvisPalette.secondaryText)
+                                    }
+                                    if let kcal = workout.active_energy_kcal {
+                                        Label("\(Int(kcal)) cal", systemImage: "flame")
+                                            .font(.system(size: 11, design: .rounded))
+                                            .foregroundStyle(JarvisPalette.orange)
+                                    }
+                                    if let hr = workout.avg_heart_rate_bpm {
+                                        Label("\(Int(hr)) bpm", systemImage: "heart")
+                                            .font(.system(size: 11, design: .rounded))
+                                            .foregroundStyle(Color.pink)
+                                    }
+                                }
+                            }
+                            Spacer(minLength: 0)
+                            Image(systemName: "applewatch")
+                                .font(.system(size: 12))
+                                .foregroundStyle(JarvisPalette.subtleText)
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -80,7 +281,7 @@ struct NutritionView: View {
 
         return JarvisCard {
             VStack(alignment: .leading, spacing: 14) {
-                Text("Macros — today")
+                Text(vm.isViewingToday ? "Macros — today" : "Macros — \(vm.selectedDateKey)")
                     .font(.system(size: 13, weight: .semibold, design: .rounded))
                     .foregroundStyle(JarvisPalette.subtleText)
 
@@ -91,18 +292,6 @@ struct NutritionView: View {
                     macroTile(label: "Fat",      val: t.fat, target: targets.fat_g, unit: "g", color: Color(red: 1, green: 0.6, blue: 0.7))
                 }
 
-                if let workout = vm.foodLog?.manual_workout {
-                    HStack(spacing: 8) {
-                        Image(systemName: "figure.strengthtraining.traditional")
-                            .foregroundStyle(JarvisPalette.emerald)
-                        Text("\(workout.type)\(workout.duration_minutes > 0 ? " · \(workout.duration_minutes) min" : "")")
-                            .font(.system(size: 13, weight: .medium, design: .rounded))
-                            .foregroundStyle(.white)
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(RoundedRectangle(cornerRadius: 14).fill(JarvisPalette.emerald.opacity(0.12)))
-                }
             }
         }
     }
@@ -133,7 +322,7 @@ struct NutritionView: View {
     private var foodLogList: some View {
         JarvisCard {
             VStack(alignment: .leading, spacing: 12) {
-                Text("Food log")
+                Text("Food log — \(vm.selectedDateKey)")
                     .font(.system(size: 13, weight: .semibold, design: .rounded))
                     .foregroundStyle(JarvisPalette.subtleText)
 
@@ -235,33 +424,6 @@ struct NutritionView: View {
                 }
             }
 
-            // Meal prep quick add
-            if !vm.mealPrepItems.isEmpty {
-                JarvisCard {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("Quick add from meal prep")
-                            .font(.system(size: 13, weight: .semibold, design: .rounded))
-                            .foregroundStyle(JarvisPalette.subtleText)
-                        ForEach(vm.mealPrepItems) { item in
-                            HStack {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(item.name).font(.system(size: 13, weight: .semibold, design: .rounded)).foregroundStyle(.white)
-                                    Text("\(Int(item.calories)) cal · \(Int(item.protein_g))g P").font(.system(size: 11, design: .rounded)).foregroundStyle(JarvisPalette.secondaryText)
-                                }
-                                Spacer()
-                                Button("Add") {
-                                    Task { await vm.quickAdd(baseURL: hk.selectedBaseURL, item: item) }
-                                }
-                                .font(.system(size: 12, weight: .semibold, design: .rounded))
-                                .padding(.horizontal, 12).padding(.vertical, 6)
-                                .background(Capsule().fill(JarvisPalette.cyan.opacity(0.18)))
-                                .foregroundStyle(JarvisPalette.cyan)
-                            }
-                        }
-                    }
-                }
-            }
-
             // Manual form
             JarvisCard {
                 VStack(alignment: .leading, spacing: 12) {
@@ -300,58 +462,178 @@ struct NutritionView: View {
     // MARK: - Workout
 
     private var workoutContent: some View {
-        JarvisCard {
-            VStack(alignment: .leading, spacing: 14) {
-                Text("Log workout")
-                    .font(.system(size: 13, weight: .semibold, design: .rounded))
-                    .foregroundStyle(JarvisPalette.subtleText)
+        VStack(spacing: 12) {
+            // Apple Watch / HealthKit workouts
+            if !vm.healthKitWorkouts.isEmpty {
+                JarvisCard {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Label("Apple Watch Workouts", systemImage: "applewatch.watchface")
+                            .font(.system(size: 11, weight: .semibold, design: .rounded))
+                            .tracking(1.5)
+                            .foregroundStyle(JarvisPalette.emerald)
 
-                Picker("Type", selection: $vm.wType) {
-                    ForEach(vm.workoutTypes, id: \.self) { Text($0) }
+                        ForEach(vm.healthKitWorkouts) { workout in
+                            HStack(spacing: 12) {
+                                ZStack {
+                                    Circle().fill(JarvisPalette.emerald.opacity(0.15)).frame(width: 40, height: 40)
+                                    Image(systemName: workoutIcon(workout.activity_label))
+                                        .font(.system(size: 16))
+                                        .foregroundStyle(JarvisPalette.emerald)
+                                }
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(workout.activity_label)
+                                        .font(.system(size: 14, weight: .semibold, design: .rounded))
+                                        .foregroundStyle(.white)
+                                    HStack(spacing: 8) {
+                                        if workout.duration_minutes > 0 {
+                                            Label("\(Int(workout.duration_minutes)) min", systemImage: "clock")
+                                                .font(.system(size: 11, design: .rounded))
+                                                .foregroundStyle(JarvisPalette.secondaryText)
+                                        }
+                                        if let kcal = workout.active_energy_kcal {
+                                            Label("\(Int(kcal)) cal", systemImage: "flame")
+                                                .font(.system(size: 11, design: .rounded))
+                                                .foregroundStyle(JarvisPalette.orange)
+                                        }
+                                        if let hr = workout.avg_heart_rate_bpm {
+                                            Label("\(Int(hr)) bpm", systemImage: "heart")
+                                                .font(.system(size: 11, design: .rounded))
+                                                .foregroundStyle(Color.pink)
+                                        }
+                                        if let km = workout.total_distance_km {
+                                            Label(String(format: "%.1f km", km), systemImage: "arrow.right")
+                                                .font(.system(size: 11, design: .rounded))
+                                                .foregroundStyle(JarvisPalette.cyan)
+                                        }
+                                    }
+                                    Text(workoutDateLabel(workout))
+                                        .font(.system(size: 10, design: .rounded))
+                                        .foregroundStyle(JarvisPalette.subtleText)
+                                }
+                                Spacer(minLength: 0)
+                            }
+                            .padding(12)
+                            .background(RoundedRectangle(cornerRadius: 14).fill(.white.opacity(0.04)))
+                        }
+                    }
                 }
-                .pickerStyle(.menu)
-                .tint(JarvisPalette.emerald)
+            }
 
-                TextField("Duration (min)", text: $vm.wDur).keyboardType(.numberPad).jarvisTextField()
-                TextField("Sets, reps, notes…", text: $vm.wNotes, axis: .vertical)
-                    .lineLimit(3...6)
-                    .jarvisTextField()
+            // Manual log form
+            JarvisCard {
+                VStack(alignment: .leading, spacing: 14) {
+                    Label("Log manual workout", systemImage: "dumbbell")
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .tracking(1.5)
+                        .foregroundStyle(JarvisPalette.subtleText)
 
-                Button("Log workout") {
-                    Task { await vm.logWorkout(baseURL: hk.selectedBaseURL) }
+                    Picker("Type", selection: $vm.wType) {
+                        ForEach(vm.workoutTypes, id: \.self) { Text($0) }
+                    }
+                    .pickerStyle(.menu)
+                    .tint(JarvisPalette.emerald)
+
+                    TextField("Duration (min)", text: $vm.wDur).keyboardType(.numberPad).jarvisTextField()
+                    TextField("Sets, reps, notes…", text: $vm.wNotes, axis: .vertical)
+                        .lineLimit(3...6)
+                        .jarvisTextField()
+
+                    Button("Log workout") {
+                        Task { await vm.logWorkout(baseURL: hk.selectedBaseURL) }
+                    }
+                    .frame(maxWidth: .infinity)
+                    .buttonStyle(JarvisPrimaryButtonStyle(color: JarvisPalette.emerald))
                 }
-                .frame(maxWidth: .infinity)
-                .buttonStyle(JarvisPrimaryButtonStyle(color: JarvisPalette.emerald))
             }
         }
+    }
+
+    private func workoutIcon(_ label: String) -> String {
+        let l = label.lowercased()
+        if l.contains("run") { return "figure.run" }
+        if l.contains("walk") { return "figure.walk" }
+        if l.contains("climb") || l.contains("hike") { return "mountain.2" }
+        if l.contains("swim") { return "figure.pool.swim" }
+        if l.contains("cycle") || l.contains("bike") || l.contains("ride") { return "figure.outdoor.cycle" }
+        if l.contains("yoga") { return "figure.yoga" }
+        if l.contains("strength") || l.contains("functional") { return "dumbbell" }
+        if l.contains("core") || l.contains("abs") { return "figure.core.training" }
+        if l.contains("hiit") || l.contains("interval") { return "bolt.heart" }
+        return "figure.mixed.cardio"
+    }
+
+    private func workoutDateLabel(_ workout: WorkoutEntry) -> String {
+        let fmt = DateFormatter(); fmt.dateFormat = "yyyy-MM-dd"
+        fmt.locale = Locale(identifier: "en_US_POSIX")
+        guard let d = fmt.date(from: String(workout.date.prefix(10))) else { return workout.date }
+        if Calendar.current.isDateInToday(d) { return "Today" }
+        if Calendar.current.isDateInYesterday(d) { return "Yesterday" }
+        let out = DateFormatter(); out.dateFormat = "EEE MMM d"
+        return out.string(from: d)
     }
 
     // MARK: - Meal Prep
 
     private var prepContent: some View {
-        JarvisCard {
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Saved recipes")
-                    .font(.system(size: 13, weight: .semibold, design: .rounded))
-                    .foregroundStyle(JarvisPalette.subtleText)
+        VStack(spacing: 14) {
+            // Quick add
+            JarvisCard {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Quick add")
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .foregroundStyle(JarvisPalette.subtleText)
 
-                if vm.mealPrepItems.isEmpty {
-                    Text("No saved recipes yet.")
-                        .font(.system(size: 13, design: .rounded))
-                        .foregroundStyle(JarvisPalette.secondaryText)
-                } else {
-                    ForEach(vm.mealPrepItems) { item in
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(item.name).font(.system(size: 14, weight: .semibold, design: .rounded)).foregroundStyle(.white)
-                            Text("\(Int(item.calories)) cal · \(Int(item.protein_g))g P · \(Int(item.carbs_g))g C · \(Int(item.fat_g))g F")
-                                .font(.system(size: 11, design: .rounded)).foregroundStyle(JarvisPalette.secondaryText)
-                            if !item.notes.isEmpty {
-                                Text(item.notes).font(.system(size: 11, design: .rounded)).foregroundStyle(JarvisPalette.subtleText)
+                    if vm.mealPrepItems.isEmpty {
+                        Text("No saved recipes yet.")
+                            .font(.system(size: 13, design: .rounded))
+                            .foregroundStyle(JarvisPalette.secondaryText)
+                    } else {
+                        ForEach(vm.mealPrepItems) { item in
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(item.name).font(.system(size: 13, weight: .semibold, design: .rounded)).foregroundStyle(.white)
+                                    Text("\(Int(item.calories)) cal · \(Int(item.protein_g))g P · \(Int(item.carbs_g))g C · \(Int(item.fat_g))g F")
+                                        .font(.system(size: 11, design: .rounded)).foregroundStyle(JarvisPalette.secondaryText)
+                                }
+                                Spacer()
+                                Button("Add") {
+                                    Task { await vm.quickAdd(baseURL: hk.selectedBaseURL, item: item) }
+                                }
+                                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                                .padding(.horizontal, 12).padding(.vertical, 6)
+                                .background(Capsule().fill(JarvisPalette.cyan.opacity(0.18)))
+                                .foregroundStyle(JarvisPalette.cyan)
                             }
                         }
-                        .padding(10)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(RoundedRectangle(cornerRadius: 14).fill(.white.opacity(0.04)))
+                    }
+                }
+            }
+
+            // Saved recipes detail
+            JarvisCard {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Nutrition details")
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .foregroundStyle(JarvisPalette.subtleText)
+
+                    if vm.mealPrepItems.isEmpty {
+                        Text("No saved recipes yet.")
+                            .font(.system(size: 13, design: .rounded))
+                            .foregroundStyle(JarvisPalette.secondaryText)
+                    } else {
+                        ForEach(vm.mealPrepItems) { item in
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(item.name).font(.system(size: 14, weight: .semibold, design: .rounded)).foregroundStyle(.white)
+                                Text("\(Int(item.calories)) cal · \(Int(item.protein_g))g P · \(Int(item.carbs_g))g C · \(Int(item.fat_g))g F")
+                                    .font(.system(size: 11, design: .rounded)).foregroundStyle(JarvisPalette.secondaryText)
+                                if !item.notes.isEmpty {
+                                    Text(item.notes).font(.system(size: 11, design: .rounded)).foregroundStyle(JarvisPalette.subtleText)
+                                }
+                            }
+                            .padding(10)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(RoundedRectangle(cornerRadius: 14).fill(.white.opacity(0.04)))
+                        }
                     }
                 }
             }

@@ -36,6 +36,7 @@ from app.schemas import (
     AssistantChatMessage,
     AssistantSource,
 )
+from app.food_log import get_daily_food_log
 from app.task_service import list_tasks
 from app.user_context import get_default_user_context
 
@@ -60,6 +61,7 @@ INTENT_BUNDLES: dict[str, list[tuple[str, dict[str, Any]]]] = {
         ("get_important_mail_detail", {"limit": 6}),
     ],
     "health_trends": [
+        ("get_today_nutrition", {}),
         ("get_health_summary", {"days": 30}),
         ("get_health_detail", {"days": 14}),
     ],
@@ -68,6 +70,7 @@ INTENT_BUNDLES: dict[str, list[tuple[str, dict[str, Any]]]] = {
         ("get_movement_detail", {"days": 14}),
     ],
     "workout_trends": [
+        ("get_today_nutrition", {}),
         ("get_workout_summary", {"days": 90, "limit": 20}),
         ("get_workout_detail", {"days": 90, "limit": 12}),
     ],
@@ -76,6 +79,7 @@ INTENT_BUNDLES: dict[str, list[tuple[str, dict[str, Any]]]] = {
     ],
     "cross_domain_summary": [
         ("get_dashboard_detail", {}),
+        ("get_today_nutrition", {}),
         ("get_tasks_detailed", {"include_completed": True}),
         ("get_recent_journal", {"days": 14, "saved_only": True}),
         ("get_health_summary", {"days": 30}),
@@ -281,9 +285,20 @@ def _recent_mail_detailed_context(limit: int = 6) -> list[dict[str, Any]]:
 
 
 def _tool_get_dashboard_overview(_: dict[str, Any]) -> dict[str, Any]:
+    now_local = datetime.now(LOCAL_TIMEZONE)
+    hour = now_local.hour
+    if hour < 6: period = "late night"
+    elif hour < 12: period = "morning"
+    elif hour < 14: period = "midday"
+    elif hour < 18: period = "afternoon"
+    elif hour < 21: period = "evening"
+    else: period = "night"
     dashboard = generate_dashboard()
     return {
         "date_label": dashboard.date_label,
+        "local_time": now_local.strftime("%H:%M"),
+        "day_of_week": now_local.strftime("%A"),
+        "time_of_day": period,
         "overview": dashboard.overview,
         "mail_summary": dashboard.mail_summary,
         "news_summary": dashboard.news_summary,
@@ -375,6 +390,58 @@ def _tool_get_health_detail(arguments: dict[str, Any]) -> dict[str, Any]:
     return {
         "days": days,
         "entries": [entry.model_dump() for entry in response.entries],
+    }
+
+
+def _tool_get_today_nutrition(_: dict[str, Any]) -> dict[str, Any]:
+    now_local = datetime.now(LOCAL_TIMEZONE)
+    today = now_local.date().isoformat()
+    hour = now_local.hour
+    if hour < 6:
+        period = "late night"
+    elif hour < 12:
+        period = "morning"
+    elif hour < 14:
+        period = "midday"
+    elif hour < 18:
+        period = "afternoon"
+    elif hour < 21:
+        period = "evening"
+    else:
+        period = "night"
+    try:
+        log = get_daily_food_log(today)
+    except Exception:
+        return {"date": today, "time_of_day": period, "error": "No food log available"}
+    entries = log.entries
+    totals = {
+        "calories": round(sum(e.calories for e in entries), 1),
+        "protein_g": round(sum(e.protein_g for e in entries), 1),
+        "carbs_g": round(sum(e.carbs_g for e in entries), 1),
+        "fat_g": round(sum(e.fat_g for e in entries), 1),
+    }
+    targets = log.targets
+    return {
+        "date": today,
+        "time_of_day": period,
+        "local_time": now_local.strftime("%H:%M"),
+        "entry_count": len(entries),
+        "entries": [
+            {"name": e.name, "calories": e.calories, "protein_g": e.protein_g,
+             "carbs_g": e.carbs_g, "fat_g": e.fat_g, "meal": e.meal}
+            for e in entries
+        ],
+        "totals": totals,
+        "targets": {
+            "calories": targets.calories, "protein_g": targets.protein_g,
+            "carbs_g": targets.carbs_g, "fat_g": targets.fat_g,
+        },
+        "pct_calories_consumed": round(totals["calories"] / targets.calories * 100) if targets.calories else None,
+        "remaining_calories": round(targets.calories - totals["calories"], 1) if targets.calories else None,
+        "manual_workout": (
+            {"type": log.manual_workout.type, "duration_minutes": log.manual_workout.duration_minutes}
+            if log.manual_workout else None
+        ),
     }
 
 
@@ -666,6 +733,12 @@ TOOLS: dict[str, dict[str, Any]] = {
         "source": AssistantSource(id="calendar", label="Upcoming calendar", kind="calendar", detail="Primary calendar"),
         "parameters": {"type": "object", "properties": {"days": {"type": "integer"}, "max_results": {"type": "integer"}}, "additionalProperties": False},
         "fn": _tool_get_calendar,
+    },
+    "get_today_nutrition": {
+        "description": "Fetch today's food log including all meals logged so far, macro totals vs targets, remaining calories, and the current time of day. Use this for any coaching, nutrition advice, meal recommendations, or questions about what the user has eaten today.",
+        "source": AssistantSource(id="nutrition", label="Today's nutrition", kind="nutrition", detail="Today's food log and macro progress"),
+        "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+        "fn": _tool_get_today_nutrition,
     },
     "get_health_summary": {
         "description": "Fetch a summarized view of recent health trends.",
@@ -961,6 +1034,7 @@ Rules:
 - If web evidence was provided, use it clearly and avoid pretending it came from the user's private data.
 - Cite only these source ids: {allowed}.
 - Interpret relative dates like today, tomorrow, tonight, and this evening using the provided local time and timezone.
+- For health, nutrition, or fitness coaching: use the current time of day to give time-appropriate advice. Morning coaching differs from evening coaching — e.g. pre-workout nutrition, recovery timing, meal suggestions, and energy management all depend on the time. If today's nutrition data is available, reference actual meals eaten and remaining macros rather than speaking in generalities.
 """.strip()
 
 

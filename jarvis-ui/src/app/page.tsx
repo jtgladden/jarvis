@@ -1224,8 +1224,11 @@ function HealthDetailPanel({
   const [foodLogHistory, setFoodLogHistory] = useState<DailyFoodLog[]>([]);
   const [nutritionLoading, setNutritionLoading] = useState(false);
   const [nutritionError, setNutritionError] = useState("");
-  const [nutritionFeedback, setNutritionFeedback] = useState("");
-  const [nutritionFeedbackLoading, setNutritionFeedbackLoading] = useState(false);
+  type CoachMsg = { role: "user" | "assistant"; content: string };
+  const [coachingMessages, setCoachingMessages] = useState<CoachMsg[]>([]);
+  const [coachingLoading, setCoachingLoading] = useState(false);
+  const [coachingInput, setCoachingInput] = useState("");
+  const [coachingChatId, setCoachingChatId] = useState<string | null>(null);
   // food form
   const [fName, setFName] = useState(""); const [fCal, setFCal] = useState(""); const [fPro, setFPro] = useState(""); const [fCarb, setFCarb] = useState(""); const [fFat, setFFat] = useState(""); const [fMeal, setFMeal] = useState("Other");
   // AI parse
@@ -1240,6 +1243,7 @@ function HealthDetailPanel({
 
   const loadFoodLog = async (date: string) => {
     setNutritionLoading(true); setNutritionError("");
+    setFoodLog(null);
     try {
       const res = await fetch(`${API_BASE}/nutrition/log/${date}`);
       if (!res.ok) throw new Error(`${res.status}`);
@@ -1324,25 +1328,70 @@ function HealthDetailPanel({
     try { await fetch(`${API_BASE}/nutrition/meal-prep/${id}`, { method: "DELETE" }); await loadMealPrep(); } catch { /* silent */ }
   };
 
-  const getNutritionFeedback = async () => {
-    if (!foodLog) return;
-    setNutritionFeedbackLoading(true); setNutritionFeedback("");
-    const totals = foodLog.entries.reduce((a, f) => ({ cal: a.cal + f.calories, pro: a.pro + f.protein_g, carb: a.carb + f.carbs_g, fat: a.fat + f.fat_g }), { cal: 0, pro: 0, carb: 0, fat: 0 });
-    const foodLines = foodLog.entries.map(f => `- ${f.name} (${Math.round(f.calories)} cal, ${Math.round(f.protein_g)}g P, ${Math.round(f.carbs_g)}g C, ${Math.round(f.fat_g)}g F) — ${f.meal}`).join("\n");
-    const workoutLine = foodLog.manual_workout ? `Workout: ${foodLog.manual_workout.type}${foodLog.manual_workout.duration_minutes ? ` — ${foodLog.manual_workout.duration_minutes} min` : ""}${foodLog.manual_workout.notes ? `\nNotes: ${foodLog.manual_workout.notes}` : ""}` : "No workout logged.";
-    const t = foodLog.targets;
-    const question = `Here's my nutrition log for ${activeHealthDate}:\n\nTotals: ${Math.round(totals.cal)} cal / ${Math.round(totals.pro)}g protein / ${Math.round(totals.carb)}g carbs / ${Math.round(totals.fat)}g fat\nTargets: ${t.calories} cal / ${t.protein_g}g protein / ${t.carbs_g}g carbs / ${t.fat_g}g fat\n\nFoods:\n${foodLines || "None logged"}\n\n${workoutLine}\n\nGive me brief, actionable coaching feedback on today's nutrition. Be direct and specific.`;
+  const sendCoachingMessage = async () => {
+    const text = coachingInput.trim();
+    if (!text || coachingLoading) return;
+    setCoachingInput("");
+    setCoachingMessages(prev => [...prev, { role: "user", content: text }]);
+    setCoachingLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/assistant/ask`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question }) });
-      if (res.ok) { const d = await res.json(); setNutritionFeedback(d.answer || ""); }
+      const res = await fetch(`${API_BASE}/assistant/ask`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question: text, chat_id: coachingChatId }) });
+      if (res.ok) { const d = await res.json(); setCoachingChatId(d.chat_id ?? null); setCoachingMessages(prev => [...prev, { role: "assistant", content: d.answer || "" }]); }
     } catch { /* silent */ }
-    finally { setNutritionFeedbackLoading(false); }
+    finally { setCoachingLoading(false); }
+  };
+
+  const getNutritionFeedback = async () => {
+    setCoachingLoading(true); setCoachingMessages([]); setCoachingChatId(null);
+    try {
+      const histRes = await fetch(`${API_BASE}/nutrition/history?days=3`);
+      const histDays: DailyFoodLog[] = histRes.ok ? ((await histRes.json()).days ?? []) : [];
+
+      // Always use the already-loaded foodLog for the active date — avoids server-side date
+      // calculation mismatches where the history endpoint returns empty entries for "today".
+      const days: DailyFoodLog[] = [
+        ...(foodLog ? [foodLog] : []),
+        ...histDays.filter(d => d.date !== activeHealthDate),
+      ].sort((a, b) => b.date.localeCompare(a.date));
+
+      const summariseDay = (day: DailyFoodLog) => {
+        const tot = day.entries.reduce((a, f) => ({ cal: a.cal + f.calories, pro: a.pro + f.protein_g, carb: a.carb + f.carbs_g, fat: a.fat + f.fat_g }), { cal: 0, pro: 0, carb: 0, fat: 0 });
+        const t = day.targets;
+        const dateLabel = day.date === activeHealthDate ? `${day.date} (selected day)` : day.date;
+        const entries = day.entries.length
+          ? day.entries.map(f => `  - ${f.name} (${Math.round(f.calories)} cal, ${Math.round(f.protein_g)}g P, ${Math.round(f.carbs_g)}g C, ${Math.round(f.fat_g)}g F) — ${f.meal}`).join("\n")
+          : "  Nothing logged";
+        const workout = day.manual_workout
+          ? `  Workout: ${day.manual_workout.type}${day.manual_workout.duration_minutes ? ` — ${day.manual_workout.duration_minutes} min` : ""}${day.manual_workout.notes ? ` (${day.manual_workout.notes})` : ""}`
+          : "  No workout logged";
+        return `${dateLabel}\n  Totals: ${Math.round(tot.cal)}/${t.calories} cal · ${Math.round(tot.pro)}/${t.protein_g}g P · ${Math.round(tot.carb)}/${t.carbs_g}g C · ${Math.round(tot.fat)}/${t.fat_g}g F\n${entries}\n${workout}`;
+      };
+
+      const dayBlock = days.map(summariseDay).join("\n\n");
+
+      const recentWatchWorkouts = workoutEntries.slice(0, 6).map(w =>
+        `- ${w.activity_label}: ${Math.round(w.duration_minutes)} min${w.active_energy_kcal ? `, ${Math.round(w.active_energy_kcal)} cal burned` : ""}${w.avg_heart_rate_bpm ? `, avg ${Math.round(w.avg_heart_rate_bpm)} bpm` : ""}`
+      ).join("\n");
+
+      const question = `Here's my nutrition and training data for the last ${days.length} day(s):\n\n${dayBlock}${recentWatchWorkouts ? `\n\nRecent Apple Watch workouts (for training load context):\n${recentWatchWorkouts}` : ""}\n\nGive me specific, actionable coaching feedback. Look for patterns across the days — what I'm doing consistently well, where I'm falling short of targets, and give me 2-3 concrete things to focus on tomorrow. Be direct and practical.`;
+
+      const res = await fetch(`${API_BASE}/assistant/ask`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question }) });
+      if (res.ok) { const d = await res.json(); setCoachingChatId(d.chat_id ?? null); setCoachingMessages([{ role: "assistant", content: d.answer || "" }]); }
+    } catch { /* silent */ }
+    finally { setCoachingLoading(false); }
   };
 
   const [expandedMetricsOpen, setExpandedMetricsOpen] = useState(false);
   const latestHealthDate = healthEntries[0]?.date ?? healthSummary?.today_entry?.date ?? formatLocalDateKey(new Date());
   const earliestHealthDate = healthEntries[healthEntries.length - 1]?.date ?? latestHealthDate;
   const activeHealthDate = selectedHealthDate ?? latestHealthDate;
+
+  useEffect(() => {
+    if (healthAtlasTab === "nutrition") void loadFoodLog(activeHealthDate);
+    setCoachingMessages([]); setCoachingChatId(null); setCoachingInput("");
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeHealthDate, healthAtlasTab]);
+
   const selectedHealthEntry = healthEntries.find((entry) => entry.date === activeHealthDate)
     ?? (healthSummary?.today_entry?.date === activeHealthDate ? healthSummary.today_entry : null);
   const selectedMovementEntry = movementEntries.find((entry) => entry.date === activeHealthDate) ?? null;
@@ -1428,7 +1477,7 @@ function HealthDetailPanel({
             </button>
             <button
               type="button"
-              onClick={() => { setHealthAtlasTab("nutrition"); void loadFoodLog(activeHealthDate); void loadMealPrep(); }}
+              onClick={() => { setHealthAtlasTab("nutrition"); void loadMealPrep(); }}
               className={`rounded-full border px-3 py-1.5 text-xs uppercase tracking-[0.18em] transition ${
                 healthAtlasTab === "nutrition"
                   ? "border-orange-300/25 bg-orange-400/12 text-orange-100"
@@ -1778,26 +1827,78 @@ function HealthDetailPanel({
 
                     <div className="rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4">
                       <div className="mb-3 text-xs uppercase tracking-[0.18em] text-slate-400">Workout — {activeHealthDate}</div>
-                      {foodLog?.manual_workout ? (
-                        <div className="text-sm text-slate-200">
-                          <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-xs text-emerald-300">{foodLog.manual_workout.type}</span>
-                          {foodLog.manual_workout.duration_minutes ? <span className="ml-2 text-slate-400">{foodLog.manual_workout.duration_minutes} min</span> : null}
-                          {foodLog.manual_workout.notes ? <div className="mt-1 text-xs text-slate-400">{foodLog.manual_workout.notes}</div> : null}
-                        </div>
-                      ) : (
+                      {selectedWorkoutEntries.length === 0 && !foodLog?.manual_workout ? (
                         <div className="text-sm text-slate-500">No workout logged. Use the Log Food tab to add one.</div>
+                      ) : (
+                        <div className="space-y-2">
+                          {selectedWorkoutEntries.map((w) => (
+                            <div key={w.workout_id} className="flex items-center gap-3 rounded-xl border border-white/5 bg-white/3 px-3 py-2">
+                              <span className="text-lg">⌚</span>
+                              <div>
+                                <div className="text-sm text-slate-100">{w.activity_label}</div>
+                                <div className="text-xs text-slate-500">
+                                  {Math.round(w.duration_minutes)} min
+                                  {w.active_energy_kcal ? ` · ${Math.round(w.active_energy_kcal)} cal` : ""}
+                                  {w.avg_heart_rate_bpm ? ` · ${Math.round(w.avg_heart_rate_bpm)} bpm avg` : ""}
+                                  {w.total_distance_km ? ` · ${w.total_distance_km.toFixed(1)} km` : ""}
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                          {foodLog?.manual_workout && (
+                            <div className="rounded-xl border border-white/5 bg-white/3 px-3 py-2">
+                              <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-xs text-emerald-300">{foodLog.manual_workout.type}</span>
+                              {foodLog.manual_workout.duration_minutes ? <span className="ml-2 text-xs text-slate-400">{foodLog.manual_workout.duration_minutes} min</span> : null}
+                              {foodLog.manual_workout.notes ? <div className="mt-1 text-xs text-slate-400">{foodLog.manual_workout.notes}</div> : null}
+                            </div>
+                          )}
+                        </div>
                       )}
                     </div>
 
-                    <div className="rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4">
-                      <div className="mb-3 text-xs uppercase tracking-[0.18em] text-slate-400">AI coaching feedback</div>
-                      {nutritionFeedback ? (
-                        <p className="text-sm leading-7 text-slate-200">{nutritionFeedback}</p>
+                    <div className="rounded-[1.4rem] border border-cyan-300/10 bg-[rgba(35,37,58,0.72)] p-4">
+                      <div className="mb-3 text-xs uppercase tracking-[0.18em] text-cyan-300/80">✦ Health coach</div>
+                      {coachingMessages.length === 0 ? (
+                        <div className="space-y-3">
+                          <p className="text-xs text-slate-500">Analyzes the last 3 days of nutrition and recent workouts.</p>
+                          <button onClick={() => void getNutritionFeedback()} disabled={coachingLoading}
+                            className="rounded-2xl border border-cyan-300/20 bg-cyan-400/10 px-4 py-2 text-sm text-cyan-200 transition hover:bg-cyan-400/20 disabled:opacity-50">
+                            {coachingLoading ? "Getting feedback…" : "Get coaching feedback →"}
+                          </button>
+                        </div>
                       ) : (
-                        <button onClick={() => void getNutritionFeedback()} disabled={nutritionFeedbackLoading || !foodLog}
-                          className="rounded-2xl border border-orange-300/20 bg-orange-400/10 px-4 py-2 text-sm text-orange-200 transition hover:bg-orange-400/20 disabled:opacity-50">
-                          {nutritionFeedbackLoading ? "Getting feedback…" : "Get coaching feedback →"}
-                        </button>
+                        <div className="space-y-3">
+                          <div className="max-h-80 space-y-3 overflow-y-auto pr-1">
+                            {coachingMessages.map((msg, i) => (
+                              <div key={i} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
+                                <div className={`max-w-[85%] rounded-2xl px-4 py-2.5 text-sm leading-6 ${msg.role === "user" ? "bg-cyan-500/18 text-white" : "bg-white/6 text-slate-200"}`}>
+                                  {msg.content}
+                                </div>
+                              </div>
+                            ))}
+                            {coachingLoading && (
+                              <div className="flex justify-start">
+                                <div className="flex items-center gap-1 rounded-2xl bg-white/6 px-4 py-3">
+                                  {[0,1,2].map(i => <span key={i} className="inline-block h-1.5 w-1.5 animate-bounce rounded-full bg-cyan-400/70" style={{ animationDelay: `${i * 0.15}s` }} />)}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                          <div className="flex items-end gap-2 border-t border-white/6 pt-3">
+                            <textarea
+                              value={coachingInput}
+                              onChange={e => setCoachingInput(e.target.value)}
+                              onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void sendCoachingMessage(); } }}
+                              placeholder="Ask a follow-up…"
+                              rows={1}
+                              className="flex-1 resize-none rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-100 outline-none placeholder:text-slate-600 focus:border-cyan-300/30"
+                            />
+                            <button onClick={() => void sendCoachingMessage()} disabled={!coachingInput.trim() || coachingLoading}
+                              className="shrink-0 rounded-xl border border-cyan-300/20 bg-cyan-400/15 px-3 py-2 text-sm text-cyan-200 transition hover:bg-cyan-400/25 disabled:opacity-40">
+                              ↑
+                            </button>
+                          </div>
+                        </div>
                       )}
                     </div>
                   </div>
@@ -1807,23 +1908,6 @@ function HealthDetailPanel({
               {/* LOG FOOD TAB */}
               {nutritionTab === "log" && (
                 <div className="space-y-4">
-                  {mealPrepItems.length > 0 && (
-                    <div className="rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4">
-                      <div className="mb-3 text-xs uppercase tracking-[0.18em] text-slate-400">Quick add from meal prep</div>
-                      <div className="space-y-2">
-                        {mealPrepItems.map((item) => (
-                          <div key={item.id} className="flex items-center justify-between gap-4 rounded-xl border border-white/5 bg-white/3 px-4 py-2">
-                            <div>
-                              <div className="text-sm text-slate-100">{item.name}</div>
-                              <div className="text-xs text-slate-500">{Math.round(item.calories)} cal · {Math.round(item.protein_g)}g P · {Math.round(item.carbs_g)}g C · {Math.round(item.fat_g)}g F</div>
-                            </div>
-                            <button onClick={() => void quickAdd(item)} className="rounded-xl border border-cyan-300/20 bg-cyan-400/10 px-3 py-1 text-xs text-cyan-200 hover:bg-cyan-400/20">Add</button>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
                   <div className="rounded-[1.4rem] border border-cyan-300/12 bg-[linear-gradient(135deg,rgba(6,78,200,0.12),rgba(17,19,34,0.72))] p-4 space-y-3">
                     <div className="text-xs uppercase tracking-[0.18em] text-cyan-200/80">AI parse</div>
                     <textarea
@@ -1867,6 +1951,25 @@ function HealthDetailPanel({
               {/* MEAL PREP TAB */}
               {nutritionTab === "meal-prep" && (
                 <div className="space-y-4">
+                  <div className="rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4">
+                    <div className="mb-3 text-xs uppercase tracking-[0.18em] text-slate-400">Quick add</div>
+                    {mealPrepItems.length === 0 ? (
+                      <div className="text-sm text-slate-500">No saved meal preps yet.</div>
+                    ) : (
+                      <div className="space-y-2">
+                        {mealPrepItems.map((item) => (
+                          <div key={item.id} className="flex items-center justify-between gap-4 rounded-xl border border-white/5 bg-white/3 px-4 py-2">
+                            <div>
+                              <div className="text-sm text-slate-100">{item.name}</div>
+                              <div className="text-xs text-slate-500">{Math.round(item.calories)} cal · {Math.round(item.protein_g)}g P · {Math.round(item.carbs_g)}g C · {Math.round(item.fat_g)}g F</div>
+                            </div>
+                            <button onClick={() => void quickAdd(item)} className="rounded-xl border border-cyan-300/20 bg-cyan-400/10 px-3 py-1 text-xs text-cyan-200 hover:bg-cyan-400/20">Add</button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
                   <div className="rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4">
                     <div className="mb-3 text-xs uppercase tracking-[0.18em] text-slate-400">Saved recipes</div>
                     {mealPrepItems.length === 0 ? (

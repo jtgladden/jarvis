@@ -1,7 +1,6 @@
 import SwiftUI
 
 struct ContentView: View {
-    @Environment(\.scenePhase) private var scenePhase
     @EnvironmentObject private var healthKitManager: HealthKitManager
     @EnvironmentObject private var movementManager: MovementManager
 
@@ -42,25 +41,6 @@ struct ContentView: View {
             }
         }
         .preferredColorScheme(.dark)
-        .task {
-            healthKitManager.refreshAuthorizationStatus()
-            healthKitManager.configureAutomaticSync(baseURL: healthKitManager.selectedBaseURL)
-            healthKitManager.handleAppBecameActive()
-            movementManager.configureSync(baseURL: healthKitManager.selectedBaseURL)
-            movementManager.handleAppBecameActive()
-        }
-        .onChange(of: healthKitManager.selectedBaseURL) { _, newValue in
-            healthKitManager.configureAutomaticSync(baseURL: newValue)
-            movementManager.configureSync(baseURL: newValue)
-        }
-        .onChange(of: scenePhase) { _, newPhase in
-            if newPhase == .active {
-                healthKitManager.handleAppBecameActive()
-                movementManager.handleAppBecameActive()
-            } else if newPhase == .background {
-                movementManager.handleAppMovedToBackground()
-            }
-        }
     }
 
     private var backgroundGlow: some View {
