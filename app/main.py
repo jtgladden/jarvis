@@ -32,7 +32,7 @@ from app.movement import list_movement_entries, sync_movement_daily_entry
 from app.movement_store import init_movement_store
 from app.planner import generate_schedule_plan
 from app.rules import classify_new_email_rule
-from app.schemas import AssistantAskRequest, DailyFoodLog, FoodLogAddRequest, FoodLogEntry, FoodLogHistoryResponse, FoodLogUpdateRequest, FoodParseRequest, FoodParseResponse, JobAlertsJobStartResponse, JobAlertsJobStatus, JobAlertsResponse, JobListing, MacroTargets, MacroTargetsUpdateRequest, ManualWorkoutLog, ManualWorkoutLogRequest, MealPrepCreateRequest, MealPrepItem, AssistantAskResponse, AssistantChatListResponse, AssistantChatThread, CalendarAgendaResponse, CalendarEventCreateResponse, CalendarEventPreview, CalendarQuickAddRequest, CalendarQuickAddResponse, ClassifiedEmailResponse, ClassificationGuidanceRequest, ClassificationGuidanceResponse, ClassificationOverviewResponse, CleanupJobStartResponse, CleanupJobStatus, CleanupResponse, DashboardResponse, DashboardTaskItem, DeleteEmailResponse, EmailCommandRequest, EmailCommandResponse, EmailPageResponse, EmailSummary, EmailUpdateRequest, EmailUpdateResponse, GmailLabel, HandleEmailRequest, HandleEmailResponse, HealthDailySyncRequest, HealthDailySyncResponse, HealthListResponse, JournalDayEntry, JournalDayNoteUpdateRequest, JournalResponse, LanguageCode, LanguageConversationRequest, LanguageConversationResponse, LanguageDashboardResponse, LanguageFeedbackResponse, LanguagePracticeGenerateRequest, LanguagePracticeGenerateResponse, LanguagePracticeSession, LanguagePracticeSessionCreateRequest, LanguageProfile, LanguageProfileUpdateRequest, LanguageSpeechRequest, LanguageVocabCreateRequest, LanguageVocabItem, LanguageVocabNormalizeResponse, LanguageVocabReviewRequest, LanguageVocabUpdateRequest, LanguageWordExplainRequest, LanguageWordExplainResponse, LanguageWritingFeedbackRequest, MovementDailySyncRequest, MovementDailySyncResponse, MovementListResponse, PlanningCalendarBulkCreateRequest, PlanningCalendarBulkCreateResponse, PlanningCalendarCreateRequest, PlanningCalendarCreateResponse, PlanningJobStartResponse, PlanningJobStatus, PlanningRequest, PlanningResponse, RuleSuggestion, RuleSuggestionResponse, RuleProcessResponse, TaskCreateRequest, TaskListResponse, TaskUpdateRequest, UserRule, UserRuleCondition, UserRuleCreateRequest, UserRuleListResponse, UserRuleUpdateRequest, WorkoutBatchSyncRequest, WorkoutBatchSyncResponse, WorkoutListResponse
+from app.schemas import AssistantAskRequest, JournalDayExtract, JournalImageExtractRequest, JournalImageExtractResponse, DailyFoodLog, FoodLogAddRequest, FoodLogEntry, FoodLogHistoryResponse, FoodLogUpdateRequest, FoodParseRequest, FoodParseResponse, JobAlertsJobStartResponse, JobAlertsJobStatus, JobAlertsResponse, JobListing, MacroTargets, MacroTargetsUpdateRequest, ManualWorkoutLog, ManualWorkoutLogRequest, MealPrepCreateRequest, MealPrepItem, AssistantAskResponse, AssistantChatListResponse, AssistantChatThread, CalendarAgendaResponse, CalendarEventCreateResponse, CalendarEventPreview, CalendarQuickAddRequest, CalendarQuickAddResponse, ClassifiedEmailResponse, ClassificationGuidanceRequest, ClassificationGuidanceResponse, ClassificationOverviewResponse, CleanupJobStartResponse, CleanupJobStatus, CleanupResponse, DashboardResponse, DashboardTaskItem, DeleteEmailResponse, EmailCommandRequest, EmailCommandResponse, EmailPageResponse, EmailSummary, EmailUpdateRequest, EmailUpdateResponse, GmailLabel, HandleEmailRequest, HandleEmailResponse, HealthDailySyncRequest, HealthDailySyncResponse, HealthListResponse, JournalDayEntry, JournalDayNoteUpdateRequest, JournalResponse, LanguageCode, LanguageConversationRequest, LanguageConversationResponse, LanguageDashboardResponse, LanguageFeedbackResponse, LanguagePracticeGenerateRequest, LanguagePracticeGenerateResponse, LanguagePracticeSession, LanguagePracticeSessionCreateRequest, LanguageProfile, LanguageProfileUpdateRequest, LanguageSpeechRequest, LanguageVocabCreateRequest, LanguageVocabItem, LanguageVocabNormalizeResponse, LanguageVocabReviewRequest, LanguageVocabUpdateRequest, LanguageWordExplainRequest, LanguageWordExplainResponse, LanguageWritingFeedbackRequest, MovementDailySyncRequest, MovementDailySyncResponse, MovementListResponse, PlanningCalendarBulkCreateRequest, PlanningCalendarBulkCreateResponse, PlanningCalendarCreateRequest, PlanningCalendarCreateResponse, PlanningJobStartResponse, PlanningJobStatus, PlanningRequest, PlanningResponse, RuleSuggestion, RuleSuggestionResponse, RuleProcessResponse, TaskCreateRequest, TaskListResponse, TaskUpdateRequest, UserRule, UserRuleCondition, UserRuleCreateRequest, UserRuleListResponse, UserRuleUpdateRequest, WorkoutBatchSyncRequest, WorkoutBatchSyncResponse, WorkoutListResponse
 from app.rule_parser import parse_rule_to_fields
 from app.task_service import create_task, delete_task, list_tasks, update_task
 from app.task_store import init_task_store
@@ -603,6 +603,93 @@ def journal_extract_citations(entry_date: str, payload: JournalDayNoteUpdateRequ
         photo_data_url=payload.photo_data_url,
         calendar_items=payload.calendar_items,
     )
+
+
+@api.post("/journal/extract-from-image", response_model=JournalImageExtractResponse)
+def journal_extract_from_image(payload: JournalImageExtractRequest):
+    import base64, re as _re
+    from app.config import OPENAI_API_KEY
+    from openai import OpenAI as _OpenAI
+
+    _client = _OpenAI(api_key=OPENAI_API_KEY)
+
+    # Strip data-URL prefix if the client sent one
+    b64 = _re.sub(r"^data:[^;]+;base64,", "", payload.image_base64)
+    # Validate it's real base64 before sending
+    try:
+        base64.b64decode(b64, validate=True)
+    except Exception:
+        raise ValueError("image_base64 is not valid base64")
+
+    prompt = (
+        "Transcribe this handwritten page verbatim. The page may contain entries for one or multiple dates.\n\n"
+        "STEP 1 — Identify date headings. Look for any dates written as section headers or at the start of "
+        "a paragraph (e.g. 'May 31', '5/31/26', 'Tuesday, May 31', 'May 31st'). Each date heading marks "
+        "the start of a new entry. If there are no date headings, treat the entire page as one entry.\n\n"
+        "STEP 2 — For EACH entry, transcribe every word verbatim from top to bottom within that section. "
+        "Do NOT summarize, skip, or stop early. For illegible words write [illegible]. "
+        "Preserve paragraph breaks with \\n\\n. The last word in the section must appear in the text.\n\n"
+        "Return ONLY valid JSON:\n"
+        "{\n"
+        "  \"entries\": [\n"
+        "    { \"detected_date\": \"yyyy-mm-dd or null\", \"text\": \"complete verbatim text for this entry\" }\n"
+        "  ],\n"
+        "  \"confidence\": \"high / medium / low\",\n"
+        "  \"notes\": \"any issues such as blurry image or cut-off edges\"\n"
+        "}"
+    )
+
+    response = _client.chat.completions.create(
+        model="gpt-4o",
+        max_tokens=8192,
+        response_format={"type": "json_object"},
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:{payload.media_type};base64,{b64}",
+                            "detail": "high",
+                        },
+                    },
+                    {"type": "text", "text": prompt},
+                ],
+            }
+        ],
+    )
+
+    import json as _json
+    choice = response.choices[0]
+    raw = choice.message.content or "{}"
+    print(f"[scan] finish_reason={choice.finish_reason} "
+          f"tokens(prompt={response.usage.prompt_tokens} "
+          f"completion={response.usage.completion_tokens} "
+          f"total={response.usage.total_tokens})")
+    print(f"[scan] raw response ({len(raw)} chars):\n{raw[:2000]}")
+    if len(raw) > 2000:
+        print(f"[scan] ... (truncated for log, full length {len(raw)})")
+    data = _json.loads(raw)
+    raw_entries = data.get("entries") or []
+    if not isinstance(raw_entries, list):
+        raw_entries = []
+    entries = [
+        JournalDayExtract(
+            detected_date=e.get("detected_date") or None,
+            text=str(e.get("text") or "").strip(),
+        )
+        for e in raw_entries
+        if isinstance(e, dict) and str(e.get("text") or "").strip()
+    ]
+    result = JournalImageExtractResponse(
+        entries=entries,
+        confidence=data.get("confidence", "medium"),
+        notes=str(data.get("notes") or "").strip(),
+    )
+    print(f"[scan] {len(entries)} entries — " +
+          ", ".join(f"{e.detected_date or 'no-date'}:{len(e.text)}c" for e in entries))
+    return result
 
 
 @api.get("/classification-guidance", response_model=ClassificationGuidanceResponse)

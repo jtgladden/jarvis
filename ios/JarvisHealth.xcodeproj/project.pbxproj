@@ -24,7 +24,36 @@
 		A200000B0000000000000001 /* JournalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200001B0000000000000001 /* JournalView.swift */; };
 		A300000A0000000000000001 /* MailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A300001A0000000000000001 /* MailView.swift */; };
 		A300000B0000000000000001 /* LanguageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A300001B0000000000000001 /* LanguageView.swift */; };
+		C100000A0000000000000001 /* JarvisAppIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = C100001A0000000000000001 /* JarvisAppIntents.swift */; };
+		C100000B0000000000000001 /* NotificationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C100001B0000000000000001 /* NotificationManager.swift */; };
+		C200000A0000000000000001 /* JarvisWidgetBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = C200001A0000000000000001 /* JarvisWidgetBundle.swift */; };
+		C200000B0000000000000001 /* JarvisWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = C200001B0000000000000001 /* JarvisWidget.swift */; };
+		C200000C0000000000000001 /* JarvisWidget.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = C200001C0000000000000001 /* JarvisWidget.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		C200006B0000000000000001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A10000610000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = C200004A0000000000000001;
+			remoteInfo = JarvisWidget;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		C200002D0000000000000001 /* Embed App Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				C200000C0000000000000001 /* JarvisWidget.appex in Embed App Extensions */,
+			);
+			name = "Embed App Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		A10000110000000000000001 /* JarvisHealthApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JarvisHealthApp.swift; sourceTree = "<group>"; };
@@ -47,10 +76,24 @@
 		A200001B0000000000000001 /* JournalView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JournalView.swift; sourceTree = "<group>"; };
 		A300001A0000000000000001 /* MailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailView.swift; sourceTree = "<group>"; };
 		A300001B0000000000000001 /* LanguageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LanguageView.swift; sourceTree = "<group>"; };
+		C100001A0000000000000001 /* JarvisAppIntents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JarvisAppIntents.swift; sourceTree = "<group>"; };
+		C100001B0000000000000001 /* NotificationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationManager.swift; sourceTree = "<group>"; };
+		C200001A0000000000000001 /* JarvisWidgetBundle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JarvisWidgetBundle.swift; sourceTree = "<group>"; };
+		C200001B0000000000000001 /* JarvisWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JarvisWidget.swift; sourceTree = "<group>"; };
+		C200001C0000000000000001 /* JarvisWidget.appex */ = {isa = PBXFileReference; explicitFileType = wrapper.app-extension; includeInIndex = 0; path = JarvisWidget.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		C200001D0000000000000001 /* JarvisWidget.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = JarvisWidget.entitlements; sourceTree = "<group>"; };
+		C200001E0000000000000001 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		A10000230000000000000001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C200002B0000000000000001 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -64,6 +107,7 @@
 			isa = PBXGroup;
 			children = (
 				A10000320000000000000001 /* JarvisHealth */,
+				C200003A0000000000000001 /* JarvisWidget */,
 				A10000330000000000000001 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -90,6 +134,8 @@
 				A10000140000000000000001 /* Assets.xcassets */,
 				A10000150000000000000001 /* Info.plist */,
 				A10000160000000000000001 /* JarvisHealth.entitlements */,
+				C100001A0000000000000001 /* JarvisAppIntents.swift */,
+				C100001B0000000000000001 /* NotificationManager.swift */,
 			);
 			path = JarvisHealth;
 			sourceTree = "<group>";
@@ -98,8 +144,20 @@
 			isa = PBXGroup;
 			children = (
 				A10000170000000000000001 /* JarvisHealth.app */,
+				C200001C0000000000000001 /* JarvisWidget.appex */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		C200003A0000000000000001 /* JarvisWidget */ = {
+			isa = PBXGroup;
+			children = (
+				C200001A0000000000000001 /* JarvisWidgetBundle.swift */,
+				C200001B0000000000000001 /* JarvisWidget.swift */,
+				C200001D0000000000000001 /* JarvisWidget.entitlements */,
+				C200001E0000000000000001 /* Info.plist */,
+			);
+			path = JarvisWidget;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -112,15 +170,34 @@
 				A10000210000000000000001 /* Sources */,
 				A10000230000000000000001 /* Frameworks */,
 				A10000220000000000000001 /* Resources */,
+				C200002D0000000000000001 /* Embed App Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				C200006A0000000000000001 /* PBXTargetDependency */,
 			);
 			name = JarvisHealth;
 			productName = JarvisHealth;
 			productReference = A10000170000000000000001 /* JarvisHealth.app */;
 			productType = "com.apple.product-type.application";
+		};
+		C200004A0000000000000001 /* JarvisWidget */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = C200005A0000000000000001 /* Build configuration list for PBXNativeTarget "JarvisWidget" */;
+			buildPhases = (
+				C200002A0000000000000001 /* Sources */,
+				C200002B0000000000000001 /* Frameworks */,
+				C200002C0000000000000001 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = JarvisWidget;
+			productName = JarvisWidget;
+			productReference = C200001C0000000000000001 /* JarvisWidget.appex */;
+			productType = "com.apple.product-type.app-extension";
 		};
 /* End PBXNativeTarget section */
 
@@ -133,6 +210,10 @@
 				LastUpgradeCheck = 2600;
 				TargetAttributes = {
 					A10000410000000000000001 = {
+						CreatedOnToolsVersion = 26.4.1;
+						ProvisioningStyle = Automatic;
+					};
+					C200004A0000000000000001 = {
 						CreatedOnToolsVersion = 26.4.1;
 						ProvisioningStyle = Automatic;
 					};
@@ -152,6 +233,7 @@
 			projectRoot = "";
 			targets = (
 				A10000410000000000000001 /* JarvisHealth */,
+				C200004A0000000000000001 /* JarvisWidget */,
 			);
 		};
 /* End PBXProject section */
@@ -162,6 +244,13 @@
 			buildActionMask = 2147483647;
 			files = (
 				A10000040000000000000001 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C200002C0000000000000001 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -188,10 +277,29 @@
 				A100000G0000000000000001 /* SettingsView.swift in Sources */,
 				A100000A0000000000000001 /* JarvisModels.swift in Sources */,
 				A100000B0000000000000001 /* JarvisAPIClient.swift in Sources */,
+				C100000A0000000000000001 /* JarvisAppIntents.swift in Sources */,
+				C100000B0000000000000001 /* NotificationManager.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C200002A0000000000000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C200000A0000000000000001 /* JarvisWidgetBundle.swift in Sources */,
+				C200000B0000000000000001 /* JarvisWidget.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		C200006A0000000000000001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = C200004A0000000000000001 /* JarvisWidget */;
+			targetProxy = C200006B0000000000000001 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		A10000710000000000000001 /* Debug */ = {
@@ -313,6 +421,60 @@
 			};
 			name = Release;
 		};
+		C200007A0000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = JarvisWidget/JarvisWidget.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 7VT9Q46GP7;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = JarvisWidget/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.jtgladden.JarvisHealth.JarvisWidget;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		C200007B0000000000000001 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = JarvisWidget/JarvisWidget.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 7VT9Q46GP7;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = JarvisWidget/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.jtgladden.JarvisHealth.JarvisWidget;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -330,6 +492,15 @@
 			buildConfigurations = (
 				A10000730000000000000001 /* Debug */,
 				A10000740000000000000001 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		C200005A0000000000000001 /* Build configuration list for PBXNativeTarget "JarvisWidget" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C200007A0000000000000001 /* Debug */,
+				C200007B0000000000000001 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

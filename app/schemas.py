@@ -458,6 +458,23 @@ class JournalResponse(BaseModel):
     query: str = ""
 
 
+class JournalImageExtractRequest(BaseModel):
+    image_base64: str
+    media_type: str = "image/jpeg"
+    scan_target: Literal["scripture", "journal"] = "journal"
+
+
+class JournalDayExtract(BaseModel):
+    detected_date: Optional[str] = None  # ISO yyyy-mm-dd or null
+    text: str = ""
+
+
+class JournalImageExtractResponse(BaseModel):
+    entries: List[JournalDayExtract] = Field(default_factory=list)
+    confidence: Literal["high", "medium", "low"] = "medium"
+    notes: str = ""
+
+
 class HealthDailySyncRequest(BaseModel):
     date: Optional[str] = None
     source: str = "ios_healthkit"

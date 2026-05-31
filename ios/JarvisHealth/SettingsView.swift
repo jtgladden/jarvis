@@ -1,7 +1,10 @@
 import SwiftUI
+import UserNotifications
 
 struct SettingsView: View {
     @EnvironmentObject private var hk: HealthKitManager
+    @StateObject private var notif = NotificationManager.shared
+    @State private var notifPermissionDenied = false
 
     var body: some View {
         NavigationStack {
@@ -11,6 +14,7 @@ struct SettingsView: View {
                 ScrollView(showsIndicators: false) {
                     VStack(spacing: 16) {
                         serverCard
+                        remindersCard
                         aboutCard
                     }
                     .padding(.horizontal, 18)
@@ -20,6 +24,16 @@ struct SettingsView: View {
             }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.large)
+            .alert("Notifications Disabled", isPresented: $notifPermissionDenied) {
+                Button("Open Settings") {
+                    if let url = URL(string: UIApplication.openSettingsURLString) {
+                        UIApplication.shared.open(url)
+                    }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Enable notifications in Settings to receive journal and scripture reminders.")
+            }
         }
     }
 
@@ -78,6 +92,106 @@ struct SettingsView: View {
                 urlDisplayRow(label: "Active target", value: hk.selectedBaseURL)
             }
         }
+    }
+
+    private var remindersCard: some View {
+        JarvisCard {
+            VStack(alignment: .leading, spacing: 16) {
+                Label("Reminders", systemImage: "bell")
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .tracking(1.5)
+                    .foregroundStyle(JarvisPalette.cyan)
+
+                reminderRow(
+                    icon: "book.closed.fill",
+                    iconColor: .orange,
+                    label: "Journal",
+                    enabled: $notif.journalEnabled,
+                    hour: $notif.journalHour,
+                    minute: $notif.journalMinute,
+                    onSave: {
+                        Task {
+                            let granted = await notif.requestPermission()
+                            if granted { notif.saveJournalReminder() }
+                            else { notifPermissionDenied = true; notif.journalEnabled = false }
+                        }
+                    }
+                )
+
+                Divider().background(Color.white.opacity(0.08))
+
+                reminderRow(
+                    icon: "text.book.closed.fill",
+                    iconColor: .yellow,
+                    label: "Scripture Study",
+                    enabled: $notif.scriptureEnabled,
+                    hour: $notif.scriptureHour,
+                    minute: $notif.scriptureMinute,
+                    onSave: {
+                        Task {
+                            let granted = await notif.requestPermission()
+                            if granted { notif.saveScriptureReminder() }
+                            else { notifPermissionDenied = true; notif.scriptureEnabled = false }
+                        }
+                    }
+                )
+            }
+        }
+    }
+
+    private func reminderRow(
+        icon: String,
+        iconColor: Color,
+        label: String,
+        enabled: Binding<Bool>,
+        hour: Binding<Int>,
+        minute: Binding<Int>,
+        onSave: @escaping () -> Void
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Image(systemName: icon)
+                    .foregroundStyle(iconColor)
+                    .frame(width: 22)
+                Text(label)
+                    .font(.system(size: 15, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.white)
+                Spacer()
+                Toggle("", isOn: enabled)
+                    .labelsHidden()
+                    .tint(JarvisPalette.cyan)
+                    .onChange(of: enabled.wrappedValue) { _ in onSave() }
+            }
+
+            if enabled.wrappedValue {
+                HStack(spacing: 4) {
+                    Text("Daily at")
+                        .font(.system(size: 12, design: .rounded))
+                        .foregroundStyle(JarvisPalette.secondaryText)
+                    timePicker(hour: hour, minute: minute, onChange: onSave)
+                }
+            }
+        }
+    }
+
+    private func timePicker(hour: Binding<Int>, minute: Binding<Int>, onChange: @escaping () -> Void) -> some View {
+        let binding = Binding<Date>(
+            get: {
+                var c = Calendar.current.dateComponents([.year, .month, .day], from: Date())
+                c.hour = hour.wrappedValue
+                c.minute = minute.wrappedValue
+                return Calendar.current.date(from: c) ?? Date()
+            },
+            set: { newDate in
+                let c = Calendar.current.dateComponents([.hour, .minute], from: newDate)
+                hour.wrappedValue   = c.hour   ?? hour.wrappedValue
+                minute.wrappedValue = c.minute ?? minute.wrappedValue
+                onChange()
+            }
+        )
+        return DatePicker("", selection: binding, displayedComponents: .hourAndMinute)
+            .labelsHidden()
+            .colorScheme(.dark)
     }
 
     private var aboutCard: some View {

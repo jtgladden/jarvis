@@ -264,12 +264,14 @@ final class HealthKitManager: ObservableObject {
     func updateServerMode(_ mode: JarvisServerMode) {
         serverMode = mode
         userDefaults.set(mode.rawValue, forKey: StorageKeys.serverMode)
+        writeSharedURL()
         configureAutomaticSync(baseURL: selectedBaseURL)
     }
 
     func updateLocalBaseURL(_ value: String) {
         localBaseURL = value
         userDefaults.set(value, forKey: StorageKeys.localBaseURL)
+        if serverMode == .local { writeSharedURL() }
         if serverMode == .local {
             configureAutomaticSync(baseURL: selectedBaseURL)
         }
@@ -278,9 +280,15 @@ final class HealthKitManager: ObservableObject {
     func updateCustomBaseURL(_ value: String) {
         customBaseURL = value
         userDefaults.set(value, forKey: StorageKeys.customBaseURL)
+        if serverMode == .custom { writeSharedURL() }
         if serverMode == .custom {
             configureAutomaticSync(baseURL: selectedBaseURL)
         }
+    }
+
+    private func writeSharedURL() {
+        UserDefaults(suiteName: "group.com.jtgladden.JarvisHealth")?
+            .set(selectedBaseURL, forKey: "jarvis_widget_api_url")
     }
 
     func configureAutomaticSync(baseURL: String) {

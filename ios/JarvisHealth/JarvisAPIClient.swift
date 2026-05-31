@@ -233,6 +233,22 @@ struct JarvisAPIClient {
         try await get(JournalDayEntry.self, baseURL: baseURL, path: "/journal/\(date)")
     }
 
+    static func extractJournalFromImage(baseURL: String, imageBase64: String, mediaType: String = "image/jpeg", scanTarget: String = "both") async throws -> JournalImageExtractResponse {
+        struct Body: Encodable { let image_base64: String; let media_type: String; let scan_target: String }
+        let body = Body(image_base64: imageBase64, media_type: mediaType, scan_target: scanTarget)
+        var request = URLRequest(url: try url(baseURL, path: "/journal/extract-from-image"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(body)
+        request.timeoutInterval = 180  // GPT-4o vision on a full page can take 60–90s
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+            throw APIError.badResponse((response as? HTTPURLResponse)?.statusCode ?? 0)
+        }
+        do { return try decoder.decode(JournalImageExtractResponse.self, from: data) }
+        catch { throw APIError.decoding(error) }
+    }
+
     static func saveJournalEntry(baseURL: String, date: String, journalEntry: String, accomplishments: String, gratitudeEntry: String, scriptureStudy: String, spiritualNotes: String) async throws -> JournalDayEntry {
         struct Body: Encodable {
             let journal_entry: String; let accomplishments: String; let gratitude_entry: String

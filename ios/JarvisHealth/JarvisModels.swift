@@ -320,6 +320,17 @@ struct LanguageFeedbackResponse: Codable {
 
 // MARK: - Journal
 
+struct JournalDayExtract: Codable {
+    let detected_date: String?
+    let text: String
+}
+
+struct JournalImageExtractResponse: Codable {
+    let entries: [JournalDayExtract]
+    let confidence: String
+    let notes: String
+}
+
 struct JournalDayEntry: Codable {
     let date: String
     let date_label: String

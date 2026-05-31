@@ -32,6 +32,14 @@
 	<string>Jarvis does not read clinical records in this starter build.</string>
 	<key>NSHealthShareUsageDescription</key>
 	<string>Jarvis reads your selected Apple Health data so it can summarize wellness trends for you.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Jarvis uses the camera to scan handwritten journal and study notes.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Jarvis uses the microphone for voice dictation in your journal and scripture notes.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Jarvis transcribes your voice into journal and scripture study notes.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Jarvis reads photos taken on each day to show a photo of the day in your journal.</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>

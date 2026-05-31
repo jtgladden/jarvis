@@ -2674,12 +2674,14 @@ export default function HomePage() {
   const [journalSectionState, setJournalSectionState] = useState<Record<string, JournalSectionState>>({});
   const [journalSavingDate, setJournalSavingDate] = useState<string | null>(null);
   const [journalExtractingDate, setJournalExtractingDate] = useState<string | null>(null);
+  const [journalScanningDate, setJournalScanningDate] = useState<string | null>(null);
   const [journalEditingDate, setJournalEditingDate] = useState<string | null>(null);
   const [journalSearchInput, setJournalSearchInput] = useState("");
   const [journalQuery, setJournalQuery] = useState("");
   const [journalSavedOnly, setJournalSavedOnly] = useState(false);
   const [journalBefore, setJournalBefore] = useState<string | null>(null);
   const [journalHistory, setJournalHistory] = useState<Array<string | null>>([]);
+  const [journalJumpDate, setJournalJumpDate] = useState<string | null>(null);
   const [classifiedBucket] = useState<"all" | "important" | "unimportant">("all");
   const [overview, setOverview] = useState<ClassificationOverview | null>(null);
   const [agenda, setAgenda] = useState<CalendarAgenda | null>(null);
@@ -3134,7 +3136,7 @@ export default function HomePage() {
     setError("");
 
     try {
-      const before = options.before ?? journalBefore;
+      const before = options.before !== undefined ? options.before : journalBefore;
       const nextQuery = options.query ?? journalQuery;
       const nextSavedOnly = options.savedOnly ?? journalSavedOnly;
       const params = new URLSearchParams();
@@ -3411,6 +3413,55 @@ export default function HomePage() {
       await persistJournalDraft(entryDate, nextDraft);
     };
     reader.readAsDataURL(file);
+  };
+
+  const scanJournalFromImage = async (
+    entryDate: string,
+    event: React.ChangeEvent<HTMLInputElement>
+  ) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    const currentDraft = journalDrafts[entryDate];
+    if (!currentDraft) return;
+
+    setJournalScanningDate(entryDate);
+    setError("");
+    try {
+      const arrayBuffer = await file.arrayBuffer();
+      const bytes = new Uint8Array(arrayBuffer);
+      let binary = "";
+      for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
+      const base64 = btoa(binary);
+      const mediaType = file.type || "image/jpeg";
+
+      const response = await fetch(`${API_BASE}/journal/extract-from-image`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ image_base64: base64, media_type: mediaType }),
+      });
+      if (!response.ok) throw new Error(`Server returned ${response.status}`);
+      const result = await response.json() as {
+        detected_date?: string | null;
+        scripture_study?: string;
+        spiritual_notes?: string;
+        journal_entry?: string;
+        confidence?: string;
+      };
+
+      const nextDraft: JournalDraft = {
+        ...currentDraft,
+        ...(result.scripture_study ? { scripture_study: result.scripture_study } : {}),
+        ...(result.journal_entry ? { journal_entry: result.journal_entry } : {}),
+        ...(result.spiritual_notes ? { spiritual_notes: result.spiritual_notes } : {}),
+      };
+      setJournalDrafts((current) => ({ ...current, [entryDate]: nextDraft }));
+      setJournalEditingDate(entryDate);
+    } catch (err) {
+      setError(`Scan failed: ${err instanceof Error ? err.message : "Unknown error"}`);
+    } finally {
+      setJournalScanningDate(null);
+    }
   };
 
   const saveTask = async (
@@ -4530,6 +4581,24 @@ export default function HomePage() {
       setQuickCalendarResult(null);
     }
   }, [isScheduleAgendaMode]);
+
+  useEffect(() => {
+    if (!journalJumpDate || !journal?.entries?.length) return;
+    const el = document.getElementById(`journal-entry-${journalJumpDate}`);
+    if (!el) return;
+    setJournalSectionState((prev) => ({
+      ...prev,
+      [journalJumpDate]: {
+        dayOpen: true,
+        calendarOpen: prev[journalJumpDate]?.calendarOpen ?? false,
+        articlesOpen: prev[journalJumpDate]?.articlesOpen ?? false,
+      },
+    }));
+    setTimeout(() => {
+      el.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 80);
+    setJournalJumpDate(null);
+  }, [journalJumpDate, journal?.entries]);
 
   const selectedMailboxLabel =
     mailboxLabels.find((label) => label.name === selectedMailbox) ||
@@ -6099,6 +6168,58 @@ export default function HomePage() {
                   </div>
                 </div>
 
+                <div className="flex items-center gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="rounded-2xl"
+                    onClick={() => {
+                      const entries = journal?.entries;
+                      if (!entries?.length) return;
+                      const oldest = entries[entries.length - 1]?.date;
+                      if (!oldest) return;
+                      const prev = shiftLocalDateKey(oldest, -1);
+                      void loadJournal({ before: shiftLocalDateKey(prev, 1), history: [...journalHistory, journalBefore] });
+                    }}
+                    disabled={loading}
+                  >
+                    <ChevronLeft className="h-4 w-4" />
+                  </Button>
+                  <input
+                    type="date"
+                    max={formatLocalDateKey(new Date())}
+                    className="h-9 flex-1 rounded-2xl border border-white/10 bg-[rgba(20,22,37,0.88)] px-3 text-sm text-slate-100 outline-none transition focus:border-cyan-300/40"
+                    onChange={(e) => {
+                      const date = e.target.value;
+                      if (!date) return;
+                      const before = shiftLocalDateKey(date, 1);
+                      void loadJournal({ before, history: [] });
+                      setJournalJumpDate(date);
+                    }}
+                  />
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="rounded-2xl"
+                    onClick={() => {
+                      void loadJournal({ before: null, history: [] });
+                      setJournalJumpDate(null);
+                    }}
+                    disabled={loading}
+                  >
+                    Today
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="rounded-2xl"
+                    onClick={() => void loadOlderJournalEntries()}
+                    disabled={!journal?.has_more || loading}
+                  >
+                    <ChevronRight className="h-4 w-4" />
+                  </Button>
+                </div>
+
                 <div className="flex flex-col gap-3 text-sm text-slate-300 md:flex-row md:items-center md:justify-between">
                   <div>
                     {journalQuery
@@ -6152,625 +6273,387 @@ export default function HomePage() {
                   calendarOpen: false,
                   articlesOpen: false,
                 };
-                const dateLabel = highlightJournalSearchText(entry.date_label, journalQuery);
-                const calendarSummary = highlightJournalSearchText(entry.calendar_summary, journalQuery);
-                const worldEventTitle = highlightJournalSearchText(
-                  entry.world_event_title || "No headline captured for this day",
-                  journalQuery
-                );
-                const worldEventSource = highlightJournalSearchText(entry.world_event_source, journalQuery);
-                const worldEventSummary = highlightJournalSearchText(entry.world_event_summary, journalQuery);
                 const isEditingJournalEntry = journalEditingDate === entry.date;
+                const hasContext = !!(entry.calendar_summary || entry.world_event_title);
+                const contextOneLiner = [
+                  entry.calendar_summary ? entry.calendar_summary.split(".")[0] : null,
+                  entry.world_event_title ?? null,
+                ].filter(Boolean).join(" · ");
 
                 return (
                   <Card
                     key={entry.date}
-                    className="rounded-[2rem] border border-white/8 bg-[rgba(17,19,34,0.82)] shadow-[0_16px_44px_rgba(6,7,14,0.36)] backdrop-blur-xl"
+                    id={`journal-entry-${entry.date}`}
+                    className="mx-auto max-w-2xl rounded-[2rem] border border-white/8 bg-[rgba(17,19,34,0.82)] shadow-[0_16px_44px_rgba(6,7,14,0.36)] backdrop-blur-xl"
                   >
-                    <CardHeader className="pb-3">
+                    {/* Day header — with snippet preview when collapsed */}
+                    <CardHeader className="pb-2">
                       <button
                         type="button"
                         onClick={() => toggleJournalSection(entry.date, "dayOpen")}
-                        className="flex w-full flex-col gap-3 text-left md:flex-row md:items-center md:justify-between"
+                        className="flex w-full items-start justify-between gap-3 text-left"
                       >
-                        <div>
+                        <div className="min-w-0 flex-1">
                           <CardTitle className="flex items-center gap-2 text-lg">
-                            <BookOpen className="h-5 w-5" />
-                            <span>{dateLabel}</span>
+                            <BookOpen className="h-5 w-5 shrink-0" />
+                            <span>{highlightJournalSearchText(entry.date_label, journalQuery)}</span>
                           </CardTitle>
-                          <p className="mt-2 text-sm leading-6 text-slate-300">
-                            {sectionState.dayOpen
-                              ? "A quick memory capsule from your calendar plus one world event from the day."
-                              : entry.calendar_summary}
-                          </p>
-                        </div>
-                        <div className="flex items-center gap-3 self-start md:self-auto">
-                          {entry.updated_at ? (
-                            <div className="text-xs text-slate-400">
-                              Saved {new Date(entry.updated_at).toLocaleString()}
+                          {!sectionState.dayOpen ? (
+                            <div className="mt-2 space-y-1">
+                              {draft.scripture_study.trim() ? (
+                                <p className="truncate text-xs text-slate-400">
+                                  <span className="mr-1.5 text-slate-500">📖</span>
+                                  {draft.scripture_study.trim()}
+                                </p>
+                              ) : null}
+                              {draft.journal_entry.trim() ? (
+                                <p className="line-clamp-2 text-xs leading-5 text-slate-500">
+                                  {draft.journal_entry.trim()}
+                                </p>
+                              ) : null}
                             </div>
+                          ) : entry.updated_at ? (
+                            <p className="mt-1 text-xs text-slate-500">
+                              Saved {new Date(entry.updated_at).toLocaleString()}
+                            </p>
                           ) : null}
-                          {sectionState.dayOpen ? (
-                            <ChevronDown className="h-4 w-4 text-slate-400" />
-                          ) : (
-                            <ChevronRight className="h-4 w-4 text-slate-400" />
-                          )}
                         </div>
+                        {sectionState.dayOpen ? (
+                          <ChevronDown className="mt-1 h-4 w-4 shrink-0 text-slate-400" />
+                        ) : (
+                          <ChevronRight className="mt-1 h-4 w-4 shrink-0 text-slate-400" />
+                        )}
                       </button>
                     </CardHeader>
-                    {sectionState.dayOpen ? (
-                    <CardContent className="space-y-5">
-                      <div className="grid items-start gap-4 lg:grid-cols-2">
-                        <div className="space-y-4">
-                        <div className="rounded-[1.6rem] border border-white/6 bg-[rgba(35,37,58,0.7)] p-4">
-                          <button
-                            type="button"
-                            onClick={() => toggleJournalSection(entry.date, "calendarOpen")}
-                            className="flex w-full items-center justify-between gap-3 text-left"
-                          >
-                            <div>
-                              <div className="text-xs uppercase tracking-wide text-slate-400">
-                                What your calendar says you did
-                              </div>
-                              <div
-                                className={`mt-2 text-slate-200 ${
-                                  sectionState.calendarOpen
-                                    ? "text-sm leading-6"
-                                    : "line-clamp-1 text-xs leading-5 text-slate-300"
-                                }`}
-                              >
-                                {calendarSummary}
-                              </div>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <Badge variant="outline" className="rounded-xl">
-                                {draft.calendar_items.filter((item) => !item.removed).length} kept
-                              </Badge>
-                              {sectionState.calendarOpen ? (
-                                <ChevronDown className="h-4 w-4 text-slate-400" />
-                              ) : (
-                                <ChevronRight className="h-4 w-4 text-slate-400" />
-                              )}
-                            </div>
-                          </button>
-                          {sectionState.calendarOpen ? (
-                            <div className="mt-4 space-y-3">
-                              <div className="flex justify-end">
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  className="rounded-xl"
-                                  onClick={() =>
-                                    void updateJournalCalendarItems(
-                                      entry.date,
-                                      (items) => [
-                                        ...items,
-                                        {
-                                          event_id: `custom-${entry.date}-${items.length}`,
-                                          title: "",
-                                          start: entry.date,
-                                          end: null,
-                                          is_all_day: true,
-                                          location: null,
-                                          description: null,
-                                          html_link: null,
-                                          removed: false,
-                                        },
-                                      ]
-                                    )
-                                  }
-                                >
-                                  <Plus className="mr-2 h-4 w-4" />
-                                  Add something
-                                </Button>
-                              </div>
-                              {draft.calendar_items.length ? (
-                                draft.calendar_items.map((item, itemIndex) => (
-                                  (() => {
-                                    const calendarTitleMatches = textMatchesJournalQuery(
-                                      item.title,
-                                      journalQuery
-                                    );
-                                    return (
-                                  <div
-                                    key={`${item.event_id}-${itemIndex}`}
-                                    className={`rounded-[1rem] border px-3 py-3 text-sm transition ${
-                                      item.removed
-                                        ? "border-dashed border-white/10 bg-[rgba(20,22,37,0.4)] text-slate-500"
-                                        : "border-cyan-300/20 bg-[linear-gradient(135deg,rgba(56,189,248,0.12),rgba(20,22,37,0.88))] text-slate-200 shadow-[0_6px_18px_rgba(8,10,20,0.14)]"
-                                    } ${calendarTitleMatches ? "ring-1 ring-fuchsia-300/35 shadow-[0_0_0_1px_rgba(232,121,249,0.18)]" : ""}`}
-                                  >
-                                    <div className="space-y-2">
-                                      <div className="flex items-start justify-between gap-3">
-                                        <div className="min-w-0 flex-1">
-                                          <Input
-                                            value={item.title}
-                                            onChange={(e) =>
-                                              setJournalDrafts((current) => {
-                                                const currentDraft = current[entry.date] || draft;
-                                                return {
-                                                  ...current,
-                                                  [entry.date]: {
-                                                    ...currentDraft,
-                                                    calendar_items: currentDraft.calendar_items.map((currentItem, currentIndex) =>
-                                                    currentIndex === itemIndex
-                                                      ? { ...currentItem, title: e.target.value }
-                                                      : currentItem
-                                                    ),
-                                                  },
-                                                };
-                                              })
-                                            }
-                                            className="h-9 rounded-xl"
-                                            placeholder="What you actually did"
-                                          />
-                                          <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
-                                            <span
-                                              className={`inline-flex items-center rounded-full px-2.5 py-1 ${
-                                                item.removed
-                                                  ? "border border-white/10 bg-[rgba(255,255,255,0.04)] text-slate-500"
-                                                  : "border border-cyan-300/20 bg-cyan-300/10 text-cyan-100"
-                                              }`}
-                                            >
-                                              {formatScheduleTimeRange(item)}
-                                            </span>
-                                            {calendarTitleMatches ? (
-                                              <span className="inline-flex items-center rounded-full border border-fuchsia-300/25 bg-fuchsia-400/15 px-2.5 py-1 text-fuchsia-100">
-                                                Search match in title
-                                              </span>
-                                            ) : null}
-                                            {item.removed ? (
-                                              <span className="text-slate-500">Marked as not done</span>
-                                            ) : null}
-                                          </div>
-                                        </div>
-                                        <Button
-                                          size="sm"
-                                          variant="outline"
-                                          className="rounded-xl"
-                                          onClick={() =>
-                                            void updateJournalCalendarItems(
-                                              entry.date,
-                                              (items) =>
-                                                items.map((currentItem, currentIndex) =>
-                                                  currentIndex === itemIndex
-                                                    ? { ...currentItem, removed: !currentItem.removed }
-                                                    : currentItem
-                                                ),
-                                              true
-                                            )
-                                          }
-                                        >
-                                          {item.removed ? "Restore" : "Remove"}
-                                        </Button>
-                                      </div>
-                                    </div>
-                                  </div>
-                                    );
-                                  })()
-                                ))
-                              ) : (
-                                <div className="text-sm text-slate-400">
-                                  No calendar events were captured for this day.
-                                </div>
-                              )}
-                            </div>
-                          ) : null}
-                        </div>
 
-                        <div className="rounded-[1.6rem] border border-white/6 bg-[rgba(35,37,58,0.7)] p-4">
-                          <div className="flex items-center justify-between gap-3">
-                            <div className="text-xs uppercase tracking-wide text-slate-400">
-                              Scripture / spiritual study
+                    {sectionState.dayOpen ? (
+                      <CardContent className="space-y-5 pt-0">
+
+                        {/* Context strip — calendar + news collapsed by default */}
+                        {hasContext ? (
+                          <div>
+                            <button
+                              type="button"
+                              onClick={() => toggleJournalSection(entry.date, "calendarOpen")}
+                              className="flex w-full items-center gap-2 rounded-[1rem] border border-white/6 bg-[rgba(255,255,255,0.03)] px-3 py-2.5 text-left transition hover:bg-[rgba(255,255,255,0.05)]"
+                            >
+                              <div className="flex shrink-0 items-center gap-1.5 text-slate-500">
+                                {entry.calendar_summary ? <span className="text-xs">📅</span> : null}
+                                {entry.world_event_title ? <span className="text-xs">🌍</span> : null}
+                              </div>
+                              <p className="flex-1 truncate text-xs text-slate-400">{contextOneLiner}</p>
+                              {sectionState.calendarOpen ? (
+                                <ChevronDown className="h-3.5 w-3.5 shrink-0 text-slate-500" />
+                              ) : (
+                                <ChevronRight className="h-3.5 w-3.5 shrink-0 text-slate-500" />
+                              )}
+                            </button>
+
+                            {sectionState.calendarOpen ? (
+                              <div className="mt-2 space-y-4 rounded-[1.2rem] border border-white/6 bg-[rgba(35,37,58,0.55)] p-4">
+                                {/* Calendar items */}
+                                {entry.calendar_summary ? (
+                                  <div className="space-y-3">
+                                    <div className="flex items-center justify-between">
+                                      <div className="text-xs uppercase tracking-wide text-slate-500">Calendar</div>
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        className="h-7 rounded-xl px-2.5 text-xs"
+                                        onClick={() =>
+                                          void updateJournalCalendarItems(entry.date, (items) => [
+                                            ...items,
+                                            { event_id: `custom-${entry.date}-${items.length}`, title: "", start: entry.date, end: null, is_all_day: true, location: null, description: null, html_link: null, removed: false },
+                                          ])
+                                        }
+                                      >
+                                        <Plus className="mr-1 h-3 w-3" /> Add
+                                      </Button>
+                                    </div>
+                                    {draft.calendar_items.length ? (
+                                      <div className="space-y-2">
+                                        {draft.calendar_items.map((item, itemIndex) => (
+                                          <div
+                                            key={`${item.event_id}-${itemIndex}`}
+                                            className={`flex items-center gap-2 rounded-[0.8rem] border px-3 py-2 text-sm ${
+                                              item.removed
+                                                ? "border-dashed border-white/8 text-slate-500"
+                                                : "border-cyan-300/15 bg-cyan-400/5 text-slate-200"
+                                            }`}
+                                          >
+                                            <Input
+                                              value={item.title}
+                                              onChange={(e) =>
+                                                setJournalDrafts((current) => {
+                                                  const d = current[entry.date] || draft;
+                                                  return { ...current, [entry.date]: { ...d, calendar_items: d.calendar_items.map((ci, ci2) => ci2 === itemIndex ? { ...ci, title: e.target.value } : ci) } };
+                                                })
+                                              }
+                                              className="h-8 flex-1 rounded-lg border-0 bg-transparent p-0 text-sm shadow-none focus-visible:ring-0"
+                                              placeholder="Event title"
+                                            />
+                                            <span className="shrink-0 text-xs text-slate-500">{formatScheduleTimeRange(item)}</span>
+                                            <Button
+                                              size="sm"
+                                              variant="ghost"
+                                              className="h-7 shrink-0 rounded-lg px-2 text-xs"
+                                              onClick={() =>
+                                                void updateJournalCalendarItems(entry.date, (items) => items.map((ci, ci2) => ci2 === itemIndex ? { ...ci, removed: !ci.removed } : ci), true)
+                                              }
+                                            >
+                                              {item.removed ? "Restore" : "×"}
+                                            </Button>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    ) : (
+                                      <p className="text-xs text-slate-500">No calendar events for this day.</p>
+                                    )}
+                                  </div>
+                                ) : null}
+
+                                {/* World event */}
+                                {entry.world_event_title ? (
+                                  <div className="space-y-2">
+                                    <div className="text-xs uppercase tracking-wide text-slate-500">World event</div>
+                                    <p className="text-sm font-medium text-slate-100">
+                                      {highlightJournalSearchText(entry.world_event_title, journalQuery)}
+                                    </p>
+                                    {entry.world_event_source ? (
+                                      <p className="text-xs text-cyan-300/70">{entry.world_event_source}</p>
+                                    ) : null}
+                                    {entry.world_event_summary ? (
+                                      <p className="text-sm leading-6 text-slate-300">
+                                        {highlightJournalSearchText(entry.world_event_summary, journalQuery)}
+                                      </p>
+                                    ) : null}
+                                    {entry.world_event_articles?.length ? (
+                                      <div>
+                                        <button
+                                          type="button"
+                                          onClick={() => toggleJournalSection(entry.date, "articlesOpen")}
+                                          className="flex items-center gap-1.5 text-xs text-slate-500 transition hover:text-slate-300"
+                                        >
+                                          {sectionState.articlesOpen ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+                                          {entry.world_event_articles.length} articles
+                                        </button>
+                                        {sectionState.articlesOpen ? (
+                                          <div className="mt-2 space-y-1.5">
+                                            {entry.world_event_articles.map((article, index) =>
+                                              article.link ? (
+                                                <a key={`${article.title}-${index}`} href={article.link} target="_blank" rel="noreferrer"
+                                                  className="block rounded-[0.8rem] border border-white/6 bg-[rgba(20,22,37,0.8)] px-3 py-2 text-xs text-slate-200 transition hover:border-cyan-300/25">
+                                                  {highlightJournalSearchText(article.title, journalQuery)}
+                                                  <span className="ml-2 text-slate-500">{article.source}</span>
+                                                </a>
+                                              ) : (
+                                                <div key={`${article.title}-${index}`}
+                                                  className="rounded-[0.8rem] border border-white/6 bg-[rgba(20,22,37,0.8)] px-3 py-2 text-xs text-slate-200">
+                                                  {highlightJournalSearchText(article.title, journalQuery)}
+                                                </div>
+                                              )
+                                            )}
+                                          </div>
+                                        ) : null}
+                                      </div>
+                                    ) : null}
+                                  </div>
+                                ) : null}
+                              </div>
+                            ) : null}
+                          </div>
+                        ) : null}
+
+                        {/* Scripture study — primary section */}
+                        <div className="space-y-3">
+                          <div className="flex items-center justify-between">
+                            <div className="text-xs font-semibold uppercase tracking-widest text-slate-400">
+                              Scripture study
                             </div>
                             <div className="flex items-center gap-2">
                               {isEditingJournalEntry ? (
                                 <Button
                                   size="sm"
                                   variant="outline"
-                                  className="rounded-xl"
-                                  onClick={() => {
-                                    const draft = journalDrafts[entry.date];
-                                    if (!draft) return;
-                                    void extractJournalCitations(entry.date, draft);
-                                  }}
+                                  className="h-7 rounded-xl px-2.5 text-xs"
+                                  onClick={() => { const d = journalDrafts[entry.date]; if (d) void extractJournalCitations(entry.date, d); }}
                                   disabled={journalSavingDate === entry.date || journalExtractingDate === entry.date}
                                 >
                                   {journalExtractingDate === entry.date ? "Extracting..." : "Extract citations"}
                                 </Button>
                               ) : null}
+                              {!isEditingJournalEntry ? (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-7 rounded-xl px-2.5 text-xs"
+                                  onClick={() => setJournalEditingDate(entry.date)}
+                                >
+                                  Edit
+                                </Button>
+                              ) : null}
                               <Button
+                                asChild
                                 size="sm"
-                                variant={isEditingJournalEntry ? "default" : "outline"}
-                                className="rounded-xl"
-                                onClick={() => {
-                                  if (isEditingJournalEntry) {
-                                    void saveJournalEntry(entry.date);
-                                    return;
-                                  }
-                                  setJournalEditingDate(entry.date);
-                                }}
-                                disabled={journalSavingDate === entry.date || journalExtractingDate === entry.date}
+                                variant="outline"
+                                className="h-7 rounded-xl px-2.5 text-xs"
+                                disabled={journalScanningDate === entry.date}
                               >
-                                {journalSavingDate === entry.date
-                                  ? "Saving..."
-                                  : isEditingJournalEntry
-                                    ? "Save and close"
-                                    : "Edit notes"}
+                                <label className="cursor-pointer" title="Scan handwritten notes">
+                                  {journalScanningDate === entry.date ? "Scanning…" : "Scan notes"}
+                                  <input
+                                    type="file"
+                                    accept="image/*"
+                                    capture="environment"
+                                    className="hidden"
+                                    disabled={journalScanningDate === entry.date}
+                                    onChange={(e) => void scanJournalFromImage(entry.date, e)}
+                                  />
+                                </label>
                               </Button>
                             </div>
                           </div>
-                          <div className="mt-3 space-y-3">
-                            {isEditingJournalEntry ? (
-                              <>
-                                <Input
-                                  value={draft.scripture_study}
-                                  onChange={(e) =>
-                                    setJournalDrafts((current) => ({
-                                      ...current,
-                                      [entry.date]: {
-                                        ...draft,
-                                        scripture_study: e.target.value,
-                                      },
-                                    }))
-                                  }
-                                  className="h-10 rounded-xl"
-                                  placeholder="What did you study today?"
-                                />
-                                <textarea
-                                  value={draft.spiritual_notes}
-                                  onChange={(e) =>
-                                    setJournalDrafts((current) => ({
-                                      ...current,
-                                      [entry.date]: {
-                                        ...draft,
-                                        spiritual_notes: e.target.value,
-                                      },
-                                    }))
-                                  }
-                                  placeholder="Spiritual notes, impressions, questions, or insights."
-                                  className="min-h-[132px] w-full rounded-[1.2rem] border border-white/8 bg-[rgba(20,22,37,0.88)] px-4 py-3 text-sm leading-6 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-cyan-300/40"
-                                />
-                              </>
-                            ) : (
-                              <>
-                                <JournalPreviewBlock
-                                  label="Study"
-                                  value={draft.scripture_study}
-                                  query={journalQuery}
-                                  placeholder="No study saved for this day yet."
-                                  compact
-                                  studyLinks={entry.study_links}
-                                />
-                                {entry.study_links.length ? (
-                                  <div className="space-y-2">
-                                    <div className="text-xs uppercase tracking-wide text-slate-400">
-                                      Study links
-                                    </div>
-                                    <div className="flex flex-wrap gap-2">
-                                      {entry.study_links.map((link) => (
-                                        <div
-                                          key={`${link.label}-${link.url}`}
-                                          className="inline-flex items-center gap-2 rounded-full border border-cyan-300/20 bg-cyan-400/10 px-3 py-1 text-xs text-cyan-100"
-                                        >
-                                          <a
-                                            href={link.url}
-                                            target="_blank"
-                                            rel="noreferrer"
-                                            className="transition hover:text-cyan-50"
-                                          >
-                                            {link.label}
-                                          </a>
-                                          <span className="rounded-full border border-white/10 bg-white/8 px-2 py-0.5 text-[10px] uppercase tracking-[0.14em] text-slate-200">
-                                            {link.confidence === "exact" ? "Exact match" : "Likely source"}
-                                          </span>
-                                        </div>
-                                      ))}
-                                    </div>
-                                  </div>
-                                ) : null}
-                                <div className="space-y-2">
-                                  <div className="text-xs uppercase tracking-wide text-slate-400">
-                                    Spiritual notes
-                                  </div>
-                                  <div className={`rounded-[1.2rem] border px-4 py-3 text-sm leading-6 ${
-                                    draft.spiritual_notes.trim()
-                                      ? "border-white/8 bg-[rgba(20,22,37,0.72)] text-slate-100"
-                                      : "border-dashed border-white/10 bg-[rgba(20,22,37,0.42)] text-slate-500"
-                                  }`}>
-                                    <div className="whitespace-pre-wrap break-words">
-                                      {draft.spiritual_notes.trim()
-                                        ? highlightJournalTextWithReferences(
-                                            draft.spiritual_notes,
-                                            journalQuery,
-                                            entry.study_links
-                                          )
-                                        : "No spiritual notes saved for this day yet."}
-                                    </div>
+                          {isEditingJournalEntry ? (
+                            <textarea
+                              value={draft.scripture_study}
+                              onChange={(e) => setJournalDrafts((c) => ({ ...c, [entry.date]: { ...draft, scripture_study: e.target.value } }))}
+                              placeholder="What did you study today?"
+                              className="min-h-[180px] w-full rounded-[1.2rem] border border-white/8 bg-[rgba(20,22,37,0.88)] px-4 py-3 text-sm leading-6 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-cyan-300/40"
+                            />
+                          ) : (
+                            <>
+                              <JournalPreviewBlock
+                                label="Study"
+                                value={draft.scripture_study}
+                                query={journalQuery}
+                                placeholder="No study saved yet."
+                                studyLinks={entry.study_links}
+                              />
+                              {entry.study_links.length ? (
+                                <div className="flex flex-wrap gap-2">
+                                  {entry.study_links.map((link) => (
+                                    <a
+                                      key={`${link.label}-${link.url}`}
+                                      href={link.url}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      className="inline-flex items-center gap-2 rounded-full border border-cyan-300/20 bg-cyan-400/10 px-3 py-1 text-xs text-cyan-100 transition hover:text-cyan-50"
+                                    >
+                                      {link.label}
+                                      <span className="rounded-full border border-white/10 bg-white/8 px-2 py-0.5 text-[10px] uppercase tracking-[0.14em] text-slate-300">
+                                        {link.confidence === "exact" ? "Exact" : "Likely"}
+                                      </span>
+                                    </a>
+                                  ))}
+                                </div>
+                              ) : null}
+                              {draft.spiritual_notes.trim() ? (
+                                <div className="rounded-[1.2rem] border border-white/8 bg-[rgba(20,22,37,0.55)] px-4 py-3 text-sm leading-6 text-slate-200">
+                                  <div className="whitespace-pre-wrap break-words">
+                                    {highlightJournalTextWithReferences(draft.spiritual_notes, journalQuery, entry.study_links)}
                                   </div>
                                 </div>
-                              </>
-                            )}
-                          </div>
+                              ) : null}
+                            </>
+                          )}
                         </div>
-                        </div>
 
-                        <div className="space-y-4">
-                          <div className="rounded-[1.6rem] border border-white/6 bg-[rgba(35,37,58,0.7)] p-4">
-                            <div className="text-xs uppercase tracking-wide text-slate-400">
-                              World event
-                            </div>
-                            <div className="mt-3 text-base font-medium text-slate-100">
-                              {worldEventTitle}
-                            </div>
-                            {entry.world_event_source ? (
-                              <div className="mt-1 text-xs text-cyan-100">{worldEventSource}</div>
-                            ) : null}
-                            <div className="mt-3 text-sm leading-6 text-slate-200">
-                              {worldEventSummary}
-                            </div>
-                            {entry.world_event_articles?.length ? (
-                              <div className="mt-4">
-                                <button
-                                  type="button"
-                                  onClick={() => toggleJournalSection(entry.date, "articlesOpen")}
-                                  className="flex w-full items-center justify-between gap-3 text-left"
-                                >
-                                  <div className="text-xs uppercase tracking-wide text-slate-400">
-                                    Referenced articles
-                                  </div>
-                                  <div className="flex items-center gap-2">
-                                    <Badge variant="outline" className="rounded-xl">
-                                      {entry.world_event_articles.length}
-                                    </Badge>
-                                    {sectionState.articlesOpen ? (
-                                      <ChevronDown className="h-4 w-4 text-slate-400" />
-                                    ) : (
-                                      <ChevronRight className="h-4 w-4 text-slate-400" />
-                                    )}
-                                  </div>
-                                </button>
-                                {sectionState.articlesOpen ? (
-                                  <div className="mt-3 space-y-2">
-                                    {entry.world_event_articles.map((article, index) => (
-                                      article.link ? (
-                                        <a
-                                          key={`${article.title}-${index}`}
-                                          href={article.link}
-                                          target="_blank"
-                                          rel="noreferrer"
-                                          className="block w-full rounded-[1rem] border border-white/6 bg-[rgba(20,22,37,0.82)] px-3 py-2 text-left transition hover:border-cyan-300/30 hover:bg-[rgba(32,35,57,0.96)]"
-                                        >
-                                          <div className="text-sm text-slate-100">
-                                            {highlightJournalSearchText(article.title, journalQuery)}
-                                          </div>
-                                          <div className="mt-1 text-xs text-slate-400">
-                                            {highlightJournalSearchText(article.source || "Article", journalQuery)}
-                                          </div>
-                                        </a>
-                                      ) : (
-                                        <div
-                                          key={`${article.title}-${index}`}
-                                          className="rounded-[1rem] border border-white/6 bg-[rgba(20,22,37,0.82)] px-3 py-2"
-                                        >
-                                          <div className="text-sm text-slate-100">
-                                            {highlightJournalSearchText(article.title, journalQuery)}
-                                          </div>
-                                          <div className="mt-1 text-xs text-slate-400">
-                                            {highlightJournalSearchText(article.source || "Article", journalQuery)}
-                                          </div>
-                                        </div>
-                                      )
-                                    ))}
-                                  </div>
-                                ) : null}
-                              </div>
-                            ) : null}
+                        {/* Journal entry — primary section */}
+                        <div className="space-y-3">
+                          <div className="text-xs font-semibold uppercase tracking-widest text-slate-400">
+                            Journal
                           </div>
-
-                          {entry.language_sessions?.length ? (
-                            <div className="rounded-[1.6rem] border border-white/6 bg-[rgba(35,37,58,0.7)] p-4">
-                              <div className="text-xs uppercase tracking-wide text-slate-400">Language practice</div>
-                              <div className="mt-3 space-y-2">
-                                {Object.entries(
-                                  entry.language_sessions.reduce<Record<string, { minutes: number; sessions: number }>>((acc, s) => {
-                                    if (!acc[s.language]) acc[s.language] = { minutes: 0, sessions: 0 };
-                                    acc[s.language].minutes += s.minutes;
-                                    acc[s.language].sessions += 1;
-                                    return acc;
-                                  }, {})
-                                ).map(([language, stats]) => (
-                                  <div key={language} className="flex items-center justify-between text-sm">
-                                    <span className="capitalize text-slate-200">{language}</span>
-                                    <span className="text-slate-400">{stats.minutes} min · {stats.sessions} {stats.sessions === 1 ? "session" : "sessions"}</span>
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          ) : null}
-
-                          <div className="rounded-[1.6rem] border border-white/6 bg-[rgba(35,37,58,0.7)] p-4">
-                            <div className="flex items-center justify-between gap-3">
-                              <div className="text-xs uppercase tracking-wide text-slate-400">
-                                Photo memory
-                              </div>
-                              <label className="cursor-pointer text-xs text-cyan-100 underline decoration-cyan-300/30 underline-offset-4">
-                                Add photo
-                                <input
-                                  type="file"
-                                  accept="image/*"
-                                  className="hidden"
-                                  onChange={(e) => void handleJournalPhotoChange(entry.date, e)}
-                                />
-                              </label>
-                            </div>
-                            {draft.photo_data_url ? (
-                              <div className="mt-3">
-                                <div className="relative h-52 w-full overflow-hidden rounded-[1.2rem]">
-                                  <Image
-                                    src={draft.photo_data_url}
-                                    alt={`Memory from ${entry.date_label}`}
-                                    fill
-                                    unoptimized
-                                    className="object-cover"
-                                  />
-                                </div>
-                                <div className="mt-3 flex justify-end">
-                                  <Button
-                                    size="sm"
-                                    variant="outline"
-                                    className="rounded-xl"
-                                    onClick={() =>
-                                      setJournalDrafts((current) => ({
-                                        ...current,
-                                        [entry.date]: {
-                                          ...(current[entry.date] || draft),
-                                          photo_data_url: null,
-                                        },
-                                      }))
-                                    }
-                                  >
-                                    Remove photo
-                                  </Button>
-                                </div>
-                              </div>
-                            ) : (
-                              <div className="mt-3 rounded-[1.2rem] border border-dashed border-white/10 px-4 py-6 text-sm text-slate-400">
-                                Add one image to make the day easier to remember later.
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="grid gap-4 lg:grid-cols-3">
-                        {isEditingJournalEntry ? (
-                          <>
-                            <div className="space-y-2">
-                              <div className="text-xs uppercase tracking-wide text-slate-400">
-                                Journal entry
-                              </div>
-                              <textarea
-                                value={draft.journal_entry}
-                                onChange={(e) =>
-                                  setJournalDrafts((current) => ({
-                                    ...current,
-                                    [entry.date]: {
-                                      ...draft,
-                                      journal_entry: e.target.value,
-                                      accomplishments: current[entry.date]?.accomplishments ?? draft.accomplishments,
-                                      gratitude_entry: current[entry.date]?.gratitude_entry ?? draft.gratitude_entry,
-                                      scripture_study: current[entry.date]?.scripture_study ?? draft.scripture_study,
-                                      spiritual_notes: current[entry.date]?.spiritual_notes ?? draft.spiritual_notes,
-                                      photo_data_url: current[entry.date]?.photo_data_url ?? draft.photo_data_url,
-                                    },
-                                  }))
-                                }
-                                placeholder="Write a quick reflection about the day."
-                                className="min-h-[180px] w-full rounded-[1.2rem] border border-white/8 bg-[rgba(20,22,37,0.88)] px-4 py-3 text-sm leading-6 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-fuchsia-400/50"
-                              />
-                            </div>
-
-                            <div className="space-y-2">
-                              <div className="text-xs uppercase tracking-wide text-slate-400">
-                                Accomplishments
-                              </div>
-                              <textarea
-                                value={draft.accomplishments}
-                                onChange={(e) =>
-                                  setJournalDrafts((current) => ({
-                                    ...current,
-                                    [entry.date]: {
-                                      ...draft,
-                                      journal_entry: current[entry.date]?.journal_entry ?? draft.journal_entry,
-                                      accomplishments: e.target.value,
-                                      gratitude_entry: current[entry.date]?.gratitude_entry ?? draft.gratitude_entry,
-                                      scripture_study: current[entry.date]?.scripture_study ?? draft.scripture_study,
-                                      spiritual_notes: current[entry.date]?.spiritual_notes ?? draft.spiritual_notes,
-                                      photo_data_url: current[entry.date]?.photo_data_url ?? draft.photo_data_url,
-                                    },
-                                  }))
-                                }
-                                placeholder="List wins, progress, or things you want to remember."
-                                className="min-h-[180px] w-full rounded-[1.2rem] border border-white/8 bg-[rgba(20,22,37,0.88)] px-4 py-3 text-sm leading-6 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-fuchsia-400/50"
-                              />
-                            </div>
-
-                            <div className="space-y-2">
-                              <div className="text-xs uppercase tracking-wide text-slate-400">
-                                Gratitude
-                              </div>
-                              <textarea
-                                value={draft.gratitude_entry}
-                                onChange={(e) =>
-                                  setJournalDrafts((current) => ({
-                                    ...current,
-                                    [entry.date]: {
-                                      ...draft,
-                                      journal_entry: current[entry.date]?.journal_entry ?? draft.journal_entry,
-                                      accomplishments: current[entry.date]?.accomplishments ?? draft.accomplishments,
-                                      gratitude_entry: e.target.value,
-                                      scripture_study: current[entry.date]?.scripture_study ?? draft.scripture_study,
-                                      spiritual_notes: current[entry.date]?.spiritual_notes ?? draft.spiritual_notes,
-                                      photo_data_url: current[entry.date]?.photo_data_url ?? draft.photo_data_url,
-                                    },
-                                  }))
-                                }
-                                placeholder="What felt good, generous, or worth appreciating today?"
-                                className="min-h-[180px] w-full rounded-[1.2rem] border border-white/8 bg-[rgba(20,22,37,0.88)] px-4 py-3 text-sm leading-6 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-fuchsia-400/50"
-                              />
-                            </div>
-                          </>
-                        ) : (
-                          <>
+                          {isEditingJournalEntry ? (
+                            <textarea
+                              value={draft.journal_entry}
+                              onChange={(e) => setJournalDrafts((c) => ({ ...c, [entry.date]: { ...draft, journal_entry: e.target.value } }))}
+                              placeholder="What's on your mind?"
+                              className="min-h-[200px] w-full rounded-[1.2rem] border border-white/8 bg-[rgba(20,22,37,0.88)] px-4 py-3 text-sm leading-6 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-fuchsia-400/50"
+                            />
+                          ) : (
                             <JournalPreviewBlock
                               label="Journal entry"
                               value={draft.journal_entry}
                               query={journalQuery}
-                              placeholder="No journal entry saved for this day yet."
+                              placeholder="No journal entry saved yet."
                             />
-                            <JournalPreviewBlock
-                              label="Accomplishments"
-                              value={draft.accomplishments}
-                              query={journalQuery}
-                              placeholder="No accomplishments saved for this day yet."
-                            />
-                            <JournalPreviewBlock
-                              label="Gratitude"
-                              value={draft.gratitude_entry}
-                              query={journalQuery}
-                              placeholder="No gratitude saved for this day yet."
-                            />
-                          </>
-                        )}
-                      </div>
+                          )}
+                        </div>
 
-                      <div className="flex justify-end">
+                        {/* Photo of the day */}
+                        {/* TODO: Replace manual upload with photo database sync */}
+                        {draft.photo_data_url ? (
+                          <div className="space-y-2">
+                            <div className="text-xs font-semibold uppercase tracking-widest text-slate-400">Photo of the day</div>
+                            <div className="relative overflow-hidden rounded-[1.2rem]">
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img
+                                src={draft.photo_data_url}
+                                alt={`Memory from ${entry.date_label}`}
+                                className="w-full object-contain"
+                                style={{ maxHeight: "360px" }}
+                              />
+                            </div>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-7 rounded-xl px-2.5 text-xs"
+                              onClick={() =>
+                                setJournalDrafts((current) => ({
+                                  ...current,
+                                  [entry.date]: { ...(current[entry.date] || draft), photo_data_url: null },
+                                }))
+                              }
+                            >
+                              Remove photo
+                            </Button>
+                          </div>
+                        ) : (
+                          <Button asChild size="sm" variant="outline" className="h-7 rounded-xl px-2.5 text-xs">
+                            <label className="cursor-pointer">
+                              Add photo of the day
+                              <input type="file" accept="image/*" className="hidden" onChange={(e) => void handleJournalPhotoChange(entry.date, e)} />
+                            </label>
+                          </Button>
+                        )}
+
+                        {/* Language sessions — compact */}
+                        {entry.language_sessions?.length ? (
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-xs text-slate-500">Language:</span>
+                            {Object.entries(
+                              entry.language_sessions.reduce<Record<string, number>>((acc, s) => {
+                                acc[s.language] = (acc[s.language] || 0) + s.minutes;
+                                return acc;
+                              }, {})
+                            ).map(([lang, mins]) => (
+                              <span key={lang} className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-xs capitalize text-slate-300">
+                                {lang} · {mins} min
+                              </span>
+                            ))}
+                          </div>
+                        ) : null}
+
+                        {/* Save / edit actions */}
                         {isEditingJournalEntry ? (
-                          <div className="flex items-center gap-2">
+                          <div className="flex justify-end gap-2">
                             <Button
                               variant="outline"
                               className="rounded-2xl"
-                              onClick={() => {
-                                const draft = journalDrafts[entry.date];
-                                if (!draft) return;
-                                void extractJournalCitations(entry.date, draft);
-                              }}
-                              disabled={journalSavingDate === entry.date || journalExtractingDate === entry.date}
+                              onClick={() => setJournalEditingDate(null)}
                             >
-                              {journalExtractingDate === entry.date ? "Extracting..." : "Extract citations"}
+                              Cancel
                             </Button>
                             <Button
                               className="rounded-2xl"
                               onClick={() => void saveJournalEntry(entry.date)}
                               disabled={journalSavingDate === entry.date || journalExtractingDate === entry.date}
                             >
-                              {journalSavingDate === entry.date ? "Saving..." : "Save entry"}
+                              {journalSavingDate === entry.date ? "Saving..." : "Save"}
                             </Button>
                           </div>
                         ) : null}
-                      </div>
-                    </CardContent>
+                      </CardContent>
                     ) : null}
                   </Card>
                 );
