@@ -504,12 +504,22 @@ class WorkoutRoutePoint(BaseModel):
     vertical_accuracy_m: Optional[float] = None
 
 
+class WorkoutSetEntry(BaseModel):
+    exercise: str
+    sets: str = ""
+    reps: str = ""
+    weight: str = ""
+    notes: str = ""
+
+
 class WorkoutEntry(BaseModel):
     workout_id: str
     date: str
     source: str = "ios_healthkit_workout"
     activity_type: str = "other"
     activity_label: str = "Other"
+    override_label: Optional[str] = None
+    exercise_log: List[WorkoutSetEntry] = Field(default_factory=list)
     start_date: str
     end_date: str
     duration_minutes: float = 0

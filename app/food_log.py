@@ -12,6 +12,7 @@ from app.food_log_store import (
     get_food_entries,
     get_food_entries_range,
     get_macro_targets,
+    delete_manual_workout,
     get_manual_workout,
     get_manual_workouts_range,
     list_meal_prep_items,
@@ -114,6 +115,10 @@ def log_manual_workout(entry_date: str, payload: ManualWorkoutLogRequest) -> Man
         notes=payload.notes,
     )
     return ManualWorkoutLog(**raw)
+
+
+def remove_manual_workout(entry_date: str) -> bool:
+    return delete_manual_workout(date=entry_date, user_id=_user_id())
 
 
 def get_meal_prep_library() -> list[MealPrepItem]:

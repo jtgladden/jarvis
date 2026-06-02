@@ -169,6 +169,12 @@ def get_manual_workout(date: str, user_id: str) -> dict | None:
         return {"id": row[0], "date": row[1], "type": row[2], "duration_minutes": row[3], "notes": row[4], "logged_at": row[5]}
 
 
+def delete_manual_workout(date: str, user_id: str) -> bool:
+    with _cursor() as cur:
+        cur.execute("DELETE FROM manual_workout_logs WHERE date=? AND user_id=?", (date, user_id))
+        return cur.rowcount > 0
+
+
 def get_manual_workouts_range(user_id: str, days: int) -> dict[str, dict | None]:
     dates = [(today_local() - timedelta(days=i)).isoformat() for i in range(days)]
     with _cursor() as cur:

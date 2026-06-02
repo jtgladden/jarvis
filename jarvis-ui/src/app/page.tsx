@@ -730,7 +730,8 @@ function workoutActivityLabelFromType(activityType: string | null | undefined) {
   }
 }
 
-function formatWorkoutLabel(label: string | null | undefined, activityType?: string | null) {
+function formatWorkoutLabel(label: string | null | undefined, activityType?: string | null, overrideLabel?: string | null) {
+  if (overrideLabel?.trim()) return overrideLabel.trim();
   const normalized = (label || "").trim();
   if (normalized && !/^workout$/i.test(normalized) && !/^\(RawValue:\s*\d+\)$/i.test(normalized)) {
     return normalized;
@@ -1088,12 +1089,16 @@ type WorkoutRoutePoint = {
   vertical_accuracy_m?: number | null;
 };
 
+type WorkoutSetEntry = { exercise: string; sets: string; reps: string; weight: string; notes: string };
+
 type WorkoutEntry = {
   workout_id: string;
   date: string;
   source: string;
   activity_type: string;
   activity_label: string;
+  override_label?: string | null;
+  exercise_log: WorkoutSetEntry[];
   start_date: string;
   end_date: string;
   duration_minutes: number;
@@ -1238,6 +1243,13 @@ function HealthDetailPanel({
   const [editForm, setEditForm] = useState({ name: "", cal: "", pro: "", carb: "", fat: "", meal: "Other" });
   // workout form
   const [wType, setWType] = useState("Chest + triceps"); const [wDur, setWDur] = useState(""); const [wNotes, setWNotes] = useState("");
+  const [editingWorkout, setEditingWorkout] = useState(false);
+  const [labelingWorkoutId, setLabelingWorkoutId] = useState<string | null>(null);
+  const [workoutLabelOverrides, setWorkoutLabelOverrides] = useState<Record<string, string | null>>({});
+  const [loggingExercisesId, setLoggingExercisesId] = useState<string | null>(null);
+  const [exerciseDrafts, setExerciseDrafts] = useState<WorkoutSetEntry[]>([]);
+  const [exerciseSaving, setExerciseSaving] = useState(false);
+  const [exerciseLogOverrides, setExerciseLogOverrides] = useState<Record<string, WorkoutSetEntry[]>>({});
   // meal prep form
   const [mpName, setMpName] = useState(""); const [mpCal, setMpCal] = useState(""); const [mpPro, setMpPro] = useState(""); const [mpCarb, setMpCarb] = useState(""); const [mpFat, setMpFat] = useState(""); const [mpNotes, setMpNotes] = useState("");
 
@@ -1305,8 +1317,42 @@ function HealthDetailPanel({
   const logWorkout = async () => {
     try {
       const res = await fetch(`${API_BASE}/nutrition/log/${activeHealthDate}/workout`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ type: wType, duration_minutes: parseInt(wDur)||0, notes: wNotes }) });
-      if (res.ok) { setWDur(""); setWNotes(""); await loadFoodLog(activeHealthDate); }
+      if (res.ok) { setWDur(""); setWNotes(""); setEditingWorkout(false); await loadFoodLog(activeHealthDate); }
     } catch { /* silent */ }
+  };
+
+  const deleteWorkout = async () => {
+    try { await fetch(`${API_BASE}/nutrition/log/${activeHealthDate}/workout`, { method: "DELETE" }); await loadFoodLog(activeHealthDate); } catch { /* silent */ }
+  };
+
+  const setWorkoutLabel = async (workoutId: string, label: string | null) => {
+    try {
+      await fetch(`${API_BASE}/workouts/${workoutId}/label`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ label }) });
+      setWorkoutLabelOverrides(prev => ({ ...prev, [workoutId]: label }));
+      setLabelingWorkoutId(null);
+    } catch { /* silent */ }
+  };
+
+  const startEditWorkout = (w: { type: string; duration_minutes: number | null; notes: string | null }) => {
+    setWType(w.type); setWDur(w.duration_minutes ? String(w.duration_minutes) : ""); setWNotes(w.notes ?? ""); setEditingWorkout(true);
+  };
+
+  const openExerciseLog = (w: WorkoutEntry) => {
+    if (loggingExercisesId === w.workout_id) { setLoggingExercisesId(null); return; }
+    const existing = exerciseLogOverrides[w.workout_id] ?? w.exercise_log;
+    setExerciseDrafts(existing.length > 0 ? [...existing] : [{ exercise: "", sets: "", reps: "", weight: "", notes: "" }]);
+    setLoggingExercisesId(w.workout_id);
+  };
+
+  const saveExerciseLog = async (workoutId: string) => {
+    setExerciseSaving(true);
+    try {
+      const saved = exerciseDrafts.filter(e => e.exercise.trim());
+      await fetch(`${API_BASE}/workouts/${workoutId}/exercises`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ exercises: saved }) });
+      setExerciseLogOverrides(prev => ({ ...prev, [workoutId]: saved }));
+      setLoggingExercisesId(null);
+    } catch { /* silent */ }
+    finally { setExerciseSaving(false); }
   };
 
   const quickAdd = async (item: MealPrepItem) => {
@@ -1633,7 +1679,7 @@ function HealthDetailPanel({
                       <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
                         <div>
                           <div className="text-sm font-medium text-slate-100">
-                            {formatWorkoutLabel(workout.activity_label, workout.activity_type)}
+                            {formatWorkoutLabel(workout.activity_label, workout.activity_type, workout.override_label)}
                           </div>
                           <div className="mt-1 text-xs text-slate-400">{formatScheduleDateTime(workout.start_date)}</div>
                         </div>
@@ -1831,25 +1877,136 @@ function HealthDetailPanel({
                         <div className="text-sm text-slate-500">No workout logged. Use the Log Food tab to add one.</div>
                       ) : (
                         <div className="space-y-2">
-                          {selectedWorkoutEntries.map((w) => (
-                            <div key={w.workout_id} className="flex items-center gap-3 rounded-xl border border-white/5 bg-white/3 px-3 py-2">
-                              <span className="text-lg">⌚</span>
-                              <div>
-                                <div className="text-sm text-slate-100">{w.activity_label}</div>
-                                <div className="text-xs text-slate-500">
-                                  {Math.round(w.duration_minutes)} min
-                                  {w.active_energy_kcal ? ` · ${Math.round(w.active_energy_kcal)} cal` : ""}
-                                  {w.avg_heart_rate_bpm ? ` · ${Math.round(w.avg_heart_rate_bpm)} bpm avg` : ""}
-                                  {w.total_distance_km ? ` · ${w.total_distance_km.toFixed(1)} km` : ""}
+                          {selectedWorkoutEntries.map((w) => {
+                            const effectiveLabel = workoutLabelOverrides.hasOwnProperty(w.workout_id) ? workoutLabelOverrides[w.workout_id] : w.override_label;
+                            const effectiveLog = exerciseLogOverrides[w.workout_id] ?? w.exercise_log;
+                            const planDay = WORKOUT_PLAN.schedule.find(s => s.label === effectiveLabel);
+                            const planExercises = planDay && "exercises" in planDay ? (planDay as unknown as { exercises: { name: string; sets: number; reps: string }[] }).exercises : null;
+                            return (
+                            <div key={w.workout_id} className="rounded-xl border border-white/5 bg-white/3 px-3 py-2">
+                              <div className="flex items-center gap-3">
+                                <span className="text-lg">⌚</span>
+                                <div className="min-w-0 flex-1">
+                                  <div className="text-sm text-slate-100">{formatWorkoutLabel(w.activity_label, w.activity_type, effectiveLabel)}</div>
+                                  <div className="text-xs text-slate-500">
+                                    {Math.round(w.duration_minutes)} min
+                                    {w.active_energy_kcal ? ` · ${Math.round(w.active_energy_kcal)} cal` : ""}
+                                    {w.avg_heart_rate_bpm ? ` · ${Math.round(w.avg_heart_rate_bpm)} bpm avg` : ""}
+                                    {w.total_distance_km ? ` · ${w.total_distance_km.toFixed(1)} km` : ""}
+                                  </div>
+                                </div>
+                                <div className="flex shrink-0 gap-1.5">
+                                  <button onClick={() => openExerciseLog(w)} className={`text-xs px-2 py-0.5 rounded-full border transition ${loggingExercisesId === w.workout_id ? "border-orange-300/30 bg-orange-400/15 text-orange-200" : effectiveLog.length > 0 ? "border-white/10 bg-white/6 text-slate-300 hover:bg-white/12" : "border-white/6 text-slate-500 hover:text-slate-300"}`} title="Log sets & reps">
+                                    {effectiveLog.length > 0 ? `${effectiveLog.length} ex` : "+ sets"}
+                                  </button>
+                                  <button onClick={() => setLabelingWorkoutId(labelingWorkoutId === w.workout_id ? null : w.workout_id)} className="shrink-0 text-slate-500 hover:text-slate-200" title="Set plan label">🏷</button>
                                 </div>
                               </div>
+
+                              {/* Exercise log panel */}
+                              {loggingExercisesId === w.workout_id && (
+                                <div className="mt-2 space-y-2 border-t border-white/6 pt-2">
+                                  {planExercises && exerciseDrafts.every(d => !d.exercise.trim()) && (
+                                    <div className="flex flex-wrap gap-1.5">
+                                      <span className="text-xs text-slate-500">From plan:</span>
+                                      {planExercises.map(pe => (
+                                        <button key={pe.name} onClick={() => setExerciseDrafts(prev => [...prev.filter(d => d.exercise.trim()), { exercise: pe.name, sets: String(pe.sets), reps: pe.reps, weight: "", notes: "" }])}
+                                          className="rounded-full bg-white/6 px-2 py-0.5 text-xs text-slate-300 hover:bg-white/12">
+                                          {pe.name}
+                                        </button>
+                                      ))}
+                                    </div>
+                                  )}
+                                  <div className="space-y-1.5">
+                                    {exerciseDrafts.map((row, i) => (
+                                      <div key={i} className="grid grid-cols-[1fr_3rem_3rem_4rem_1.5rem] gap-1.5 items-center">
+                                        <input value={row.exercise} onChange={e => setExerciseDrafts(prev => prev.map((r, j) => j === i ? { ...r, exercise: e.target.value } : r))}
+                                          placeholder="Exercise" className="rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-xs text-slate-100 outline-none focus:border-orange-300/40" />
+                                        <input value={row.sets} onChange={e => setExerciseDrafts(prev => prev.map((r, j) => j === i ? { ...r, sets: e.target.value } : r))}
+                                          placeholder="Sets" className="rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-xs text-slate-100 outline-none focus:border-orange-300/40 text-center" />
+                                        <input value={row.reps} onChange={e => setExerciseDrafts(prev => prev.map((r, j) => j === i ? { ...r, reps: e.target.value } : r))}
+                                          placeholder="Reps" className="rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-xs text-slate-100 outline-none focus:border-orange-300/40 text-center" />
+                                        <input value={row.weight} onChange={e => setExerciseDrafts(prev => prev.map((r, j) => j === i ? { ...r, weight: e.target.value } : r))}
+                                          placeholder="Weight" className="rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-xs text-slate-100 outline-none focus:border-orange-300/40 text-center" />
+                                        <button onClick={() => setExerciseDrafts(prev => prev.filter((_, j) => j !== i))} className="text-slate-600 hover:text-red-400 text-xs">✕</button>
+                                      </div>
+                                    ))}
+                                  </div>
+                                  <div className="flex gap-2 pt-0.5">
+                                    <button onClick={() => setExerciseDrafts(prev => [...prev, { exercise: "", sets: "", reps: "", weight: "", notes: "" }])}
+                                      className="text-xs text-slate-500 hover:text-slate-300">+ add row</button>
+                                    <div className="flex-1" />
+                                    <button onClick={() => setLoggingExercisesId(null)} className="rounded-xl border border-white/10 bg-white/5 px-3 py-1 text-xs text-slate-400 hover:bg-white/10">Cancel</button>
+                                    <button onClick={() => void saveExerciseLog(w.workout_id)} disabled={exerciseSaving}
+                                      className="rounded-xl border border-orange-300/20 bg-orange-400/10 px-3 py-1 text-xs text-orange-200 hover:bg-orange-400/20 disabled:opacity-50">
+                                      {exerciseSaving ? "Saving…" : "Save"}
+                                    </button>
+                                  </div>
+                                  {/* Saved summary (when not editing) */}
+                                </div>
+                              )}
+
+                              {/* Saved log preview when closed */}
+                              {loggingExercisesId !== w.workout_id && effectiveLog.length > 0 && (
+                                <div className="mt-1.5 space-y-0.5 border-t border-white/5 pt-1.5">
+                                  {effectiveLog.map((e, i) => (
+                                    <div key={i} className="flex gap-2 text-xs text-slate-500">
+                                      <span className="flex-1 text-slate-400">{e.exercise}</span>
+                                      {e.sets && <span>{e.sets}×{e.reps}</span>}
+                                      {e.weight && <span>{e.weight}</span>}
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+
+                              {labelingWorkoutId === w.workout_id && (
+                                <div className="mt-2 space-y-1.5 border-t border-white/6 pt-2">
+                                  <div className="text-xs text-slate-500">Label as plan workout:</div>
+                                  <div className="flex flex-wrap gap-1.5">
+                                    {WORKOUT_PLAN.schedule.filter(s => s.label !== "Rest").map(s => (
+                                      <button key={s.label} onClick={() => void setWorkoutLabel(w.workout_id, s.label)}
+                                        className={`rounded-full px-2.5 py-0.5 text-xs transition ${effectiveLabel === s.label ? "bg-orange-400/25 text-orange-200 ring-1 ring-orange-300/30" : "bg-white/6 text-slate-300 hover:bg-white/12"}`}>
+                                        {s.label}
+                                      </button>
+                                    ))}
+                                    {effectiveLabel && (
+                                      <button onClick={() => void setWorkoutLabel(w.workout_id, null)} className="rounded-full bg-white/4 px-2.5 py-0.5 text-xs text-slate-500 hover:text-red-400">
+                                        Clear label
+                                      </button>
+                                    )}
+                                  </div>
+                                </div>
+                              )}
                             </div>
-                          ))}
+                            );
+                          })}
                           {foodLog?.manual_workout && (
                             <div className="rounded-xl border border-white/5 bg-white/3 px-3 py-2">
-                              <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-xs text-emerald-300">{foodLog.manual_workout.type}</span>
-                              {foodLog.manual_workout.duration_minutes ? <span className="ml-2 text-xs text-slate-400">{foodLog.manual_workout.duration_minutes} min</span> : null}
-                              {foodLog.manual_workout.notes ? <div className="mt-1 text-xs text-slate-400">{foodLog.manual_workout.notes}</div> : null}
+                              {editingWorkout ? (
+                                <div className="space-y-2">
+                                  <select value={wType} onChange={e => setWType(e.target.value)} className="w-full rounded-lg border border-white/10 bg-[rgba(20,22,37,0.88)] px-2 py-1.5 text-sm text-slate-100 outline-none">
+                                    {["Chest + triceps","Back + biceps","Legs","Shoulders","Full body","Cardio","Run","Swim","Yoga","Other"].map(t => <option key={t}>{t}</option>)}
+                                  </select>
+                                  <input type="number" value={wDur} onChange={e => setWDur(e.target.value)} placeholder="Duration (min)" min="0" className="w-full rounded-lg border border-white/10 bg-white/5 px-2 py-1.5 text-sm text-slate-100 outline-none focus:border-orange-300/40" />
+                                  <textarea value={wNotes} onChange={e => setWNotes(e.target.value)} placeholder="Notes..." rows={2} className="w-full resize-none rounded-lg border border-white/10 bg-white/5 px-2 py-1.5 text-sm text-slate-100 outline-none focus:border-orange-300/40" />
+                                  <div className="flex gap-2">
+                                    <button onClick={() => void logWorkout()} className="flex-1 rounded-xl border border-orange-300/20 bg-orange-400/10 py-1.5 text-xs text-orange-200 hover:bg-orange-400/20">Save</button>
+                                    <button onClick={() => setEditingWorkout(false)} className="flex-1 rounded-xl border border-white/10 bg-white/5 py-1.5 text-xs text-slate-400 hover:bg-white/10">Cancel</button>
+                                  </div>
+                                </div>
+                              ) : (
+                                <div className="flex items-start justify-between gap-4">
+                                  <div>
+                                    <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-xs text-emerald-300">{foodLog.manual_workout.type}</span>
+                                    {foodLog.manual_workout.duration_minutes ? <span className="ml-2 text-xs text-slate-400">{foodLog.manual_workout.duration_minutes} min</span> : null}
+                                    {foodLog.manual_workout.notes ? <div className="mt-1 text-xs text-slate-400">{foodLog.manual_workout.notes}</div> : null}
+                                  </div>
+                                  <div className="flex shrink-0 gap-2">
+                                    <button onClick={() => startEditWorkout(foodLog.manual_workout!)} className="text-slate-500 hover:text-slate-200" title="Edit">✎</button>
+                                    <button onClick={() => void deleteWorkout()} className="text-slate-500 hover:text-red-400" title="Delete">✕</button>
+                                  </div>
+                                </div>
+                              )}
                             </div>
                           )}
                         </div>

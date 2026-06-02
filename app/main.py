@@ -5,6 +5,7 @@ from time import sleep
 from uuid import uuid4
 
 from fastapi import APIRouter, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
+from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
@@ -21,7 +22,7 @@ from app.gmail_client import apply_custom_rules_to_jarvis_emails, cleanup_inbox,
 from app.google_oauth import begin_google_oauth, finish_google_oauth, get_google_oauth_instructions
 from app.health import list_health_entries, sync_health_daily_entry
 from app.health_store import init_health_store
-from app.food_log import add_food_log_entry, add_meal_prep_item, get_daily_food_log, get_food_log_history, get_meal_prep_library, get_user_macro_targets, log_manual_workout, parse_food_description, remove_food_log_entry, remove_meal_prep_item, update_food_log_entry, update_user_macro_targets
+from app.food_log import add_food_log_entry, add_meal_prep_item, get_daily_food_log, get_food_log_history, get_meal_prep_library, get_user_macro_targets, log_manual_workout, parse_food_description, remove_food_log_entry, remove_meal_prep_item, remove_manual_workout, update_food_log_entry, update_user_macro_targets
 from app.food_log_store import init_food_log_store
 from app.job_alerts import clear_email_parse_cache, get_job_alerts_cached, invalidate_job_alerts_cache, run_job_alerts_job
 from app.journal import extract_journal_day_citations, get_journal, get_journal_day, save_journal_day
@@ -32,14 +33,14 @@ from app.movement import list_movement_entries, sync_movement_daily_entry
 from app.movement_store import init_movement_store
 from app.planner import generate_schedule_plan
 from app.rules import classify_new_email_rule
-from app.schemas import AssistantAskRequest, JournalDayExtract, JournalImageExtractRequest, JournalImageExtractResponse, DailyFoodLog, FoodLogAddRequest, FoodLogEntry, FoodLogHistoryResponse, FoodLogUpdateRequest, FoodParseRequest, FoodParseResponse, JobAlertsJobStartResponse, JobAlertsJobStatus, JobAlertsResponse, JobListing, MacroTargets, MacroTargetsUpdateRequest, ManualWorkoutLog, ManualWorkoutLogRequest, MealPrepCreateRequest, MealPrepItem, AssistantAskResponse, AssistantChatListResponse, AssistantChatThread, CalendarAgendaResponse, CalendarEventCreateResponse, CalendarEventPreview, CalendarQuickAddRequest, CalendarQuickAddResponse, ClassifiedEmailResponse, ClassificationGuidanceRequest, ClassificationGuidanceResponse, ClassificationOverviewResponse, CleanupJobStartResponse, CleanupJobStatus, CleanupResponse, DashboardResponse, DashboardTaskItem, DeleteEmailResponse, EmailCommandRequest, EmailCommandResponse, EmailPageResponse, EmailSummary, EmailUpdateRequest, EmailUpdateResponse, GmailLabel, HandleEmailRequest, HandleEmailResponse, HealthDailySyncRequest, HealthDailySyncResponse, HealthListResponse, JournalDayEntry, JournalDayNoteUpdateRequest, JournalResponse, LanguageCode, LanguageConversationRequest, LanguageConversationResponse, LanguageDashboardResponse, LanguageFeedbackResponse, LanguagePracticeGenerateRequest, LanguagePracticeGenerateResponse, LanguagePracticeSession, LanguagePracticeSessionCreateRequest, LanguageProfile, LanguageProfileUpdateRequest, LanguageSpeechRequest, LanguageVocabCreateRequest, LanguageVocabItem, LanguageVocabNormalizeResponse, LanguageVocabReviewRequest, LanguageVocabUpdateRequest, LanguageWordExplainRequest, LanguageWordExplainResponse, LanguageWritingFeedbackRequest, MovementDailySyncRequest, MovementDailySyncResponse, MovementListResponse, PlanningCalendarBulkCreateRequest, PlanningCalendarBulkCreateResponse, PlanningCalendarCreateRequest, PlanningCalendarCreateResponse, PlanningJobStartResponse, PlanningJobStatus, PlanningRequest, PlanningResponse, RuleSuggestion, RuleSuggestionResponse, RuleProcessResponse, TaskCreateRequest, TaskListResponse, TaskUpdateRequest, UserRule, UserRuleCondition, UserRuleCreateRequest, UserRuleListResponse, UserRuleUpdateRequest, WorkoutBatchSyncRequest, WorkoutBatchSyncResponse, WorkoutListResponse
+from app.schemas import AssistantAskRequest, JournalDayExtract, JournalImageExtractRequest, JournalImageExtractResponse, DailyFoodLog, FoodLogAddRequest, FoodLogEntry, FoodLogHistoryResponse, FoodLogUpdateRequest, FoodParseRequest, FoodParseResponse, JobAlertsJobStartResponse, JobAlertsJobStatus, JobAlertsResponse, JobListing, MacroTargets, MacroTargetsUpdateRequest, ManualWorkoutLog, ManualWorkoutLogRequest, MealPrepCreateRequest, MealPrepItem, AssistantAskResponse, AssistantChatListResponse, AssistantChatThread, CalendarAgendaResponse, CalendarEventCreateResponse, CalendarEventPreview, CalendarQuickAddRequest, CalendarQuickAddResponse, ClassifiedEmailResponse, ClassificationGuidanceRequest, ClassificationGuidanceResponse, ClassificationOverviewResponse, CleanupJobStartResponse, CleanupJobStatus, CleanupResponse, DashboardResponse, DashboardTaskItem, DeleteEmailResponse, EmailCommandRequest, EmailCommandResponse, EmailPageResponse, EmailSummary, EmailUpdateRequest, EmailUpdateResponse, GmailLabel, HandleEmailRequest, HandleEmailResponse, HealthDailySyncRequest, HealthDailySyncResponse, HealthListResponse, JournalDayEntry, JournalDayNoteUpdateRequest, JournalResponse, LanguageCode, LanguageConversationRequest, LanguageConversationResponse, LanguageDashboardResponse, LanguageFeedbackResponse, LanguagePracticeGenerateRequest, LanguagePracticeGenerateResponse, LanguagePracticeSession, LanguagePracticeSessionCreateRequest, LanguageProfile, LanguageProfileUpdateRequest, LanguageSpeechRequest, LanguageVocabCreateRequest, LanguageVocabItem, LanguageVocabNormalizeResponse, LanguageVocabReviewRequest, LanguageVocabUpdateRequest, LanguageWordExplainRequest, LanguageWordExplainResponse, LanguageWritingFeedbackRequest, MovementDailySyncRequest, MovementDailySyncResponse, MovementListResponse, PlanningCalendarBulkCreateRequest, PlanningCalendarBulkCreateResponse, PlanningCalendarCreateRequest, PlanningCalendarCreateResponse, PlanningJobStartResponse, PlanningJobStatus, PlanningRequest, PlanningResponse, RuleSuggestion, RuleSuggestionResponse, RuleProcessResponse, TaskCreateRequest, TaskListResponse, TaskUpdateRequest, UserRule, UserRuleCondition, UserRuleCreateRequest, UserRuleListResponse, UserRuleUpdateRequest, WorkoutBatchSyncRequest, WorkoutBatchSyncResponse, WorkoutListResponse, WorkoutSetEntry
 from app.rule_parser import parse_rule_to_fields
 from app.task_service import create_task, delete_task, list_tasks, update_task
 from app.task_store import init_task_store
 from app.user_rules_store import create_user_rule, delete_user_rule, init_user_rules_store, list_user_rules, set_user_rule_enabled
 from app.user_context import get_default_user_context
 from app.workout import list_workout_entries, sync_workout_batch
-from app.workout_store import init_workout_store
+from app.workout_store import init_workout_store, save_workout_exercise_log, set_workout_override_label
 
 app = FastAPI(title="Mail AI", version="0.1.0")
 api = APIRouter(prefix="/api")
@@ -454,6 +455,26 @@ def workouts(days: int = Query(default=30, ge=1, le=365), limit: int = Query(def
 @api.post("/workouts/sync", response_model=WorkoutBatchSyncResponse)
 def sync_workouts(payload: WorkoutBatchSyncRequest):
     return sync_workout_batch(payload)
+
+
+class WorkoutLabelRequest(BaseModel):
+    label: str | None = None
+
+
+@api.patch("/workouts/{workout_id}/label", status_code=204)
+def patch_workout_label(workout_id: str, payload: WorkoutLabelRequest):
+    if not set_workout_override_label(workout_id, payload.label):
+        raise HTTPException(status_code=404, detail="Workout not found")
+
+
+class WorkoutExerciseLogRequest(BaseModel):
+    exercises: list[WorkoutSetEntry]
+
+
+@api.put("/workouts/{workout_id}/exercises", status_code=204)
+def put_workout_exercises(workout_id: str, payload: WorkoutExerciseLogRequest):
+    if not save_workout_exercise_log(workout_id, payload.exercises):
+        raise HTTPException(status_code=404, detail="Workout not found")
 
 
 @api.get("/tasks", response_model=TaskListResponse)
@@ -1057,6 +1078,11 @@ def delete_nutrition_entry(entry_date: str, entry_id: str):
 @api.post("/nutrition/log/{entry_date}/workout", response_model=ManualWorkoutLog)
 def log_nutrition_workout(entry_date: str, payload: ManualWorkoutLogRequest):
     return log_manual_workout(entry_date, payload)
+
+
+@api.delete("/nutrition/log/{entry_date}/workout", status_code=204)
+def delete_nutrition_workout(entry_date: str):
+    remove_manual_workout(entry_date)
 
 
 @api.get("/nutrition/history", response_model=FoodLogHistoryResponse)

@@ -5,7 +5,7 @@ from contextlib import closing
 from threading import Lock
 
 from app.config import APP_DEFAULT_USER_ID
-from app.schemas import WorkoutEntry, WorkoutRoutePoint
+from app.schemas import WorkoutEntry, WorkoutRoutePoint, WorkoutSetEntry
 from app.time_utils import normalize_utc_timestamp
 
 _db_lock = Lock()
@@ -50,6 +50,16 @@ def init_workout_store() -> None:
             )
             """
         )
+        try:
+            connection.execute("ALTER TABLE workouts ADD COLUMN override_label TEXT")
+            connection.commit()
+        except Exception:
+            pass
+        try:
+            connection.execute("ALTER TABLE workouts ADD COLUMN exercise_log_json TEXT NOT NULL DEFAULT '[]'")
+            connection.commit()
+        except Exception:
+            pass
         connection.commit()
 
 
@@ -61,13 +71,24 @@ def _decode_route_points(value: str) -> list[WorkoutRoutePoint]:
     return [WorkoutRoutePoint.model_validate(item) for item in payload]
 
 
+def _decode_exercise_log(value: str | None) -> list[WorkoutSetEntry]:
+    try:
+        payload = json.loads(value or "[]")
+    except json.JSONDecodeError:
+        payload = []
+    return [WorkoutSetEntry.model_validate(item) for item in payload]
+
+
 def _row_to_entry(row: sqlite3.Row) -> WorkoutEntry:
+    keys = row.keys()
     return WorkoutEntry(
         workout_id=row["workout_id"],
         date=row["entry_date"],
         source=row["source"],
         activity_type=row["activity_type"],
         activity_label=row["activity_label"],
+        override_label=row["override_label"] if "override_label" in keys else None,
+        exercise_log=_decode_exercise_log(row["exercise_log_json"] if "exercise_log_json" in keys else None),
         start_date=row["start_date"],
         end_date=row["end_date"],
         duration_minutes=float(row["duration_minutes"] or 0),
@@ -132,7 +153,7 @@ def upsert_workout(
         )
         row = connection.execute(
             """
-            SELECT workout_id, entry_date, source, activity_type, activity_label,
+            SELECT workout_id, entry_date, source, activity_type, activity_label, override_label, exercise_log_json,
                    start_date, end_date, duration_minutes, total_distance_km,
                    active_energy_kcal, avg_heart_rate_bpm, max_heart_rate_bpm,
                    source_name, route_points_json, synced_at
@@ -154,7 +175,7 @@ def list_workouts(
     with _db_lock, closing(_connect()) as connection:
         rows = connection.execute(
             """
-            SELECT workout_id, entry_date, source, activity_type, activity_label,
+            SELECT workout_id, entry_date, source, activity_type, activity_label, override_label, exercise_log_json,
                    start_date, end_date, duration_minutes, total_distance_km,
                    active_energy_kcal, avg_heart_rate_bpm, max_heart_rate_bpm,
                    source_name, route_points_json, synced_at
@@ -166,3 +187,34 @@ def list_workouts(
             (user_id, f"-{max(days - 1, 0)} day", limit),
         ).fetchall()
     return [_row_to_entry(row) for row in rows]
+
+
+def set_workout_override_label(
+    workout_id: str,
+    label: str | None,
+    *,
+    user_id: str = APP_DEFAULT_USER_ID,
+) -> bool:
+    with _db_lock, closing(_connect()) as connection:
+        result = connection.execute(
+            "UPDATE workouts SET override_label = ? WHERE user_id = ? AND workout_id = ?",
+            (label, user_id, workout_id),
+        )
+        connection.commit()
+        return result.rowcount > 0
+
+
+def save_workout_exercise_log(
+    workout_id: str,
+    exercises: list[WorkoutSetEntry],
+    *,
+    user_id: str = APP_DEFAULT_USER_ID,
+) -> bool:
+    payload = json.dumps([e.model_dump() for e in exercises], ensure_ascii=True)
+    with _db_lock, closing(_connect()) as connection:
+        result = connection.execute(
+            "UPDATE workouts SET exercise_log_json = ? WHERE user_id = ? AND workout_id = ?",
+            (payload, user_id, workout_id),
+        )
+        connection.commit()
+        return result.rowcount > 0
