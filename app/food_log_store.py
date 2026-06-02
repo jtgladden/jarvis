@@ -4,7 +4,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone, timedelta
 from uuid import uuid4
 
-from app.config import FOOD_LOG_DB
+from app.config import FOOD_LOG_DB, today_local
 
 _DB_PATH = FOOD_LOG_DB
 
@@ -122,8 +122,7 @@ def get_food_entries(date: str, user_id: str) -> list[dict]:
 
 
 def get_food_entries_range(user_id: str, days: int) -> dict[str, list[dict]]:
-    from datetime import date as _date
-    dates = [(_date.today() - timedelta(days=i)).isoformat() for i in range(days)]
+    dates = [(today_local() - timedelta(days=i)).isoformat() for i in range(days)]
     with _cursor() as cur:
         placeholders = ",".join("?" * len(dates))
         cur.execute(
@@ -171,8 +170,7 @@ def get_manual_workout(date: str, user_id: str) -> dict | None:
 
 
 def get_manual_workouts_range(user_id: str, days: int) -> dict[str, dict | None]:
-    from datetime import date as _date
-    dates = [(_date.today() - timedelta(days=i)).isoformat() for i in range(days)]
+    dates = [(today_local() - timedelta(days=i)).isoformat() for i in range(days)]
     with _cursor() as cur:
         placeholders = ",".join("?" * len(dates))
         cur.execute(

@@ -9,13 +9,12 @@ from email.utils import parsedate_to_datetime
 from time import monotonic
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
-from zoneinfo import ZoneInfo
 from typing import Any
 
 from openai import OpenAI
 
 from app.calendar_client import list_events_between
-from app.config import DEFAULT_TIMEZONE, OPENAI_API_KEY, OPENAI_PLANNING_MAX_TOKENS, OPENAI_PLANNING_MODEL, OPENAI_PLANNING_TIMEOUT_SECONDS
+from app.config import LOCAL_TIMEZONE, OPENAI_API_KEY, OPENAI_PLANNING_MAX_TOKENS, OPENAI_PLANNING_MODEL, OPENAI_PLANNING_TIMEOUT_SECONDS
 from app.journal_store import (
     count_journal_entries,
     get_oldest_journal_entry_date,
@@ -31,7 +30,6 @@ from app.user_context import get_default_user_context
 
 logger = logging.getLogger(__name__)
 client = OpenAI(api_key=OPENAI_API_KEY)
-LOCAL_TIMEZONE = ZoneInfo(DEFAULT_TIMEZONE)
 NEWS_FEEDS = [
     ("BBC World", "https://feeds.bbci.co.uk/news/world/rss.xml"),
     ("New York Times", "https://rss.nytimes.com/services/xml/rss/nyt/World.xml"),

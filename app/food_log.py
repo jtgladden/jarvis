@@ -3,7 +3,7 @@ from datetime import date
 
 from openai import OpenAI
 
-from app.config import OPENAI_API_KEY, OPENAI_PLANNING_MODEL
+from app.config import OPENAI_API_KEY, OPENAI_PLANNING_MODEL, today_local
 from app.food_log_store import (
     add_food_entry,
     create_meal_prep_item,
@@ -43,7 +43,7 @@ def _user_id() -> str:
 
 def get_daily_food_log(entry_date: str | None = None) -> DailyFoodLog:
     user_id = _user_id()
-    d = entry_date or date.today().isoformat()
+    d = entry_date or today_local().isoformat()
     entries = [FoodLogEntry(**e) for e in get_food_entries(d, user_id)]
     workout_raw = get_manual_workout(d, user_id)
     workout = ManualWorkoutLog(**workout_raw) if workout_raw else None

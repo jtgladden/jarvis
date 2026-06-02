@@ -1,5 +1,6 @@
-from datetime import date, timedelta
+from datetime import timedelta
 
+from app.config import today_local
 from app.health_store import init_health_store, list_health_daily_entries, upsert_health_daily_entry
 from app.schemas import HealthDailyEntry, HealthDailySyncRequest, HealthDailySyncResponse, HealthListResponse
 from app.user_context import get_default_user_context
@@ -8,7 +9,7 @@ from app.user_context import get_default_user_context
 def sync_health_daily_entry(payload: HealthDailySyncRequest) -> HealthDailySyncResponse:
     init_health_store()
     user_id = get_default_user_context().user_id
-    entry_date = payload.date or date.today().isoformat()
+    entry_date = payload.date or today_local().isoformat()
     entry = upsert_health_daily_entry(
         entry_date,
         source=payload.source,
@@ -28,7 +29,7 @@ def list_health_entries(days: int = 7) -> HealthListResponse:
     user_id = get_default_user_context().user_id
     entries: list[HealthDailyEntry] = list_health_daily_entries(days=days, user_id=user_id)
 
-    today = date.today()
+    today = today_local()
     existing_dates = {e.date for e in entries}
     all_entries: list[HealthDailyEntry] = list(entries)
     for offset in range(days):

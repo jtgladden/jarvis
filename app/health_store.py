@@ -5,7 +5,7 @@ from contextlib import closing
 from datetime import date, timedelta
 from threading import Lock
 
-from app.config import APP_DEFAULT_USER_ID
+from app.config import APP_DEFAULT_USER_ID, today_local
 from app.schemas import DashboardHealthSummary, HealthDailyEntry
 from app.time_utils import normalize_utc_timestamp
 
@@ -157,7 +157,7 @@ def get_health_dashboard_summary(
     user_id: str = APP_DEFAULT_USER_ID,
     today: date | None = None,
 ) -> DashboardHealthSummary | None:
-    current_day = today or date.today()
+    current_day = today or today_local()
     recent_entries = list_health_daily_entries(days=7, user_id=user_id)
     if not recent_entries:
         return None
