@@ -379,6 +379,7 @@ class DashboardResponse(BaseModel):
     important_emails: List[DashboardMailItem] = Field(default_factory=list)
     news_items: List[DashboardNewsItem] = Field(default_factory=list)
     tasks: List[DashboardTaskItem] = Field(default_factory=list)
+    google_error: Optional[str] = None
 
 
 class TaskCreateRequest(BaseModel):

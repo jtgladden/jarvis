@@ -1127,6 +1127,7 @@ type DashboardResponse = {
   important_emails: DashboardMailItem[];
   news_items: DashboardNewsItem[];
   tasks: DashboardTaskItem[];
+  google_error?: string | null;
 };
 
 const WORKOUT_PLAN = {
@@ -3203,6 +3204,9 @@ export default function HomePage() {
       const data: DashboardResponse = await dashboardResponse.json();
       setDashboard(data);
       hasLoadedDashboardRef.current = true;
+      if (data.google_error) {
+        setGoogleAuthStatus(prev => prev ? { ...prev, authorized: false } : { authorized: false, start_path: `${API_BASE}/google/oauth/start` });
+      }
 
       if (healthResponse.ok) {
         const healthData: HealthListResponse = await healthResponse.json();
@@ -3893,6 +3897,9 @@ export default function HomePage() {
         const dashboardData: DashboardResponse = await dashboardResponse.json();
         setDashboard(dashboardData);
         hasLoadedDashboardRef.current = true;
+        if (dashboardData.google_error) {
+          setGoogleAuthStatus(prev => prev ? { ...prev, authorized: false } : { authorized: false, start_path: `${API_BASE}/google/oauth/start` });
+        }
       }
 
       if (movementResponse.ok) {
@@ -5314,6 +5321,19 @@ export default function HomePage() {
         </div>
       </nav>
       <div className="mx-auto max-w-[1500px] space-y-6 p-4 md:p-6">
+
+        {googleAuthStatus && !googleAuthStatus.authorized && mode !== "settings" ? (
+          <div className="flex flex-col gap-3 rounded-[1.4rem] border border-amber-300/20 bg-amber-400/8 px-4 py-3 text-sm text-amber-50 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-center gap-2">
+              <ShieldCheck className="h-4 w-4 shrink-0 text-amber-300" />
+              <span className="text-amber-100/90">Google disconnected — calendar, mail, and tasks may be incomplete.</span>
+            </div>
+            <a href={googleAuthStatus.start_path || `${API_BASE}/google/oauth/start`}
+              className="shrink-0 rounded-2xl border border-amber-300/30 bg-amber-400/15 px-4 py-1.5 text-xs font-medium text-amber-200 transition hover:bg-amber-400/25">
+              Reconnect Google →
+            </a>
+          </div>
+        ) : null}
 
         {mode === "dashboard" ? (
           <div className="grid gap-6 lg:grid-cols-[1.2fr_0.8fr]">

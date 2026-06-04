@@ -226,8 +226,23 @@ def api_root():
 
 @api.get("/google/oauth/status")
 def google_oauth_status():
+    token_file = os.getenv("GMAIL_TOKEN_FILE", "token.json")
+    authorized = False
+    if os.path.exists(token_file):
+        try:
+            from google.oauth2.credentials import Credentials
+            from google.auth.transport.requests import Request as GRequest
+            from app.config import GOOGLE_SCOPES
+            creds = Credentials.from_authorized_user_file(token_file, GOOGLE_SCOPES)
+            if creds and creds.valid:
+                authorized = True
+            elif creds and creds.expired and creds.refresh_token:
+                creds.refresh(GRequest())
+                authorized = True
+        except Exception:
+            authorized = False
     return {
-        "authorized": os.path.exists(os.getenv("GMAIL_TOKEN_FILE", "token.json")),
+        "authorized": authorized,
         "start_path": "/api/google/oauth/start",
         "instructions": get_google_oauth_instructions(),
     }

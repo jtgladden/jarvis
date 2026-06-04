@@ -325,6 +325,8 @@ def generate_dashboard() -> DashboardResponse:
     generated_at = now_local.isoformat()
     date_label = now_local.strftime("%A, %B %d")
 
+    google_error: str | None = None
+
     try:
         agenda = list_upcoming_events(days=2, max_results=12)
         calendar_items = [
@@ -333,12 +335,15 @@ def generate_dashboard() -> DashboardResponse:
     except Exception as exc:
         logger.warning("Dashboard calendar fetch failed: %s", exc)
         calendar_items = []
+        google_error = str(exc)
 
     try:
         mail_items = _build_mail_items()
     except Exception as exc:
         logger.warning("Dashboard mail fetch failed: %s", exc)
         mail_items = []
+        if google_error is None:
+            google_error = str(exc)
     health_summary = get_health_dashboard_summary(user_id=user_id, today=today_local)
 
     try:
@@ -364,6 +369,7 @@ def generate_dashboard() -> DashboardResponse:
         important_emails=mail_items,
         news_items=news_items,
         tasks=tasks,
+        google_error=google_error,
     )
 
     with _dashboard_cache_lock:
