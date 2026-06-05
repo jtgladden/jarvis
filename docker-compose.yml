@@ -21,6 +21,7 @@ services:
       CLASSIFICATION_GUIDANCE_FILE: /data/classification_guidance.json
       JOB_ALERTS_EMAIL_CACHE_FILE: /data/job_alerts_email_cache.json
       FOOD_LOG_DB: /data/food_log.db
+      USER_RULES_DB: /data/user_rules.db
       USAJOBS_API_KEY: ${USAJOBS_API_KEY:-}
       USAJOBS_USER_AGENT: ${USAJOBS_USER_AGENT:-}
       OPENAI_MAX_EMAILS_PER_RUN: ${OPENAI_MAX_EMAILS_PER_RUN:-15}
