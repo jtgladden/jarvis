@@ -70,7 +70,13 @@ const serwist = new Serwist({
     // consulted. This handler also falls back to cache on non-ok responses.
     {
       matcher: ({ url, request }) =>
-        url.pathname.startsWith("/api/") && request.method === "GET",
+        url.pathname.startsWith("/api/") &&
+        // Never intercept the Google OAuth endpoints: /start returns a 307
+        // redirect to Google carrying a one-time `state`, and /callback +
+        // /status must always hit the live backend. Caching/replaying these
+        // desyncs the server-side state and breaks token regeneration.
+        !url.pathname.startsWith("/api/google/oauth/") &&
+        request.method === "GET",
       handler: async ({ request }) => {
         const CACHE_NAME = "jarvis-api-cache"; // Must match SW_API_CACHE_NAME in src/lib/sw-cache.ts
         const NETWORK_TIMEOUT_MS = 10_000;
