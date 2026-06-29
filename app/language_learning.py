@@ -46,6 +46,7 @@ from app.language_store import (
     get_all_language_session_stats,
     get_language_stats,
     get_profile_record,
+    get_vocab_for_export,
     get_word_explanation_record,
     list_session_records,
     list_vocab_records,
@@ -55,6 +56,7 @@ from app.language_store import (
     save_profile_record,
     save_session_record,
     save_vocab_record,
+    strip_kana,
     update_vocab_record,
 )
 from app.user_context import get_default_user_context
@@ -128,6 +130,23 @@ STARTER_PROMPTS: dict[LanguageCode, list[LanguagePracticePrompt]] = {
 LANGUAGE_NAMES: dict[LanguageCode, str] = {
     language.code: language.name for language in SUPPORTED_LANGUAGES
 }
+
+# Legacy notes were stored as "<ai note>\nUser note: <user note>" when a learner
+# added a note to a card that AI normalization also wrote a note for, which left
+# the field saying the same thing twice.
+USER_NOTE_MARKER = "User note:"
+
+
+def _user_note_only(note: str | None) -> str:
+    """Return just the learner's own note from a stored notes field.
+
+    If the field holds both an AI-generated note and a learner note in the legacy
+    merged format, keep only the learner's portion. Otherwise return the note
+    unchanged. The learner's note always wins."""
+    raw = (note or "").strip()
+    if USER_NOTE_MARKER in raw:
+        return raw.split(USER_NOTE_MARKER, 1)[1].strip()
+    return raw
 
 
 def _coerce_json_object(content: str) -> dict[str, Any]:
@@ -449,9 +468,10 @@ def _normalize_vocab_with_ai(payload: LanguageVocabCreateRequest) -> dict[str, A
     phrase = str(result.get("phrase") or payload.phrase).strip()
     translation = str(result.get("translation") or payload.translation).strip()
     pronunciation = str(result.get("pronunciation") or payload.pronunciation or "").strip()
-    notes = str(result.get("notes") or payload.notes).strip()
-    if payload.notes.strip() and payload.notes.strip() not in notes:
-        notes = f"{notes}\nUser note: {payload.notes.strip()}" if notes else payload.notes.strip()
+    # Only enrich cards that lack a learner note. If the learner wrote one, keep it
+    # verbatim and skip the AI-generated note so the two never get concatenated.
+    user_note = _user_note_only(payload.notes)
+    notes = user_note or str(result.get("notes") or "").strip()
 
     return {
         "phrase": phrase,
@@ -891,3 +911,103 @@ def explain_language_word(payload: LanguageWordExplainRequest) -> LanguageWordEx
         user_id=user_id,
     )
     return response
+
+
+ANKI_EXPORT_SCOPES = ("mine", "all", "due", "recent")
+
+
+def _anki_clean_field(value: str) -> str:
+    """Make a string safe for a tab-separated Anki note field: a literal tab
+    becomes a space and any newline becomes <br> so a field can never span
+    columns or rows."""
+    return (
+        str(value or "")
+        .replace("\t", " ")
+        .replace("\r\n", "<br>")
+        .replace("\r", "<br>")
+        .replace("\n", "<br>")
+    )
+
+
+def _anki_tag_token(tag: str) -> str:
+    """Anki tags are whitespace-separated, so collapse any whitespace inside a
+    single tag into underscores."""
+    return "_".join(_anki_clean_field(tag).split())
+
+
+def build_anki_export(
+    language: LanguageCode,
+    rows: list[dict[str, Any]],
+    scope: str = "mine",
+) -> str:
+    """Render vocab rows into an Anki-importable tab-separated text file.
+
+    Pure Python and fully deterministic — no AI calls. Field 1 is the phrase
+    (Anki's duplicate key), field 2 the translation plus optional reading/notes,
+    field 3 the space-separated tags.
+    """
+    language_name = LANGUAGE_NAMES.get(language, language.title())
+    language_slug = language.lower()
+    scope = scope if scope in ANKI_EXPORT_SCOPES else "mine"
+
+    lines = [
+        "#separator:tab",
+        "#html:true",
+        "#notetype:Basic",
+        f"#deck:Jarvis::{language_name}",
+        "#tags column:3",
+    ]
+
+    for row in rows:
+        front = _anki_clean_field(row.get("phrase"))
+        if not front:
+            continue
+        pronunciation = str(row.get("pronunciation") or "")
+        if language == "japanese":
+            # Guard: kana must never leak into a romaji reading.
+            pronunciation = strip_kana(pronunciation)
+        pronunciation = _anki_clean_field(pronunciation).strip()
+        # Collapse legacy merged notes ("<ai note>\nUser note: ...") down to the
+        # learner's own note so existing cards export without the doubling.
+        notes = _anki_clean_field(_user_note_only(row.get("notes"))).strip()
+
+        back = _anki_clean_field(row.get("translation"))
+        if pronunciation:
+            back = f"{back}<br>[{pronunciation}]"
+        if notes:
+            back = f"{back}<br><i>{notes}</i>"
+
+        tags = ["jarvis", language_slug, scope]
+        for tag in row.get("tags") or []:
+            token = _anki_tag_token(tag)
+            if token:
+                tags.append(token)
+
+        lines.append("\t".join([front, back, " ".join(tags)]))
+
+    return "\n".join(lines) + "\n"
+
+
+def export_language_vocab_anki(
+    language: LanguageCode | None = None,
+    scope: str = "mine",
+    tag: str | None = None,
+) -> tuple[str, str]:
+    """Build an Anki export for the user's vocabulary. Returns (content, filename)."""
+    user_id = get_default_user_context().user_id
+    profile = _profile_from_record(get_profile_record(user_id=user_id))
+    resolved_language = language or profile.active_language
+    scope = scope if scope in ANKI_EXPORT_SCOPES else "mine"
+
+    rows = get_vocab_for_export(
+        user_id=user_id,
+        language=resolved_language,
+        scope=scope,
+        tag=tag,
+    )
+    content = build_anki_export(resolved_language, rows, scope=scope)
+    filename = (
+        f"jarvis-{resolved_language.lower()}-{scope}-"
+        f"{datetime.utcnow().strftime('%Y%m%d')}.txt"
+    )
+    return content, filename

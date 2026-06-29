@@ -8,6 +8,7 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronUp,
+  Download,
   Languages,
   MessageCircle,
   Mic,
@@ -473,6 +474,8 @@ export default function LanguagePage() {
   const [savingProfile, setSavingProfile] = useState(false);
   const [vocabSaving, setVocabSaving] = useState(false);
   const [vocabNormalizing, setVocabNormalizing] = useState(false);
+  const [vocabExporting, setVocabExporting] = useState(false);
+  const [exportScope, setExportScope] = useState<"mine" | "all" | "due" | "recent">("mine");
   const [sessionSaving, setSessionSaving] = useState(false);
   const [error, setError] = useState("");
   const [phrase, setPhrase] = useState("");
@@ -1345,6 +1348,35 @@ export default function LanguagePage() {
       setError(err instanceof Error ? err.message : "Unable to normalize existing words.");
     } finally {
       setVocabNormalizing(false);
+    }
+  };
+
+  const exportToAnki = async () => {
+    setVocabExporting(true);
+    setError("");
+    try {
+      const params = new URLSearchParams({
+        language: profile.active_language,
+        scope: exportScope,
+      });
+      const response = await fetch(`${API_BASE}/languages/export/anki?${params.toString()}`);
+      if (!response.ok) {
+        throw new Error(`Export failed with status ${response.status}`);
+      }
+      const blob = await response.blob();
+      const filename = `jarvis-${profile.active_language}-${exportScope}.txt`;
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = filename;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to export to Anki.");
+    } finally {
+      setVocabExporting(false);
     }
   };
 
@@ -2615,6 +2647,35 @@ export default function LanguagePage() {
                     {vocabNormalizing ? "Normalizing..." : `Normalize ${unenrichedVocabCount} existing`}
                   </Button>
                 ) : null}
+              </div>
+
+              <div className="grid gap-3 rounded-[1.2rem] border border-white/8 bg-white/5 p-4">
+                <div className="text-sm font-medium text-white">Export to Anki</div>
+                <div className="text-sm text-slate-400">
+                  Download a .txt you can import into Anki desktop with no setup — it creates a
+                  Jarvis::{formatLanguageName(profile.active_language, dashboard?.supported_languages || [])} deck of Basic notes.
+                </div>
+                <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+                  {[
+                    ["mine", "Mine"],
+                    ["all", "All"],
+                    ["due", "Due"],
+                    ["recent", "Recent"],
+                  ].map(([scope, label]) => (
+                    <Button
+                      key={scope}
+                      variant={exportScope === scope ? "default" : "outline"}
+                      className="rounded-2xl"
+                      onClick={() => setExportScope(scope as "mine" | "all" | "due" | "recent")}
+                    >
+                      {label}
+                    </Button>
+                  ))}
+                </div>
+                <Button className="rounded-2xl" onClick={() => void exportToAnki()} disabled={vocabExporting}>
+                  <Download className="mr-2 h-4 w-4" />
+                  {vocabExporting ? "Exporting…" : "Export to Anki"}
+                </Button>
               </div>
 
               <div className="flex flex-col gap-3 rounded-[1.2rem] border border-white/8 bg-white/5 p-4 md:flex-row md:items-center md:justify-between">

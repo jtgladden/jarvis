@@ -240,6 +240,68 @@ def list_vocab_records(user_id: str = APP_DEFAULT_USER_ID, limit: int = 3000) ->
     return list(rows)
 
 
+def get_vocab_for_export(
+    user_id: str = APP_DEFAULT_USER_ID,
+    language: str = "",
+    scope: str = "mine",
+    tag: str | None = None,
+) -> list[dict]:
+    """Return active vocab rows for a language as plain dicts for export.
+
+    scope:
+        "mine"   -> user-added/mined cards only, excluding the seeded common-600 list
+        "all"    -> every active card for the language, including seeded words
+        "due"    -> cards currently due (same predicate as the dashboard review
+                    flow), excluding seeded words
+        "recent" -> cards created in the last 14 days, excluding seeded words
+    Seeded rows are identified by the existing "common-600" seed tag. tag
+    filters to cards carrying that tag.
+    """
+    if scope not in {"mine", "all", "due", "recent"}:
+        scope = "mine"
+
+    # Make sure no kana lingers in Japanese readings before they leave the app.
+    if language == "japanese":
+        purge_kana_in_vocab_pronunciation()
+
+    clauses = ["user_id = ?", "language = ?", "deleted = 0"]
+    params: list = [user_id, language]
+    if scope == "due":
+        clauses.append("(next_review_at IS NULL OR next_review_at <= ?)")
+        params.append(_utc_now())
+    elif scope == "recent":
+        cutoff = (
+            datetime.utcnow().replace(microsecond=0) - timedelta(days=14)
+        ).isoformat() + "Z"
+        clauses.append("created_at >= ?")
+        params.append(cutoff)
+    # Only the explicit "all" scope includes the seeded common-600 frequency list.
+    if scope != "all":
+        clauses.append("tags NOT LIKE '%common-600%'")
+    if tag:
+        clauses.append("tags LIKE ?")
+        params.append(f"%{tag}%")
+
+    query = (
+        "SELECT phrase, translation, pronunciation, notes, tags "
+        "FROM language_vocab "
+        f"WHERE {' AND '.join(clauses)} "
+        "ORDER BY COALESCE(next_review_at, created_at) ASC, updated_at DESC"
+    )
+    with _db_lock, closing(_connect()) as connection:
+        rows = connection.execute(query, params).fetchall()
+    return [
+        {
+            "phrase": row["phrase"],
+            "translation": row["translation"],
+            "pronunciation": row["pronunciation"] or "",
+            "notes": row["notes"] or "",
+            "tags": _json_tags(row["tags"]),
+        }
+        for row in rows
+    ]
+
+
 def seed_common_word_records(
     common_words: dict[str, list[dict]],
     user_id: str = APP_DEFAULT_USER_ID,
@@ -690,6 +752,12 @@ def save_word_explanation_record(
 
 
 _KANA_RE = re.compile(r"[぀-ゟ゠-ヿ]")
+
+
+def strip_kana(value: str) -> str:
+    """Remove any kana characters from a string. Final safety net for exports so
+    Japanese readings can never leak kana into a Latin-only field."""
+    return _KANA_RE.sub("", value or "")
 
 
 def purge_kana_in_romanization_records() -> int:

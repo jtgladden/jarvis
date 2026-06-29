@@ -27,7 +27,7 @@ from app.food_log_store import init_food_log_store
 from app.job_alerts import clear_email_parse_cache, get_job_alerts_cached, invalidate_job_alerts_cache, run_job_alerts_job
 from app.journal import extract_journal_day_citations, get_journal, get_journal_day, save_journal_day
 from app.journal_store import init_journal_store
-from app.language_learning import create_language_conversation_reply, create_language_session, create_language_vocab, delete_language_vocab, explain_language_word, generate_language_practice, get_language_dashboard, get_language_pronunciation_feedback, get_language_writing_feedback, normalize_existing_language_vocab, review_language_vocab, synthesize_language_speech, update_language_profile, update_language_vocab
+from app.language_learning import create_language_conversation_reply, create_language_session, create_language_vocab, delete_language_vocab, explain_language_word, export_language_vocab_anki, generate_language_practice, get_language_dashboard, get_language_pronunciation_feedback, get_language_writing_feedback, normalize_existing_language_vocab, review_language_vocab, synthesize_language_speech, update_language_profile, update_language_vocab
 from app.language_store import backfill_pronunciation_from_notes, init_language_store, purge_kana_in_romanization_records, purge_kana_in_vocab_pronunciation
 from app.movement import list_movement_entries, sync_movement_daily_entry
 from app.movement_store import init_movement_store
@@ -575,6 +575,20 @@ def post_language_speech(payload: LanguageSpeechRequest):
         content=audio,
         media_type="audio/mpeg",
         headers={"Content-Disposition": 'inline; filename="language-practice.mp3"'},
+    )
+
+
+@api.get("/languages/export/anki")
+def get_language_export_anki(
+    language: LanguageCode | None = Query(default=None),
+    scope: str = Query(default="mine"),
+    tag: str | None = Query(default=None),
+):
+    content, filename = export_language_vocab_anki(language=language, scope=scope, tag=tag)
+    return Response(
+        content=content.encode("utf-8"),
+        media_type="text/plain; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 
