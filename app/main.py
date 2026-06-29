@@ -262,6 +262,12 @@ def google_oauth_callback(request: Request, state: str, code: str | None = None,
         raise HTTPException(status_code=400, detail="Google OAuth callback did not include an authorization code.")
 
     finish_google_oauth(request, state)
+    # The dashboard response carries a `google_error` flag and is cached for
+    # DASHBOARD_CACHE_TTL_SECONDS. If it was cached while Google was
+    # disconnected, that stale flag keeps the "Google disconnected" banner up
+    # for up to the full TTL even though we just saved a fresh token. Clear the
+    # cache so the next dashboard fetch reflects the reconnected state.
+    invalidate_dashboard_cache()
     return HTMLResponse(
         """
         <html>

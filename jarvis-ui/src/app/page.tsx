@@ -6305,7 +6305,7 @@ export default function HomePage() {
                       className="rounded-2xl"
                       onClick={() => void toggleJournalArchiveMode(true)}
                     >
-                      Saved archive
+                      Journaled days
                     </Button>
                   </div>
                 </div>
@@ -6402,7 +6402,7 @@ export default function HomePage() {
                     {journalQuery
                       ? `Showing ${journal?.entries.length || 0} of ${journal?.total_entries || 0} saved entries matching "${journalQuery}".`
                       : journalSavedOnly
-                        ? `Showing ${journal?.entries.length || 0} saved entries from your archive.`
+                        ? `Showing ${journal?.entries.length || 0} days with journal entries.`
                         : `Showing ${journal?.entries.length || 0} recent days at a time so the journal stays fast to navigate.`}
                   </div>
                   <div className="flex gap-2">

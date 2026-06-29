@@ -1756,16 +1756,25 @@ def get_journal(
     trimmed_query = query.strip()
 
     if saved_only or trimmed_query:
+        # Restrict the saved-archive browse to days with user-authored content.
+        # Plain search still spans all fields (incl. auto-populated calendar/news),
+        # so a query never has its reach narrowed by this flag.
+        content_only = saved_only and not trimmed_query
         date_rows = list_journal_entry_dates(
             limit=clamped_days + 1,
             before_date=before,
             query=trimmed_query,
+            content_only=content_only,
             user_id=user_id,
         )
         has_more = len(date_rows) > clamped_days
         day_keys = date_rows[:clamped_days]
         next_before = day_keys[-1] if has_more and day_keys else None
-        total_entries = count_journal_entries(query=trimmed_query, user_id=user_id)
+        total_entries = count_journal_entries(
+            query=trimmed_query,
+            content_only=content_only,
+            user_id=user_id,
+        )
         entries = _build_journal_entries(
             day_keys=day_keys,
             saved_entries=saved_entries,

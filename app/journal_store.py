@@ -247,6 +247,24 @@ def list_journal_entries(user_id: str = APP_DEFAULT_USER_ID) -> dict[str, dict[s
     }
 
 
+def _content_clause() -> str:
+    """SQL predicate matching days with user-authored journal content.
+
+    Excludes auto-populated calendar/news fields, which get persisted for days
+    the user never journaled on (see journal._build_journal_entries).
+    """
+    return (
+        "("
+        "TRIM(journal_entry) <> ''"
+        " OR TRIM(accomplishments) <> ''"
+        " OR TRIM(gratitude_entry) <> ''"
+        " OR TRIM(scripture_study) <> ''"
+        " OR TRIM(spiritual_notes) <> ''"
+        " OR COALESCE(photo_data_url, '') <> ''"
+        ")"
+    )
+
+
 def _journal_search_clause(query: str) -> tuple[str, list[str]]:
     trimmed_query = query.strip()
     like_value = f"%{trimmed_query}%"
@@ -326,11 +344,15 @@ def list_journal_entry_dates(
     limit: int,
     before_date: str | None = None,
     query: str = "",
+    content_only: bool = False,
     user_id: str = APP_DEFAULT_USER_ID,
 ) -> list[str]:
     trimmed_query = query.strip()
     where_clauses = ["user_id = ?"]
     params: list[str | int] = [user_id]
+
+    if content_only:
+        where_clauses.append(_content_clause())
 
     if before_date:
         where_clauses.append("entry_date < ?")
@@ -362,11 +384,15 @@ def list_journal_entry_dates(
 
 def count_journal_entries(
     query: str = "",
+    content_only: bool = False,
     user_id: str = APP_DEFAULT_USER_ID,
 ) -> int:
     trimmed_query = query.strip()
     where_clauses = ["user_id = ?"]
     params: list[str] = [user_id]
+
+    if content_only:
+        where_clauses.append(_content_clause())
 
     if trimmed_query:
         search_clause, search_params = _journal_search_clause(trimmed_query)
