@@ -459,6 +459,16 @@ class JournalResponse(BaseModel):
     query: str = ""
 
 
+class JournalEntryDateCount(BaseModel):
+    date: str
+    words: int = 0
+
+
+class JournalEntryDatesResponse(BaseModel):
+    generated_at: str
+    days: List[JournalEntryDateCount] = Field(default_factory=list)
+
+
 class JournalImageExtractRequest(BaseModel):
     image_base64: str
     media_type: str = "image/jpeg"

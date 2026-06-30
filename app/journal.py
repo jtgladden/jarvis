@@ -25,7 +25,7 @@ from app.journal_store import (
     upsert_journal_news,
 )
 from app.language_store import list_sessions_for_date_range
-from app.schemas import CalendarAgendaItem, JournalDayEntry, JournalNewsArticle, JournalResponse, JournalStudyLink, LanguagePracticeSession
+from app.schemas import CalendarAgendaItem, JournalDayEntry, JournalEntryDateCount, JournalEntryDatesResponse, JournalNewsArticle, JournalResponse, JournalStudyLink, LanguagePracticeSession
 from app.user_context import get_default_user_context
 
 logger = logging.getLogger(__name__)
@@ -1818,6 +1818,34 @@ def get_journal(
         next_before=next_before if has_more else None,
         saved_only=False,
         query="",
+    )
+
+
+def get_journal_entry_dates() -> JournalEntryDatesResponse:
+    """Lightweight list of days with user-authored journal content, plus a word
+    count per day. Powers the archive contribution heatmap without paging through
+    full entries. Mirrors journal_store._content_clause so a day counts as
+    "journaled" only when the user actually wrote something (or added a photo)."""
+    user_id = get_default_user_context().user_id
+    saved_entries = list_journal_entries(user_id=user_id)
+    content_fields = (
+        "journal_entry",
+        "accomplishments",
+        "gratitude_entry",
+        "scripture_study",
+        "spiritual_notes",
+    )
+    days: list[JournalEntryDateCount] = []
+    for entry_date, data in saved_entries.items():
+        text = " ".join(str(data.get(field) or "") for field in content_fields).strip()
+        has_photo = bool(str(data.get("photo_data_url") or "").strip())
+        if not text and not has_photo:
+            continue
+        days.append(JournalEntryDateCount(date=str(entry_date), words=len(text.split())))
+    days.sort(key=lambda item: item.date)
+    return JournalEntryDatesResponse(
+        generated_at=datetime.now(LOCAL_TIMEZONE).isoformat(),
+        days=days,
     )
 
 

@@ -17,6 +17,7 @@ import {
   ExternalLink,
   Inbox,
   Languages,
+  LayoutGrid,
   Mail,
   Newspaper,
   Plus,
@@ -29,6 +30,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { AssistantPanel } from "@/components/assistant-panel";
+import { JournalDatePicker } from "@/components/ui/journal-date-picker";
 import { MailCommandPanel } from "@/components/mail-command-panel";
 import { MailRulesPanel } from "@/components/mail-rules-panel";
 import dynamic from "next/dynamic";
@@ -2331,6 +2333,16 @@ type JournalResponse = {
   query: string;
 };
 
+type JournalEntryDateCount = {
+  date: string;
+  words: number;
+};
+
+type JournalEntryDatesResponse = {
+  generated_at: string;
+  days: JournalEntryDateCount[];
+};
+
 type JournalDraft = {
   journal_entry: string;
   accomplishments: string;
@@ -2533,7 +2545,7 @@ function highlightJournalTextWithReferences(
     }
 
     const className = isReferenceMatch
-      ? "rounded-md bg-cyan-400/18 px-1 py-0.5 text-cyan-50 ring-1 ring-cyan-300/25"
+      ? "rounded-md bg-indigo-400/18 px-1 py-0.5 text-indigo-50 ring-1 ring-indigo-300/25"
       : "rounded-md bg-fuchsia-400/20 px-1 py-0.5 text-fuchsia-100 ring-1 ring-fuchsia-300/25";
 
     return (
@@ -2574,6 +2586,121 @@ function JournalPreviewBlock({
         <div className="whitespace-pre-wrap break-words">
           {hasValue ? highlightJournalTextWithReferences(value, query, studyLinks) : placeholder}
         </div>
+      </div>
+    </div>
+  );
+}
+
+function journalHeatmapLevelClass(words: number) {
+  // words < 0 means the day has no entry; 0+ means an entry exists (0 = photo only).
+  if (words < 0) return "bg-white/5";
+  if (words <= 40) return "bg-violet-500/30";
+  if (words <= 120) return "bg-violet-500/55";
+  if (words <= 300) return "bg-violet-400/75";
+  return "bg-fuchsia-400/90";
+}
+
+function JournalHeatmap({
+  days,
+  onSelect,
+}: {
+  days: JournalEntryDateCount[];
+  onSelect: (date: string) => void;
+}) {
+  const WEEKS = 53;
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const wordsByDate = useMemo(
+    () => new Map(days.map((day) => [day.date, day.words])),
+    [days]
+  );
+
+  const columns = useMemo(() => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    // Complete the current week so the final column isn't clipped.
+    const end = new Date(today);
+    end.setDate(end.getDate() + (6 - end.getDay()));
+    const cursor = new Date(end);
+    cursor.setDate(cursor.getDate() - (WEEKS * 7 - 1));
+
+    const grid: { key: string; inRange: boolean; words: number; monthLabel: string | null; label: string }[][] = [];
+    let lastMonth = -1;
+    for (let w = 0; w < WEEKS; w++) {
+      const col: { key: string; inRange: boolean; words: number; monthLabel: string | null; label: string }[] = [];
+      for (let d = 0; d < 7; d++) {
+        const key = formatLocalDateKey(cursor);
+        let monthLabel: string | null = null;
+        if (d === 0 && cursor.getMonth() !== lastMonth) {
+          monthLabel = cursor.toLocaleString(undefined, { month: "short" });
+          lastMonth = cursor.getMonth();
+        }
+        col.push({
+          key,
+          inRange: cursor <= today,
+          words: wordsByDate.get(key) ?? -1,
+          monthLabel,
+          label: cursor.toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" }),
+        });
+        cursor.setDate(cursor.getDate() + 1);
+      }
+      grid.push(col);
+    }
+    return grid;
+  }, [wordsByDate]);
+
+  useEffect(() => {
+    // Open on the most recent weeks rather than a year ago.
+    if (scrollRef.current) {
+      scrollRef.current.scrollLeft = scrollRef.current.scrollWidth;
+    }
+  }, [columns]);
+
+  return (
+    <div className="space-y-2">
+      <div ref={scrollRef} className="overflow-x-auto pb-1">
+        <div className="inline-flex flex-col gap-1">
+          <div className="flex gap-[3px]">
+            {columns.map((col, index) => (
+              <div key={index} className="w-[11px] text-[9px] leading-none text-slate-500">
+                {col[0].monthLabel ?? ""}
+              </div>
+            ))}
+          </div>
+          <div className="flex gap-[3px]">
+            {columns.map((col, index) => (
+              <div key={index} className="flex flex-col gap-[3px]">
+                {col.map((cell) => {
+                  if (!cell.inRange) {
+                    return <div key={cell.key} className="h-[11px] w-[11px]" />;
+                  }
+                  const hasEntry = cell.words >= 0;
+                  const title = hasEntry
+                    ? `${cell.label} · ${cell.words} word${cell.words === 1 ? "" : "s"}`
+                    : `${cell.label} · no entry`;
+                  return (
+                    <button
+                      key={cell.key}
+                      type="button"
+                      title={title}
+                      aria-label={`${cell.label} — ${hasEntry ? "entry" : "no entry"}`}
+                      onClick={() => onSelect(cell.key)}
+                      className={`h-[11px] w-[11px] cursor-pointer rounded-[2px] outline-none transition hover:ring-1 hover:ring-violet-200/70 focus-visible:ring-2 focus-visible:ring-violet-300/70 ${journalHeatmapLevelClass(cell.words)}`}
+                    />
+                  );
+                })}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+      <div className="flex items-center gap-1.5 text-[10px] text-slate-500">
+        <span>Less</span>
+        <span className="h-[11px] w-[11px] rounded-[2px] bg-white/5" />
+        <span className="h-[11px] w-[11px] rounded-[2px] bg-violet-500/30" />
+        <span className="h-[11px] w-[11px] rounded-[2px] bg-violet-500/55" />
+        <span className="h-[11px] w-[11px] rounded-[2px] bg-violet-400/75" />
+        <span className="h-[11px] w-[11px] rounded-[2px] bg-fuchsia-400/90" />
+        <span>More</span>
       </div>
     </div>
   );
@@ -2840,6 +2967,13 @@ export default function HomePage() {
   const [journalBefore, setJournalBefore] = useState<string | null>(null);
   const [journalHistory, setJournalHistory] = useState<Array<string | null>>([]);
   const [journalJumpDate, setJournalJumpDate] = useState<string | null>(null);
+  const [journalHeatmap, setJournalHeatmap] = useState<JournalEntryDateCount[] | null>(null);
+  const [journalHeatmapOpen, setJournalHeatmapOpen] = useState(false);
+  // Shared "which days have an entry" lookup for the heatmap and the jump-to picker.
+  const journalEntryDateSet = useMemo(
+    () => new Set((journalHeatmap ?? []).map((day) => day.date)),
+    [journalHeatmap]
+  );
   const [classifiedBucket] = useState<"all" | "important" | "unimportant">("all");
   const [overview, setOverview] = useState<ClassificationOverview | null>(null);
   const [agenda, setAgenda] = useState<CalendarAgenda | null>(null);
@@ -3361,6 +3495,31 @@ export default function HomePage() {
     }
   };
 
+  const loadJournalHeatmap = async () => {
+    try {
+      const response = await fetch(`${API_BASE}/journal/entry-dates`);
+      if (!response.ok) return;
+      const data: JournalEntryDatesResponse = await response.json();
+      setJournalHeatmap(data.days);
+    } catch {
+      // Heatmap is a non-critical enhancement; ignore fetch failures.
+    }
+  };
+
+  const jumpToJournalDate = async (date: string) => {
+    // Heatmap jumps always land in the recent-timeline view so the exact day renders,
+    // regardless of any active saved-only filter or search.
+    setJournalJumpDate(date);
+    await loadJournal({ before: shiftLocalDateKey(date, 1), query: "", savedOnly: false, history: [] });
+    if (typeof window !== "undefined") {
+      window.setTimeout(() => {
+        document
+          .getElementById(`journal-entry-${date}`)
+          ?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 150);
+    }
+  };
+
   const persistJournalDraft = async (entryDate: string, draft: JournalDraft) => {
     setJournalSavingDate(entryDate);
     setError("");
@@ -3408,6 +3567,7 @@ export default function HomePage() {
         savedOnly: journalSavedOnly,
         history: journalHistory,
       });
+      void loadJournalHeatmap();
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to save journal entry.";
       setError(message);
@@ -3865,6 +4025,7 @@ export default function HomePage() {
         if (!hasLoadedJournalRef.current) {
           void loadJournal();
         }
+        void loadJournalHeatmap();
         return;
       }
       if (currentMode === "planning" || (currentMode === "schedule" && scheduleWorkspaceTab === "planner")) {
@@ -6277,7 +6438,7 @@ export default function HomePage() {
             </div>
           </div>
         ) : mode === "journal" ? (
-          <div className="space-y-6">
+          <div className="mx-auto w-full max-w-6xl space-y-6">
             <Card className="rounded-[2rem] border border-white/8 bg-[rgba(17,19,34,0.82)] shadow-[0_16px_44px_rgba(6,7,14,0.36)] backdrop-blur-xl">
               <CardHeader className="pb-3">
                 <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
@@ -6307,10 +6468,43 @@ export default function HomePage() {
                     >
                       Journaled days
                     </Button>
+                    <Button
+                      size="sm"
+                      variant={journalHeatmapOpen ? "default" : "outline"}
+                      className="rounded-2xl"
+                      onClick={() => {
+                        setJournalHeatmapOpen((open) => !open);
+                        if (!journalHeatmap) void loadJournalHeatmap();
+                      }}
+                    >
+                      <LayoutGrid className="mr-1.5 h-3.5 w-3.5" />
+                      Heatmap
+                    </Button>
                   </div>
                 </div>
               </CardHeader>
               <CardContent className="space-y-4">
+                {journalHeatmapOpen ? (
+                  <div className="rounded-[1.4rem] border border-white/8 bg-[rgba(20,22,37,0.55)] p-4">
+                    <div className="mb-3 flex items-center justify-between gap-2">
+                      <div className="text-xs font-semibold uppercase tracking-widest text-slate-400">
+                        Journaled days
+                      </div>
+                      {journalHeatmap ? (
+                        <div className="text-xs text-slate-500">
+                          {journalHeatmap.length} day{journalHeatmap.length === 1 ? "" : "s"} journaled
+                        </div>
+                      ) : null}
+                    </div>
+                    {journalHeatmap === null ? (
+                      <div className="text-sm text-slate-500">Loading heatmap…</div>
+                    ) : journalHeatmap.length ? (
+                      <JournalHeatmap days={journalHeatmap} onSelect={(date) => void jumpToJournalDate(date)} />
+                    ) : (
+                      <div className="text-sm text-slate-500">No journaled days yet.</div>
+                    )}
+                  </div>
+                ) : null}
                 <div className="flex flex-col gap-3 lg:flex-row">
                   <div className="relative flex-1">
                     <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
@@ -6346,33 +6540,12 @@ export default function HomePage() {
                 </div>
 
                 <div className="flex items-center gap-2">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="rounded-2xl"
-                    onClick={() => {
-                      const entries = journal?.entries;
-                      if (!entries?.length) return;
-                      const oldest = entries[entries.length - 1]?.date;
-                      if (!oldest) return;
-                      const prev = shiftLocalDateKey(oldest, -1);
-                      void loadJournal({ before: shiftLocalDateKey(prev, 1), history: [...journalHistory, journalBefore] });
-                    }}
-                    disabled={loading}
-                  >
-                    <ChevronLeft className="h-4 w-4" />
-                  </Button>
-                  <input
-                    type="date"
+                  <span className="text-xs uppercase tracking-wide text-slate-500">Jump to</span>
+                  <JournalDatePicker
+                    value={journalJumpDate}
                     max={formatLocalDateKey(new Date())}
-                    className="h-9 flex-1 rounded-2xl border border-white/10 bg-[rgba(20,22,37,0.88)] px-3 text-sm text-slate-100 outline-none transition focus:border-cyan-300/40"
-                    onChange={(e) => {
-                      const date = e.target.value;
-                      if (!date) return;
-                      const before = shiftLocalDateKey(date, 1);
-                      void loadJournal({ before, history: [] });
-                      setJournalJumpDate(date);
-                    }}
+                    entryDates={journalEntryDateSet}
+                    onSelect={(date) => void jumpToJournalDate(date)}
                   />
                   <Button
                     size="sm"
@@ -6385,15 +6558,6 @@ export default function HomePage() {
                     disabled={loading}
                   >
                     Today
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="rounded-2xl"
-                    onClick={() => void loadOlderJournalEntries()}
-                    disabled={!journal?.has_more || loading}
-                  >
-                    <ChevronRight className="h-4 w-4" />
                   </Button>
                 </div>
 
@@ -6435,7 +6599,8 @@ export default function HomePage() {
               </div>
             ) : null}
             {journal?.entries?.length ? (
-              journal.entries.map((entry) => {
+              <div className="grid items-start gap-4 lg:grid-cols-2">
+              {journal.entries.map((entry) => {
                 const draft = journalDrafts[entry.date] || {
                   journal_entry: entry.journal_entry || "",
                   accomplishments: entry.accomplishments || "",
@@ -6456,26 +6621,70 @@ export default function HomePage() {
                   entry.calendar_summary ? entry.calendar_summary.split(".")[0] : null,
                   entry.world_event_title ?? null,
                 ].filter(Boolean).join(" · ");
+                // A day is "filled" only when the user authored content (matches the
+                // backend _content_clause); auto calendar/news context doesn't count.
+                const wordCount = [
+                  draft.journal_entry,
+                  draft.accomplishments,
+                  draft.gratitude_entry,
+                  draft.scripture_study,
+                  draft.spiritual_notes,
+                ].join(" ").trim().split(/\s+/).filter(Boolean).length;
+                const hasPhoto = !!draft.photo_data_url;
+                const hasEntry = wordCount > 0 || hasPhoto;
+                const previewBody =
+                  draft.journal_entry.trim() ||
+                  draft.gratitude_entry.trim() ||
+                  draft.accomplishments.trim() ||
+                  draft.spiritual_notes.trim();
 
                 return (
                   <Card
                     key={entry.date}
                     id={`journal-entry-${entry.date}`}
-                    className="mx-auto max-w-2xl rounded-[2rem] border border-white/8 bg-[rgba(17,19,34,0.82)] shadow-[0_16px_44px_rgba(6,7,14,0.36)] backdrop-blur-xl"
+                    className={[
+                      "transition",
+                      // Filled days get the substantial card; empty days collapse to a
+                      // compact single-line row (override the component's default py-4).
+                      hasEntry
+                        ? "rounded-[2rem] bg-[rgba(17,19,34,0.82)] shadow-[0_16px_44px_rgba(6,7,14,0.36)] backdrop-blur-xl"
+                        : "rounded-2xl bg-[rgba(17,19,34,0.4)] py-1",
+                      entry.date === journalJumpDate
+                        ? "border border-violet-300/45 ring-1 ring-violet-400/40"
+                        : hasEntry
+                          ? "border border-white/8 hover:border-violet-300/25"
+                          : "border border-white/5 hover:border-white/12",
+                      // An opened card spans the full width so editing isn't cramped in one column.
+                      sectionState.dayOpen ? "lg:col-span-2" : "",
+                    ].join(" ")}
                   >
                     {/* Day header — with snippet preview when collapsed */}
-                    <CardHeader className="pb-2">
+                    <CardHeader className={hasEntry ? "pb-3" : "py-0"}>
                       <button
                         type="button"
                         onClick={() => toggleJournalSection(entry.date, "dayOpen")}
-                        className="flex w-full items-start justify-between gap-3 text-left"
+                        className={`flex w-full justify-between gap-3 rounded-2xl text-left outline-none transition focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-violet-300/40 ${hasEntry ? "items-start" : "items-center"}`}
                       >
                         <div className="min-w-0 flex-1">
-                          <CardTitle className="flex items-center gap-2 text-lg">
-                            <BookOpen className="h-5 w-5 shrink-0" />
+                          <CardTitle
+                            className={
+                              hasEntry
+                                ? "flex items-center gap-2 text-lg"
+                                : "flex items-center gap-2 text-sm font-medium text-slate-500"
+                            }
+                          >
+                            <BookOpen className={hasEntry ? "h-5 w-5 shrink-0" : "h-4 w-4 shrink-0 text-slate-600"} />
                             <span>{highlightJournalSearchText(entry.date_label, journalQuery)}</span>
+                            {hasEntry ? (
+                              <span className="ml-1 inline-flex items-center gap-1 rounded-full border border-violet-300/25 bg-violet-400/15 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.08em] text-violet-100">
+                                <span className="h-1.5 w-1.5 rounded-full bg-violet-300" />
+                                {wordCount > 0 ? `${wordCount} word${wordCount === 1 ? "" : "s"}` : "Photo"}
+                              </span>
+                            ) : (
+                              <span className="ml-1 text-xs font-normal text-slate-600">No entry</span>
+                            )}
                           </CardTitle>
-                          {!sectionState.dayOpen ? (
+                          {!sectionState.dayOpen && hasEntry ? (
                             <div className="mt-2 space-y-1">
                               {draft.scripture_study.trim() ? (
                                 <p className="truncate text-xs text-slate-400">
@@ -6483,13 +6692,13 @@ export default function HomePage() {
                                   {draft.scripture_study.trim()}
                                 </p>
                               ) : null}
-                              {draft.journal_entry.trim() ? (
+                              {previewBody ? (
                                 <p className="line-clamp-2 text-xs leading-5 text-slate-500">
-                                  {draft.journal_entry.trim()}
+                                  {previewBody}
                                 </p>
                               ) : null}
                             </div>
-                          ) : entry.updated_at ? (
+                          ) : sectionState.dayOpen && entry.updated_at ? (
                             <p className="mt-1 text-xs text-slate-500">
                               Saved {new Date(entry.updated_at).toLocaleString()}
                             </p>
@@ -6498,7 +6707,7 @@ export default function HomePage() {
                         {sectionState.dayOpen ? (
                           <ChevronDown className="mt-1 h-4 w-4 shrink-0 text-slate-400" />
                         ) : (
-                          <ChevronRight className="mt-1 h-4 w-4 shrink-0 text-slate-400" />
+                          <ChevronRight className={`mt-1 h-4 w-4 shrink-0 ${hasEntry ? "text-slate-400" : "text-slate-600"}`} />
                         )}
                       </button>
                     </CardHeader>
@@ -6555,7 +6764,7 @@ export default function HomePage() {
                                             className={`flex items-center gap-2 rounded-[0.8rem] border px-3 py-2 text-sm ${
                                               item.removed
                                                 ? "border-dashed border-white/8 text-slate-500"
-                                                : "border-cyan-300/15 bg-cyan-400/5 text-slate-200"
+                                                : "border-violet-300/15 bg-violet-400/8 text-slate-200"
                                             }`}
                                           >
                                             <Input
@@ -6597,7 +6806,7 @@ export default function HomePage() {
                                       {highlightJournalSearchText(entry.world_event_title, journalQuery)}
                                     </p>
                                     {entry.world_event_source ? (
-                                      <p className="text-xs text-cyan-300/70">{entry.world_event_source}</p>
+                                      <p className="text-xs text-violet-300/70">{entry.world_event_source}</p>
                                     ) : null}
                                     {entry.world_event_summary ? (
                                       <p className="text-sm leading-6 text-slate-300">
@@ -6619,7 +6828,7 @@ export default function HomePage() {
                                             {entry.world_event_articles.map((article, index) =>
                                               article.link ? (
                                                 <a key={`${article.title}-${index}`} href={article.link} target="_blank" rel="noreferrer"
-                                                  className="block rounded-[0.8rem] border border-white/6 bg-[rgba(20,22,37,0.8)] px-3 py-2 text-xs text-slate-200 transition hover:border-cyan-300/25">
+                                                  className="block rounded-[0.8rem] border border-white/6 bg-[rgba(20,22,37,0.8)] px-3 py-2 text-xs text-slate-200 transition hover:border-violet-300/25">
                                                   {highlightJournalSearchText(article.title, journalQuery)}
                                                   <span className="ml-2 text-slate-500">{article.source}</span>
                                                 </a>
@@ -6695,7 +6904,7 @@ export default function HomePage() {
                               value={draft.scripture_study}
                               onChange={(e) => setJournalDrafts((c) => ({ ...c, [entry.date]: { ...draft, scripture_study: e.target.value } }))}
                               placeholder="What did you study today?"
-                              className="min-h-[180px] w-full rounded-[1.2rem] border border-white/8 bg-[rgba(20,22,37,0.88)] px-4 py-3 text-sm leading-6 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-cyan-300/40"
+                              className="min-h-[180px] w-full rounded-[1.2rem] border border-white/8 bg-[rgba(20,22,37,0.88)] px-4 py-3 text-sm leading-6 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-violet-300/40"
                             />
                           ) : (
                             <>
@@ -6714,7 +6923,7 @@ export default function HomePage() {
                                       href={link.url}
                                       target="_blank"
                                       rel="noreferrer"
-                                      className="inline-flex items-center gap-2 rounded-full border border-cyan-300/20 bg-cyan-400/10 px-3 py-1 text-xs text-cyan-100 transition hover:text-cyan-50"
+                                      className="inline-flex items-center gap-2 rounded-full border border-violet-300/20 bg-violet-400/10 px-3 py-1 text-xs text-violet-100 transition hover:text-violet-50"
                                     >
                                       {link.label}
                                       <span className="rounded-full border border-white/10 bg-white/8 px-2 py-0.5 text-[10px] uppercase tracking-[0.14em] text-slate-300">
@@ -6834,7 +7043,8 @@ export default function HomePage() {
                     ) : null}
                   </Card>
                 );
-              })
+              })}
+              </div>
             ) : (
               <Card className="rounded-[2rem] border border-white/8 bg-[rgba(17,19,34,0.82)] shadow-[0_16px_44px_rgba(6,7,14,0.36)] backdrop-blur-xl">
                 <CardContent className="p-6 text-sm text-slate-400">
