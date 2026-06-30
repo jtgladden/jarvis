@@ -27,6 +27,7 @@ from app.schemas import (
     LanguagePracticePrompt,
     LanguagePracticeSession,
     LanguagePracticeSessionCreateRequest,
+    LanguagePracticeSessionUpdateRequest,
     LanguageProfile,
     LanguageProfileUpdateRequest,
     LanguageProgressByLanguage,
@@ -48,6 +49,7 @@ from app.language_store import (
     get_profile_record,
     get_vocab_for_export,
     get_word_explanation_record,
+    delete_session_record,
     list_session_records,
     list_vocab_records,
     review_vocab_record,
@@ -55,6 +57,7 @@ from app.language_store import (
     save_word_explanation_record,
     save_profile_record,
     save_session_record,
+    update_session_record,
     save_vocab_record,
     strip_kana,
     update_vocab_record,
@@ -574,6 +577,26 @@ def create_language_session(payload: LanguagePracticeSessionCreateRequest) -> La
     )
     session = _session_from_record(row)
     return session
+
+
+def update_language_session(
+    session_id: str, payload: LanguagePracticeSessionUpdateRequest
+) -> LanguagePracticeSession:
+    user_id = get_default_user_context().user_id
+    row = update_session_record(
+        session_id=session_id,
+        language=payload.language,
+        mode=payload.mode,
+        minutes=payload.minutes,
+        notes=payload.notes,
+        user_id=user_id,
+    )
+    return _session_from_record(row)
+
+
+def delete_language_session(session_id: str) -> bool:
+    user_id = get_default_user_context().user_id
+    return delete_session_record(session_id=session_id, user_id=user_id)
 
 
 def generate_language_practice(payload: LanguagePracticeGenerateRequest) -> LanguagePracticeGenerateResponse:

@@ -813,6 +813,15 @@ class LanguagePracticeSessionCreateRequest(BaseModel):
     notes: str = ""
 
 
+class LanguagePracticeSessionUpdateRequest(BaseModel):
+    language: Optional[LanguageCode] = None
+    mode: Optional[
+        Literal["daily", "conversation", "vocabulary", "writing", "grammar", "listening"]
+    ] = None
+    minutes: Optional[int] = Field(default=None, ge=0, le=240)
+    notes: Optional[str] = None
+
+
 class LanguageProgressSummary(BaseModel):
     sessions_count: int = 0
     minutes_practiced: int = 0

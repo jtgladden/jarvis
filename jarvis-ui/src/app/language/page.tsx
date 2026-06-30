@@ -25,6 +25,14 @@ import { Input } from "@/components/ui/input";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "/api";
 const VOCAB_PAGE_SIZE = 50;
+const SESSION_MODES = [
+  "daily",
+  "conversation",
+  "vocabulary",
+  "writing",
+  "grammar",
+  "listening",
+] as const;
 
 type LanguageCode = "tagalog" | "hiligaynon" | "japanese" | "spanish";
 type LanguageLevel = "beginner" | "elementary" | "intermediate" | "advanced";
@@ -530,6 +538,14 @@ export default function LanguagePage() {
   const [vocabUpdating, setVocabUpdating] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [vocabDeleting, setVocabDeleting] = useState<string | null>(null);
+  const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
+  const [editSessionLanguage, setEditSessionLanguage] = useState<LanguageCode>("tagalog");
+  const [editSessionMode, setEditSessionMode] = useState<LanguagePracticeSession["mode"]>("daily");
+  const [editSessionMinutes, setEditSessionMinutes] = useState("0");
+  const [editSessionNotes, setEditSessionNotes] = useState("");
+  const [sessionUpdating, setSessionUpdating] = useState(false);
+  const [sessionDeleting, setSessionDeleting] = useState<string | null>(null);
+  const [confirmDeleteSessionId, setConfirmDeleteSessionId] = useState<string | null>(null);
   const [savingConvVocab, setSavingConvVocab] = useState<string | null>(null);
   const [shuffledWordPracticeDeck, setShuffledWordPracticeDeck] = useState<LanguageVocabItem[]>([]);
   const [reviewIndex, setReviewIndex] = useState(0);
@@ -1406,6 +1422,60 @@ export default function LanguagePage() {
       setError(err instanceof Error ? err.message : "Unable to update vocabulary item.");
     } finally {
       setVocabUpdating(false);
+    }
+  };
+
+  const startEditSession = (session: LanguagePracticeSession) => {
+    setEditingSessionId(session.id);
+    setEditSessionLanguage(session.language);
+    setEditSessionMode(session.mode);
+    setEditSessionMinutes(String(session.minutes));
+    setEditSessionNotes(session.notes);
+    setConfirmDeleteSessionId(null);
+  };
+
+  const updateSession = async (id: string) => {
+    setSessionUpdating(true);
+    setError("");
+    try {
+      const minutes = Math.max(0, Math.min(240, Math.round(Number(editSessionMinutes) || 0)));
+      const response = await fetch(`${API_BASE}/languages/sessions/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          language: editSessionLanguage,
+          mode: editSessionMode,
+          minutes,
+          notes: editSessionNotes,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(`Update failed with status ${response.status}`);
+      }
+      setEditingSessionId(null);
+      await loadDashboard();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to update practice session.");
+    } finally {
+      setSessionUpdating(false);
+    }
+  };
+
+  const deleteSession = async (id: string) => {
+    setSessionDeleting(id);
+    setConfirmDeleteSessionId(null);
+    setError("");
+    try {
+      const response = await fetch(`${API_BASE}/languages/sessions/${id}`, { method: "DELETE" });
+      if (!response.ok && response.status !== 204) {
+        throw new Error(`Delete failed with status ${response.status}`);
+      }
+      if (editingSessionId === id) setEditingSessionId(null);
+      await loadDashboard();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to delete practice session.");
+    } finally {
+      setSessionDeleting(null);
     }
   };
 
@@ -2946,16 +3016,114 @@ export default function LanguagePage() {
                 <div className="text-xs uppercase tracking-[0.16em] text-slate-400">Recent sessions</div>
                 {(dashboard?.recent_sessions || []).map((session) => (
                   <div key={session.id} className="rounded-[1.2rem] border border-white/8 bg-white/5 p-4">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <div className="font-medium text-white">
-                          {formatLanguageName(session.language, dashboard?.supported_languages || [])} · {session.mode}
+                    {editingSessionId === session.id ? (
+                      <div className="space-y-3">
+                        <div className="flex flex-wrap gap-2">
+                          <select
+                            className="h-9 flex-1 rounded-2xl border border-white/10 bg-[rgba(15,18,30,0.9)] px-3 text-sm text-white"
+                            value={editSessionLanguage}
+                            onChange={(event) => setEditSessionLanguage(event.target.value as LanguageCode)}
+                          >
+                            {(dashboard?.supported_languages || []).map((language) => (
+                              <option key={language.code} value={language.code}>
+                                {language.name}
+                              </option>
+                            ))}
+                          </select>
+                          <select
+                            className="h-9 flex-1 rounded-2xl border border-white/10 bg-[rgba(15,18,30,0.9)] px-3 text-sm text-white"
+                            value={editSessionMode}
+                            onChange={(event) => setEditSessionMode(event.target.value as LanguagePracticeSession["mode"])}
+                          >
+                            {SESSION_MODES.map((mode) => (
+                              <option key={mode} value={mode}>
+                                {mode}
+                              </option>
+                            ))}
+                          </select>
+                          <Input
+                            type="number"
+                            min={0}
+                            max={240}
+                            className="h-9 w-24"
+                            value={editSessionMinutes}
+                            onChange={(event) => setEditSessionMinutes(event.target.value)}
+                            placeholder="min"
+                          />
                         </div>
-                        <div className="mt-1 text-sm text-slate-400">{formatSessionTime(session.created_at)}</div>
-                        {session.notes ? <div className="mt-2 text-sm text-slate-300">{session.notes}</div> : null}
+                        <Input
+                          value={editSessionNotes}
+                          onChange={(event) => setEditSessionNotes(event.target.value)}
+                          placeholder="Notes (optional)"
+                        />
+                        <div className="flex gap-2">
+                          <Button
+                            size="sm"
+                            className="rounded-2xl"
+                            onClick={() => void updateSession(session.id)}
+                            disabled={sessionUpdating}
+                          >
+                            {sessionUpdating ? "Saving..." : "Save"}
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="rounded-2xl"
+                            onClick={() => setEditingSessionId(null)}
+                            disabled={sessionUpdating}
+                          >
+                            Cancel
+                          </Button>
+                        </div>
                       </div>
-                      <Badge>{session.minutes} min</Badge>
-                    </div>
+                    ) : (
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="font-medium text-white">
+                            {formatLanguageName(session.language, dashboard?.supported_languages || [])} · {session.mode}
+                          </div>
+                          <div className="mt-1 text-sm text-slate-400">{formatSessionTime(session.created_at)}</div>
+                          {session.notes ? <div className="mt-2 text-sm text-slate-300">{session.notes}</div> : null}
+                          <div className="mt-3 flex gap-3">
+                            <button
+                              type="button"
+                              className="text-xs font-medium text-cyan-300 hover:text-cyan-200"
+                              onClick={() => startEditSession(session)}
+                            >
+                              Edit
+                            </button>
+                            {confirmDeleteSessionId === session.id ? (
+                              <>
+                                <button
+                                  type="button"
+                                  className="text-xs font-medium text-red-400 hover:text-red-300 disabled:opacity-50"
+                                  onClick={() => void deleteSession(session.id)}
+                                  disabled={sessionDeleting === session.id}
+                                >
+                                  {sessionDeleting === session.id ? "Deleting..." : "Confirm delete"}
+                                </button>
+                                <button
+                                  type="button"
+                                  className="text-xs font-medium text-slate-400 hover:text-slate-300"
+                                  onClick={() => setConfirmDeleteSessionId(null)}
+                                >
+                                  Cancel
+                                </button>
+                              </>
+                            ) : (
+                              <button
+                                type="button"
+                                className="text-xs font-medium text-slate-400 hover:text-red-300"
+                                onClick={() => setConfirmDeleteSessionId(session.id)}
+                              >
+                                Delete
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                        <Badge>{session.minutes} min</Badge>
+                      </div>
+                    )}
                   </div>
                 ))}
                 {!dashboard?.recent_sessions.length && !loading ? (

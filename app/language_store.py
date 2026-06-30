@@ -665,6 +665,60 @@ def save_session_record(
     return row
 
 
+def update_session_record(
+    session_id: str,
+    language: str | None = None,
+    mode: str | None = None,
+    minutes: int | None = None,
+    notes: str | None = None,
+    user_id: str = APP_DEFAULT_USER_ID,
+) -> sqlite3.Row:
+    fields: list[str] = []
+    params: list = []
+    if language is not None:
+        fields.append("language = ?")
+        params.append(language)
+    if mode is not None:
+        fields.append("mode = ?")
+        params.append(mode)
+    if minutes is not None:
+        fields.append("minutes = ?")
+        params.append(int(minutes))
+    if notes is not None:
+        fields.append("notes = ?")
+        params.append(notes.strip())
+
+    with _db_lock, closing(_connect()) as connection:
+        if fields:
+            connection.execute(
+                f"UPDATE language_sessions SET {', '.join(fields)} "
+                "WHERE user_id = ? AND session_id = ?",
+                (*params, user_id, session_id),
+            )
+        row = connection.execute(
+            """
+            SELECT session_id, language, mode, minutes, notes, created_at
+            FROM language_sessions
+            WHERE user_id = ? AND session_id = ?
+            """,
+            (user_id, session_id),
+        ).fetchone()
+        connection.commit()
+    if row is None:
+        raise RuntimeError("Practice session not found.")
+    return row
+
+
+def delete_session_record(session_id: str, user_id: str = APP_DEFAULT_USER_ID) -> bool:
+    with _db_lock, closing(_connect()) as connection:
+        cursor = connection.execute(
+            "DELETE FROM language_sessions WHERE user_id = ? AND session_id = ?",
+            (user_id, session_id),
+        )
+        connection.commit()
+    return cursor.rowcount > 0
+
+
 def list_sessions_for_date_range(
     start_date: str,
     end_date: str,
