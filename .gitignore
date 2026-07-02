@@ -14,6 +14,7 @@ data/workouts.db
 data/language_learning.db
 data/user_rules.db
 data/food_log.db
+data/people.db
 data/job_alerts_email_cache.json
 
 # Local-only dummy/test journal data + seeder (never deploy to the server)

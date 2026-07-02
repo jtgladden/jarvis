@@ -1165,3 +1165,75 @@ class FoodLogUpdateRequest(BaseModel):
     carbs_g: float = 0
     fat_g: float = 0
     meal: str = "Other"
+
+
+# ---------------------------------------------------------------------------
+# People / person-page timeline
+# ---------------------------------------------------------------------------
+
+class PersonPhotoprismRef(BaseModel):
+    instance_key: str
+    subject_uid: str
+    subject_name: str = ""
+
+
+class Person(BaseModel):
+    id: str
+    canonical_name: str
+    aliases: List[str] = Field(default_factory=list)
+    photoprism: List[PersonPhotoprismRef] = Field(default_factory=list)
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class PeopleListResponse(BaseModel):
+    people: List[Person] = Field(default_factory=list)
+
+
+class PersonCreateRequest(BaseModel):
+    canonical_name: str
+    aliases: List[str] = Field(default_factory=list)
+
+
+class PersonUpdateRequest(BaseModel):
+    canonical_name: Optional[str] = None
+    aliases: Optional[List[str]] = None
+
+
+class PersonPhotoprismRefRequest(BaseModel):
+    instance_key: str
+    subject_uid: str
+    subject_name: str = ""
+
+
+class PersonTimelineItem(BaseModel):
+    kind: Literal["journal", "photo"]
+    date: str
+    sort_key: str
+    # journal
+    entry_id: Optional[str] = None
+    matched_alias: Optional[str] = None
+    snippet: Optional[str] = None
+    # photo
+    uid: Optional[str] = None
+    thumb_url: Optional[str] = None
+    instance_key: Optional[str] = None
+
+
+class PersonTimelineResponse(BaseModel):
+    id: str
+    canonical_name: str
+    aliases: List[str] = Field(default_factory=list)
+    photoprism: List[PersonPhotoprismRef] = Field(default_factory=list)
+    timeline: List[PersonTimelineItem] = Field(default_factory=list)
+
+
+class PhotoprismSubject(BaseModel):
+    uid: str
+    name: str
+    photo_count: int = 0
+
+
+class PhotoprismSubjectsResponse(BaseModel):
+    instance_key: str
+    subjects: List[PhotoprismSubject] = Field(default_factory=list)

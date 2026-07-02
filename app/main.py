@@ -29,11 +29,22 @@ from app.journal import extract_journal_day_citations, get_journal, get_journal_
 from app.journal_store import init_journal_store
 from app.language_learning import create_language_conversation_reply, create_language_session, create_language_vocab, delete_language_session, delete_language_vocab, explain_language_word, export_language_vocab_anki, generate_language_practice, get_language_dashboard, get_language_pronunciation_feedback, get_language_writing_feedback, normalize_existing_language_vocab, review_language_vocab, synthesize_language_speech, update_language_profile, update_language_session, update_language_vocab
 from app.language_store import backfill_pronunciation_from_notes, init_language_store, purge_kana_in_romanization_records, purge_kana_in_vocab_pronunciation
+from app.people import get_person_timeline, list_people_summaries
+from app.people_store import (
+    create_person,
+    delete_person,
+    delete_photoprism_ref,
+    init_people_store,
+    set_photoprism_ref,
+    update_person,
+)
+from app.photoprism_client import PhotoPrismError, list_instance_subjects
+from app.config import get_photoprism_instances
 from app.movement import list_movement_entries, sync_movement_daily_entry
 from app.movement_store import init_movement_store
 from app.planner import generate_schedule_plan
 from app.rules import classify_new_email_rule
-from app.schemas import AssistantAskRequest, JournalDayExtract, JournalImageExtractRequest, JournalImageExtractResponse, DailyFoodLog, FoodLogAddRequest, FoodLogEntry, FoodLogHistoryResponse, FoodLogUpdateRequest, FoodParseRequest, FoodParseResponse, JobAlertsJobStartResponse, JobAlertsJobStatus, JobAlertsResponse, JobListing, MacroTargets, MacroTargetsUpdateRequest, ManualWorkoutLog, ManualWorkoutLogRequest, MealPrepCreateRequest, MealPrepItem, AssistantAskResponse, AssistantChatListResponse, AssistantChatThread, CalendarAgendaResponse, CalendarEventCreateResponse, CalendarEventPreview, CalendarQuickAddRequest, CalendarQuickAddResponse, ClassifiedEmailResponse, ClassificationGuidanceRequest, ClassificationGuidanceResponse, ClassificationOverviewResponse, CleanupJobStartResponse, CleanupJobStatus, CleanupResponse, DashboardResponse, DashboardTaskItem, DeleteEmailResponse, EmailCommandRequest, EmailCommandResponse, EmailPageResponse, EmailSummary, EmailUpdateRequest, EmailUpdateResponse, GmailLabel, HandleEmailRequest, HandleEmailResponse, HealthDailySyncRequest, HealthDailySyncResponse, HealthListResponse, JournalDayEntry, JournalDayNoteUpdateRequest, JournalEntryDatesResponse, JournalResponse, LanguageCode, LanguageConversationRequest, LanguageConversationResponse, LanguageDashboardResponse, LanguageFeedbackResponse, LanguagePracticeGenerateRequest, LanguagePracticeGenerateResponse, LanguagePracticeSession, LanguagePracticeSessionCreateRequest, LanguagePracticeSessionUpdateRequest, LanguageProfile, LanguageProfileUpdateRequest, LanguageSpeechRequest, LanguageVocabCreateRequest, LanguageVocabItem, LanguageVocabNormalizeResponse, LanguageVocabReviewRequest, LanguageVocabUpdateRequest, LanguageWordExplainRequest, LanguageWordExplainResponse, LanguageWritingFeedbackRequest, MovementDailySyncRequest, MovementDailySyncResponse, MovementListResponse, PlanningCalendarBulkCreateRequest, PlanningCalendarBulkCreateResponse, PlanningCalendarCreateRequest, PlanningCalendarCreateResponse, PlanningJobStartResponse, PlanningJobStatus, PlanningRequest, PlanningResponse, RuleSuggestion, RuleSuggestionResponse, RuleProcessResponse, TaskCreateRequest, TaskListResponse, TaskUpdateRequest, UserRule, UserRuleCondition, UserRuleCreateRequest, UserRuleListResponse, UserRuleUpdateRequest, WorkoutBatchSyncRequest, WorkoutBatchSyncResponse, WorkoutListResponse, WorkoutSetEntry
+from app.schemas import AssistantAskRequest, JournalDayExtract, JournalImageExtractRequest, JournalImageExtractResponse, DailyFoodLog, FoodLogAddRequest, FoodLogEntry, FoodLogHistoryResponse, FoodLogUpdateRequest, FoodParseRequest, FoodParseResponse, JobAlertsJobStartResponse, JobAlertsJobStatus, JobAlertsResponse, JobListing, MacroTargets, MacroTargetsUpdateRequest, ManualWorkoutLog, ManualWorkoutLogRequest, MealPrepCreateRequest, MealPrepItem, AssistantAskResponse, AssistantChatListResponse, AssistantChatThread, CalendarAgendaResponse, CalendarEventCreateResponse, CalendarEventPreview, CalendarQuickAddRequest, CalendarQuickAddResponse, ClassifiedEmailResponse, ClassificationGuidanceRequest, ClassificationGuidanceResponse, ClassificationOverviewResponse, CleanupJobStartResponse, CleanupJobStatus, CleanupResponse, DashboardResponse, DashboardTaskItem, DeleteEmailResponse, EmailCommandRequest, EmailCommandResponse, EmailPageResponse, EmailSummary, EmailUpdateRequest, EmailUpdateResponse, GmailLabel, HandleEmailRequest, HandleEmailResponse, HealthDailySyncRequest, HealthDailySyncResponse, HealthListResponse, JournalDayEntry, JournalDayNoteUpdateRequest, JournalEntryDatesResponse, JournalResponse, LanguageCode, LanguageConversationRequest, LanguageConversationResponse, LanguageDashboardResponse, LanguageFeedbackResponse, LanguagePracticeGenerateRequest, LanguagePracticeGenerateResponse, LanguagePracticeSession, LanguagePracticeSessionCreateRequest, LanguagePracticeSessionUpdateRequest, LanguageProfile, LanguageProfileUpdateRequest, LanguageSpeechRequest, LanguageVocabCreateRequest, LanguageVocabItem, LanguageVocabNormalizeResponse, LanguageVocabReviewRequest, LanguageVocabUpdateRequest, LanguageWordExplainRequest, LanguageWordExplainResponse, LanguageWritingFeedbackRequest, MovementDailySyncRequest, MovementDailySyncResponse, MovementListResponse, PlanningCalendarBulkCreateRequest, PlanningCalendarBulkCreateResponse, PlanningCalendarCreateRequest, PlanningCalendarCreateResponse, PlanningJobStartResponse, PlanningJobStatus, PlanningRequest, PlanningResponse, RuleSuggestion, RuleSuggestionResponse, RuleProcessResponse, TaskCreateRequest, TaskListResponse, TaskUpdateRequest, UserRule, UserRuleCondition, UserRuleCreateRequest, UserRuleListResponse, UserRuleUpdateRequest, WorkoutBatchSyncRequest, WorkoutBatchSyncResponse, WorkoutListResponse, WorkoutSetEntry, PeopleListResponse, Person, PersonCreateRequest, PersonUpdateRequest, PersonPhotoprismRefRequest, PersonTimelineResponse, PhotoprismSubjectsResponse
 from app.rule_parser import parse_rule_to_fields
 from app.task_service import create_task, delete_task, list_tasks, update_task
 from app.task_store import init_task_store
@@ -206,6 +217,7 @@ def start_background_new_mail_sorter() -> None:
     init_assistant_chat_store()
     init_language_store()
     init_food_log_store()
+    init_people_store()
     thread = Thread(target=_new_mail_sort_loop, daemon=True)
     thread.start()
     Thread(target=purge_kana_in_romanization_records, daemon=True).start()
@@ -1181,6 +1193,72 @@ def put_nutrition_entry(entry_date: str, entry_id: str, payload: FoodLogUpdateRe
     if not entry:
         raise HTTPException(status_code=404, detail="Entry not found")
     return entry
+
+
+# ---------------------------------------------------------------------------
+# People / person-page timeline (read-only merge of journal + PhotoPrism)
+# ---------------------------------------------------------------------------
+
+@api.get("/people", response_model=PeopleListResponse)
+def get_people():
+    return PeopleListResponse(people=[Person(**person) for person in list_people_summaries()])
+
+
+@api.post("/people", response_model=Person, status_code=201)
+def post_person(payload: PersonCreateRequest):
+    return Person(**create_person(payload.canonical_name, payload.aliases))
+
+
+@api.get("/people/{person_id}", response_model=PersonTimelineResponse)
+def get_person_page(person_id: str):
+    timeline = get_person_timeline(person_id)
+    if timeline is None:
+        raise HTTPException(status_code=404, detail="Person not found.")
+    return timeline
+
+
+@api.patch("/people/{person_id}", response_model=Person)
+def patch_person(person_id: str, payload: PersonUpdateRequest):
+    try:
+        return Person(**update_person(person_id, payload.canonical_name, payload.aliases))
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@api.delete("/people/{person_id}", status_code=204)
+def delete_person_route(person_id: str):
+    if not delete_person(person_id):
+        raise HTTPException(status_code=404, detail="Person not found.")
+
+
+@api.put("/people/{person_id}/photoprism", response_model=Person)
+def put_person_photoprism(person_id: str, payload: PersonPhotoprismRefRequest):
+    try:
+        return Person(**set_photoprism_ref(
+            person_id, payload.instance_key, payload.subject_uid, payload.subject_name
+        ))
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@api.delete("/people/{person_id}/photoprism/{instance_key}/{subject_uid}", status_code=204)
+def delete_person_photoprism(person_id: str, instance_key: str, subject_uid: str):
+    if not delete_photoprism_ref(person_id, instance_key, subject_uid):
+        raise HTTPException(status_code=404, detail="PhotoPrism reference not found.")
+
+
+@api.get("/photoprism/instances", response_model=list[str])
+def get_photoprism_instance_keys():
+    return sorted(get_photoprism_instances().keys())
+
+
+@api.get("/photoprism/{instance_key}/subjects", response_model=PhotoprismSubjectsResponse)
+def get_photoprism_subjects(instance_key: str):
+    try:
+        subjects = list_instance_subjects(instance_key)
+    except PhotoPrismError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+    return PhotoprismSubjectsResponse(instance_key=instance_key, subjects=subjects)
 
 
 app.include_router(api)

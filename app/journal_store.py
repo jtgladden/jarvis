@@ -414,6 +414,67 @@ def count_journal_entries(
     return int(row["total"]) if row else 0
 
 
+# Body columns holding user-authored prose that a person may be mentioned in.
+# Auto-populated fields (calendar/news) are intentionally excluded.
+_PERSON_SEARCH_COLUMNS = (
+    "journal_entry",
+    "accomplishments",
+    "gratitude_entry",
+    "scripture_study",
+    "spiritual_notes",
+)
+
+
+def find_entries_matching_terms(
+    terms: list[str],
+    user_id: str = APP_DEFAULT_USER_ID,
+) -> list[dict[str, str]]:
+    """Coarse LIKE prefilter for journal entries mentioning any term.
+
+    Returns candidate rows (entry_date + the searchable body columns) for any
+    entry whose prose contains any term as a substring. Callers apply exact
+    word-boundary matching in Python (see ``app/people.py``) to reject
+    false positives like "Sam" inside "Samantha". Pushing the substring filter
+    into SQL keeps the Python-side scan small.
+    """
+    clean_terms = [t.strip() for t in terms if t and t.strip()]
+    if not clean_terms:
+        return []
+
+    like_clauses: list[str] = []
+    params: list[str] = [user_id]
+    for term in clean_terms:
+        like_value = f"%{_escape_like(term)}%"
+        for column in _PERSON_SEARCH_COLUMNS:
+            like_clauses.append(f"{column} LIKE ? ESCAPE '\\'")
+            params.append(like_value)
+
+    columns_sql = ", ".join(_PERSON_SEARCH_COLUMNS)
+    with _db_lock, closing(_connect()) as connection:
+        _ensure_journal_schema(connection)
+        _ensure_journal_columns(connection)
+        rows = connection.execute(
+            f"""
+            SELECT entry_date, {columns_sql}
+            FROM journal_entries
+            WHERE user_id = ? AND ({' OR '.join(like_clauses)})
+            ORDER BY entry_date DESC
+            """,
+            params,
+        ).fetchall()
+
+    return [
+        {"entry_date": row["entry_date"], **{col: row[col] for col in _PERSON_SEARCH_COLUMNS}}
+        for row in rows
+    ]
+
+
+def _escape_like(term: str) -> str:
+    # Escape LIKE wildcards in a search term so a name containing % or _ matches
+    # literally (paired with ESCAPE '\\' in the query).
+    return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def get_oldest_journal_entry_date(user_id: str = APP_DEFAULT_USER_ID) -> str | None:
     with _db_lock, closing(_connect()) as connection:
         _ensure_journal_schema(connection)

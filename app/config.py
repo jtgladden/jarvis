@@ -43,6 +43,43 @@ USAJOBS_API_KEY = os.getenv("USAJOBS_API_KEY", "")
 USAJOBS_USER_AGENT = os.getenv("USAJOBS_USER_AGENT", "")
 JOB_ALERTS_EMAIL_CACHE_FILE = os.getenv("JOB_ALERTS_EMAIL_CACHE_FILE", "data/job_alerts_email_cache.json")
 FOOD_LOG_DB = os.getenv("FOOD_LOG_DB", "data/food_log.db")
+PEOPLE_DB = os.getenv("PEOPLE_DB", "data/people.db")
+
+
+def get_photoprism_instances() -> dict[str, dict[str, str]]:
+    """Discover configured PhotoPrism instances from the environment.
+
+    An instance is declared by a matched pair of env vars, keyed by an
+    arbitrary instance_key (lower-cased):
+
+        PHOTOPRISM_<KEY>_URL     e.g. PHOTOPRISM_PERSONAL_URL
+        PHOTOPRISM_<KEY>_TOKEN   e.g. PHOTOPRISM_PERSONAL_TOKEN  (app password)
+
+    Any number of instances can be configured; nothing is hardcoded. An
+    instance is only returned when both its URL and TOKEN are present, so
+    secrets never live in code and half-configured instances are skipped.
+
+    Returns a mapping of instance_key -> {"base_url", "token"}.
+    """
+    urls: dict[str, str] = {}
+    tokens: dict[str, str] = {}
+    for name, value in os.environ.items():
+        if not name.startswith("PHOTOPRISM_") or not value.strip():
+            continue
+        if name.endswith("_URL"):
+            key = name[len("PHOTOPRISM_"): -len("_URL")].lower()
+            if key:
+                urls[key] = value.strip().rstrip("/")
+        elif name.endswith("_TOKEN"):
+            key = name[len("PHOTOPRISM_"): -len("_TOKEN")].lower()
+            if key:
+                tokens[key] = value.strip()
+
+    return {
+        key: {"base_url": urls[key], "token": tokens[key]}
+        for key in sorted(urls)
+        if key in tokens
+    }
 
 CORS_ALLOWED_ORIGINS = [
     origin.strip()

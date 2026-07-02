@@ -92,10 +92,14 @@
   }
   body {
     @apply bg-background text-foreground;
+    min-height: 100vh;
     background-image:
       radial-gradient(circle at top left, rgb(189 147 249 / 0.14), transparent 30%),
       radial-gradient(circle at top right, rgb(139 233 253 / 0.12), transparent 26%),
       linear-gradient(180deg, #141629 0%, #0f1021 55%, #0b0c18 100%);
+    background-repeat: no-repeat;
+    background-size: cover;
+    background-attachment: fixed;
   }
   html {
     @apply font-sans;

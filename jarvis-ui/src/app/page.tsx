@@ -28,6 +28,7 @@ import {
   Sparkles,
   Tag,
   Trash2,
+  Users,
 } from "lucide-react";
 import { AssistantPanel } from "@/components/assistant-panel";
 import { JournalDatePicker } from "@/components/ui/journal-date-picker";
@@ -5412,6 +5413,11 @@ export default function HomePage() {
           <Button asChild variant="ghost" size="sm" className="h-7 rounded-xl px-2.5 text-xs">
             <Link href="/language">
               <Languages className="mr-1.5 h-3 w-3" />Language
+            </Link>
+          </Button>
+          <Button asChild variant="ghost" size="sm" className="h-7 rounded-xl px-2.5 text-xs">
+            <Link href="/people">
+              <Users className="mr-1.5 h-3 w-3" />People
             </Link>
           </Button>
           <Button variant={mode === "settings" ? "default" : "ghost"} size="sm" className="h-7 rounded-xl px-2.5 text-xs" onClick={() => setTopLevelMode("settings")}>
