@@ -7,4 +7,5 @@ python-dotenv
 python-multipart
 pydantic
 openai
+PyMuPDF
 tzdata

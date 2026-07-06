@@ -29,6 +29,28 @@ OPENAI_PLANNING_MODEL = os.getenv("OPENAI_PLANNING_MODEL", "gpt-4.1-mini")
 OPENAI_PLANNING_MAX_TOKENS = int(os.getenv("OPENAI_PLANNING_MAX_TOKENS", "1200"))
 OPENAI_LANGUAGE_MODEL = os.getenv("OPENAI_LANGUAGE_MODEL", "gpt-4.1-mini")
 OPENAI_LANGUAGE_MAX_TOKENS = int(os.getenv("OPENAI_LANGUAGE_MAX_TOKENS", "1400"))
+# --- Journal handwriting/scripture vision extraction (Responses API) ---------
+# gpt-5.4 uses the Responses API (client.responses.create), not Chat Completions.
+# These are the throughput / accuracy / cost knobs — keep them env-overridable.
+OPENAI_JOURNAL_VISION_MODEL = os.getenv("OPENAI_JOURNAL_VISION_MODEL", "gpt-5.4")
+# Future triage path: bulk on the cheap high-quota model, re-run low-confidence
+# fragments on the premium model. Not wired yet, but the constant reserves it.
+OPENAI_JOURNAL_VISION_TRIAGE_MODEL = os.getenv("OPENAI_JOURNAL_VISION_TRIAGE_MODEL", "gpt-5.4-mini")
+# "original" keeps handwriting/low-quality scans un-downscaled (do not use "high"
+# / "low" for this workload). Per-page image detail.
+OPENAI_JOURNAL_VISION_IMAGE_DETAIL = os.getenv("OPENAI_JOURNAL_VISION_IMAGE_DETAIL", "original")
+OPENAI_JOURNAL_VISION_TIMEOUT_SECONDS = float(os.getenv("OPENAI_JOURNAL_VISION_TIMEOUT_SECONDS", "180"))
+# Contiguous pages fed to the model in one call, with an overlap carried forward
+# so an entry split across a group boundary is still seen whole in one group.
+JOURNAL_IMPORT_BATCH_PAGES = int(os.getenv("JOURNAL_IMPORT_BATCH_PAGES", "4"))
+JOURNAL_IMPORT_OVERLAP_PAGES = int(os.getenv("JOURNAL_IMPORT_OVERLAP_PAGES", "1"))
+# Rasterization DPI for PDF pages -> images (high enough for handwriting).
+JOURNAL_IMPORT_RASTER_DPI = int(os.getenv("JOURNAL_IMPORT_RASTER_DPI", "200"))
+# Daily token cap for the free/low tier that includes gpt-5.4 (~250k/day). The
+# processor tracks per-call usage and stops-and-resumes so a long run drips
+# across days instead of spilling into billed rates. 0 disables the cap.
+JOURNAL_IMPORT_DAILY_TOKEN_CAP = int(os.getenv("JOURNAL_IMPORT_DAILY_TOKEN_CAP", "240000"))
+JOURNAL_IMPORT_DB = os.getenv("JOURNAL_IMPORT_DB", "data/journal_import.db")
 OPENAI_TRANSCRIPTION_MODEL = os.getenv("OPENAI_TRANSCRIPTION_MODEL", "gpt-4o-mini-transcribe")
 OPENAI_TTS_MODEL = os.getenv("OPENAI_TTS_MODEL", "gpt-4o-mini-tts")
 OPENAI_TTS_VOICE = os.getenv("OPENAI_TTS_VOICE", "cedar")

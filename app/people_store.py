@@ -22,6 +22,11 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
+def alias_norm(value: str) -> str:
+    """Canonical form used everywhere an alias is stored or looked up."""
+    return value.strip().lower()
+
+
 def _connect() -> sqlite3.Connection:
     directory = os.path.dirname(PEOPLE_DB)
     if directory:
@@ -63,6 +68,34 @@ def init_people_store() -> None:
                 subject_uid TEXT NOT NULL,
                 subject_name TEXT NOT NULL DEFAULT '',
                 PRIMARY KEY (person_id, instance_key, subject_uid),
+                FOREIGN KEY (person_id) REFERENCES people(id) ON DELETE CASCADE
+            )
+            """
+        )
+        # Default owner for an alias shared by >1 person (used only when there
+        # is no per-entry binding). person_id is TEXT to match people.id.
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS alias_defaults (
+                user_id TEXT NOT NULL,
+                alias_norm TEXT NOT NULL,
+                person_id TEXT NOT NULL,
+                PRIMARY KEY (user_id, alias_norm),
+                FOREIGN KEY (person_id) REFERENCES people(id) ON DELETE CASCADE
+            )
+            """
+        )
+        # Per-entry binding that overrides everything else for one journal entry.
+        # entry_date mirrors journal_entries.entry_date; no cross-db FK (separate
+        # SQLite file), so bindings are cleaned up by alias/person changes only.
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS journal_mentions (
+                user_id TEXT NOT NULL,
+                entry_date TEXT NOT NULL,
+                alias_norm TEXT NOT NULL,
+                person_id TEXT NOT NULL,
+                PRIMARY KEY (user_id, entry_date, alias_norm),
                 FOREIGN KEY (person_id) REFERENCES people(id) ON DELETE CASCADE
             )
             """
@@ -271,6 +304,158 @@ def delete_photoprism_ref(
             WHERE person_id = ? AND instance_key = ? AND subject_uid = ?
             """,
             (person_id, instance_key.strip().lower(), subject_uid.strip()),
+        )
+        connection.commit()
+        return cursor.rowcount > 0
+
+
+# ---------------------------------------------------------------------------
+# Alias disambiguation: candidates, per-entry bindings, default owners
+# ---------------------------------------------------------------------------
+
+def get_person_names(user_id: str = APP_DEFAULT_USER_ID) -> dict[str, str]:
+    """Map person_id -> canonical_name for the user's people."""
+    with _db_lock, closing(_connect()) as connection:
+        rows = connection.execute(
+            "SELECT id, canonical_name FROM people WHERE user_id = ?",
+            (user_id,),
+        ).fetchall()
+    return {row["id"]: row["canonical_name"] for row in rows}
+
+
+def get_alias_candidate_map(user_id: str = APP_DEFAULT_USER_ID) -> dict[str, dict]:
+    """Map alias_norm -> {"display": <alias as typed>, "person_ids": [id, ...]}.
+
+    Candidacy is derived from ``people_aliases`` (case-insensitive), scoped to
+    the user's people. ``display`` is a representative original-cased alias for
+    the UI/queue.
+    """
+    with _db_lock, closing(_connect()) as connection:
+        rows = connection.execute(
+            """
+            SELECT pa.person_id AS person_id, pa.alias AS alias
+            FROM people_aliases pa
+            JOIN people p ON p.id = pa.person_id
+            WHERE p.user_id = ?
+            ORDER BY pa.alias
+            """,
+            (user_id,),
+        ).fetchall()
+
+    result: dict[str, dict] = {}
+    for row in rows:
+        norm = alias_norm(row["alias"])
+        if not norm:
+            continue
+        entry = result.setdefault(norm, {"display": row["alias"].strip(), "person_ids": []})
+        if row["person_id"] not in entry["person_ids"]:
+            entry["person_ids"].append(row["person_id"])
+    return result
+
+
+def get_person_ids_for_alias(user_id: str, alias: str) -> list[str]:
+    """Candidate person ids for an alias (case-insensitive), from people_aliases."""
+    return get_alias_candidate_map(user_id).get(alias_norm(alias), {}).get("person_ids", [])
+
+
+def get_alias_default_map(user_id: str = APP_DEFAULT_USER_ID) -> dict[str, str]:
+    with _db_lock, closing(_connect()) as connection:
+        rows = connection.execute(
+            "SELECT alias_norm, person_id FROM alias_defaults WHERE user_id = ?",
+            (user_id,),
+        ).fetchall()
+    return {row["alias_norm"]: row["person_id"] for row in rows}
+
+
+def get_alias_default(user_id: str, alias: str) -> str | None:
+    with _db_lock, closing(_connect()) as connection:
+        row = connection.execute(
+            "SELECT person_id FROM alias_defaults WHERE user_id = ? AND alias_norm = ?",
+            (user_id, alias_norm(alias)),
+        ).fetchone()
+    return row["person_id"] if row else None
+
+
+def set_alias_default(user_id: str, alias: str, person_id: str) -> None:
+    norm = alias_norm(alias)
+    if not norm:
+        raise ValueError("alias is required.")
+    with _db_lock, closing(_connect()) as connection:
+        if connection.execute(
+            "SELECT id FROM people WHERE id = ? AND user_id = ?", (person_id, user_id)
+        ).fetchone() is None:
+            raise ValueError("Person not found.")
+        connection.execute(
+            """
+            INSERT INTO alias_defaults (user_id, alias_norm, person_id)
+            VALUES (?, ?, ?)
+            ON CONFLICT(user_id, alias_norm) DO UPDATE SET person_id = excluded.person_id
+            """,
+            (user_id, norm, person_id),
+        )
+        connection.commit()
+
+
+def delete_alias_default(user_id: str, alias: str) -> bool:
+    with _db_lock, closing(_connect()) as connection:
+        cursor = connection.execute(
+            "DELETE FROM alias_defaults WHERE user_id = ? AND alias_norm = ?",
+            (user_id, alias_norm(alias)),
+        )
+        connection.commit()
+        return cursor.rowcount > 0
+
+
+def get_journal_mention_map(user_id: str = APP_DEFAULT_USER_ID) -> dict[tuple[str, str], str]:
+    """Map (entry_date, alias_norm) -> person_id for all per-entry bindings."""
+    with _db_lock, closing(_connect()) as connection:
+        rows = connection.execute(
+            "SELECT entry_date, alias_norm, person_id FROM journal_mentions WHERE user_id = ?",
+            (user_id,),
+        ).fetchall()
+    return {(row["entry_date"], row["alias_norm"]): row["person_id"] for row in rows}
+
+
+def get_journal_mention(user_id: str, entry_date: str, alias: str) -> str | None:
+    with _db_lock, closing(_connect()) as connection:
+        row = connection.execute(
+            """
+            SELECT person_id FROM journal_mentions
+            WHERE user_id = ? AND entry_date = ? AND alias_norm = ?
+            """,
+            (user_id, entry_date, alias_norm(alias)),
+        ).fetchone()
+    return row["person_id"] if row else None
+
+
+def upsert_journal_mention(user_id: str, entry_date: str, alias: str, person_id: str) -> None:
+    norm = alias_norm(alias)
+    if not entry_date.strip() or not norm:
+        raise ValueError("entry_date and alias are required.")
+    with _db_lock, closing(_connect()) as connection:
+        if connection.execute(
+            "SELECT id FROM people WHERE id = ? AND user_id = ?", (person_id, user_id)
+        ).fetchone() is None:
+            raise ValueError("Person not found.")
+        connection.execute(
+            """
+            INSERT INTO journal_mentions (user_id, entry_date, alias_norm, person_id)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(user_id, entry_date, alias_norm) DO UPDATE SET person_id = excluded.person_id
+            """,
+            (user_id, entry_date.strip(), norm, person_id),
+        )
+        connection.commit()
+
+
+def delete_journal_mention(user_id: str, entry_date: str, alias: str) -> bool:
+    with _db_lock, closing(_connect()) as connection:
+        cursor = connection.execute(
+            """
+            DELETE FROM journal_mentions
+            WHERE user_id = ? AND entry_date = ? AND alias_norm = ?
+            """,
+            (user_id, entry_date.strip(), alias_norm(alias)),
         )
         connection.commit()
         return cursor.rowcount > 0

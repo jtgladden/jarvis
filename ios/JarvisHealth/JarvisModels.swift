@@ -322,7 +322,8 @@ struct LanguageFeedbackResponse: Codable {
 
 struct JournalDayExtract: Codable {
     let detected_date: String?
-    let text: String
+    let text: String  // markdown body, stored unchanged
+    let start_page: Int?  // 0-based page index within the scanned batch
 }
 
 struct JournalImageExtractResponse: Codable {

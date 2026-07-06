@@ -233,7 +233,7 @@ struct JarvisAPIClient {
         try await get(JournalDayEntry.self, baseURL: baseURL, path: "/journal/\(date)")
     }
 
-    static func extractJournalFromImage(baseURL: String, imageBase64: String, mediaType: String = "image/jpeg", scanTarget: String = "both") async throws -> JournalImageExtractResponse {
+    static func extractJournalFromImage(baseURL: String, imageBase64: String, mediaType: String = "image/jpeg", scanTarget: String = "journal") async throws -> JournalImageExtractResponse {
         struct Body: Encodable { let image_base64: String; let media_type: String; let scan_target: String }
         let body = Body(image_base64: imageBase64, media_type: mediaType, scan_target: scanTarget)
         var request = URLRequest(url: try url(baseURL, path: "/journal/extract-from-image"))

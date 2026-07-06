@@ -475,15 +475,107 @@ class JournalImageExtractRequest(BaseModel):
     scan_target: Literal["scripture", "journal"] = "journal"
 
 
+class JournalImagesExtractRequest(BaseModel):
+    """Batch extraction over an ORDERED list of consecutive journal pages."""
+
+    pages: List[str] = Field(default_factory=list)  # ordered base64 images
+    # A single media type applied to every page, or one per page (aligned to `pages`).
+    media_type: str | List[str] = "image/jpeg"
+    scan_target: Literal["scripture", "journal"] = "journal"
+
+
+class JournalScanStageRequest(BaseModel):
+    """Extract one uploaded image/PDF and stage the results for review.
+
+    Used by the web "Scan notes" button: instead of merging everything into the
+    open day, results become dated fragments in a scan batch the user reviews.
+    """
+
+    image_base64: str
+    media_type: str = "image/jpeg"
+    scan_target: Literal["scripture", "journal"] = "journal"
+    source_name: Optional[str] = None  # display name for the batch (e.g. filename)
+    # Date to assign to any fragment the model couldn't date (still flagged for
+    # review). Typically the journal day the scan was launched from.
+    fallback_date: Optional[str] = None
+
+
 class JournalDayExtract(BaseModel):
     detected_date: Optional[str] = None  # ISO yyyy-mm-dd or null
-    text: str = ""
+    text: str = ""  # markdown body (no date heading inside)
+    start_page: int = 0  # 0-based page index within the batch where the entry begins
 
 
 class JournalImageExtractResponse(BaseModel):
     entries: List[JournalDayExtract] = Field(default_factory=list)
     confidence: Literal["high", "medium", "low"] = "medium"
     notes: str = ""
+
+
+# --- Journal import / staged batch review ------------------------------------
+
+
+class JournalScanFragment(BaseModel):
+    id: int
+    batch_id: int
+    page_index: int
+    detected_date: Optional[str] = None
+    date_detected: bool = False  # True when the model detected a date (vs. defaulted)
+    text_markdown: str = ""
+    confidence: Literal["high", "medium", "low"] = "medium"
+    status: Literal["pending", "reviewed", "committed", "discarded"] = "pending"
+    created_at: Optional[str] = None
+
+
+class JournalScanBatch(BaseModel):
+    id: int
+    source_file: str
+    page_count: int
+    scan_target: Literal["scripture", "journal"] = "journal"
+    model: str = ""
+    status: Literal["pending", "extracted", "committed", "error"] = "pending"
+    error: Optional[str] = None
+    created_at: Optional[str] = None
+    # Summary counts, populated by list/detail endpoints.
+    fragment_count: int = 0
+    pending_count: int = 0
+    committed_count: int = 0
+
+
+class JournalScanBatchListResponse(BaseModel):
+    batches: List[JournalScanBatch] = Field(default_factory=list)
+
+
+class JournalScanBatchDetail(BaseModel):
+    batch: JournalScanBatch
+    fragments: List[JournalScanFragment] = Field(default_factory=list)
+    # Resolved dates in this batch that already have a real journal_entries row.
+    existing_dates: List[str] = Field(default_factory=list)
+
+
+class JournalFragmentUpdateRequest(BaseModel):
+    detected_date: Optional[str] = None
+    text_markdown: Optional[str] = None
+    status: Optional[Literal["pending", "reviewed", "committed", "discarded"]] = None
+
+
+class JournalBatchCommitRequest(BaseModel):
+    # When true, overwrite journal_entries rows that already exist for a resolved
+    # date. Default false: a pre-existing date is reported as a conflict instead.
+    overwrite_existing: bool = False
+
+
+class JournalDateConflict(BaseModel):
+    entry_date: str
+    fragment_ids: List[int] = Field(default_factory=list)
+
+
+class JournalBatchCommitResponse(BaseModel):
+    batch_id: int
+    committed_dates: List[str] = Field(default_factory=list)
+    committed_fragment_ids: List[int] = Field(default_factory=list)
+    conflicts: List[JournalDateConflict] = Field(default_factory=list)
+    skipped_undated: List[int] = Field(default_factory=list)
 
 
 class HealthDailySyncRequest(BaseModel):
@@ -1206,6 +1298,11 @@ class PersonPhotoprismRefRequest(BaseModel):
     subject_name: str = ""
 
 
+class CandidatePerson(BaseModel):
+    id: str
+    canonical_name: str
+
+
 class PersonTimelineItem(BaseModel):
     kind: Literal["journal", "photo"]
     date: str
@@ -1214,6 +1311,10 @@ class PersonTimelineItem(BaseModel):
     entry_id: Optional[str] = None
     matched_alias: Optional[str] = None
     snippet: Optional[str] = None
+    # journal attributed via a shared alias (offer reassign in the UI)
+    via_alias: Optional[str] = None
+    shared: Optional[bool] = None
+    candidates: Optional[List[CandidatePerson]] = None
     # photo
     uid: Optional[str] = None
     thumb_url: Optional[str] = None
@@ -1237,3 +1338,38 @@ class PhotoprismSubject(BaseModel):
 class PhotoprismSubjectsResponse(BaseModel):
     instance_key: str
     subjects: List[PhotoprismSubject] = Field(default_factory=list)
+
+
+class ReviewQueueItem(BaseModel):
+    entry_date: str
+    alias: str
+    snippet: str
+    candidates: List[CandidatePerson] = Field(default_factory=list)
+
+
+class ReviewQueueResponse(BaseModel):
+    items: List[ReviewQueueItem] = Field(default_factory=list)
+
+
+class ReviewCountResponse(BaseModel):
+    count: int = 0
+
+
+class MentionUpsertRequest(BaseModel):
+    entry_date: str
+    alias: str
+    person_id: str
+
+
+class MentionClearRequest(BaseModel):
+    entry_date: str
+    alias: str
+
+
+class AliasDefaultRequest(BaseModel):
+    alias: str
+    person_id: str
+
+
+class AliasDefaultClearRequest(BaseModel):
+    alias: str

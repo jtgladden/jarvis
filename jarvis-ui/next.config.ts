@@ -38,6 +38,22 @@ const nextConfig: NextConfig = {
       },
     ];
   },
+  experimental: {
+    // The /api/* rewrite proxies to FastAPI. Next 16 caps proxied request
+    // bodies at 10MB by default, which the journal scan blows past: an
+    // original-detail handwriting photo base64-encodes to well over 10MB, so
+    // the proxy truncates the body and the upstream socket resets (ECONNRESET).
+    // Raise the ceiling so full-resolution scans reach the extractor intact.
+    // (Only affects the web app — iOS posts to the backend directly, and the
+    // batch import CLI calls the extractor in-process, both bypassing this.)
+    proxyClientMaxBodySize: "50mb",
+    // The /api/* proxy also has a 30s default response timeout. A gpt-5.4
+    // original-detail multi-page transcription runs longer than that, so the
+    // proxy would 500 the browser while the backend keeps going to its 200 OK.
+    // Set it (ms) above the backend's vision timeout (OPENAI_JOURNAL_VISION_
+    // TIMEOUT_SECONDS = 180s) so the backend's own timeout surfaces real errors.
+    proxyTimeout: 200_000,
+  },
   // Empty turbopack config tells Next.js 16 that Turbopack is intentional
   // for `npm run dev`. Without this, Next.js warns about a webpack config
   // (injected by Serwist) existing alongside Turbopack with no turbopack

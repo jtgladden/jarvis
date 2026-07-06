@@ -16,6 +16,7 @@ data/user_rules.db
 data/food_log.db
 data/people.db
 data/job_alerts_email_cache.json
+data/journal_import.db
 
 # Local-only dummy/test journal data + seeder (never deploy to the server)
 data/_dummy_journal_dates.json

@@ -16,7 +16,7 @@ from app.calendar_quick_add import create_calendar_event_from_description
 from app.classification_cache import get_cached_classification, init_classification_cache, save_classification, summarize_cached_classifications
 from app.classification_guidance import get_classification_guidance, init_classification_guidance, update_classification_guidance
 from app.classifier import IMPORTANT_LABEL, LEGACY_IMPORTANT_LABELS, LEGACY_UNIMPORTANT_LABELS, UNIMPORTANT_LABEL, classify_cleanup_email, classify_email, classify_emails_batch, classify_new_email_ai_fallback
-from app.config import CORS_ALLOWED_ORIGINS, OPENAI_MAX_EMAILS_PER_RUN
+from app.config import APP_DEFAULT_USER_ID, CORS_ALLOWED_ORIGINS, OPENAI_MAX_EMAILS_PER_RUN
 from app.dashboard import generate_dashboard, invalidate_dashboard_cache
 from app.gmail_client import apply_custom_rules_to_jarvis_emails, cleanup_inbox, expire_stale_important_emails, get_all_inbox_emails, get_email_by_id, get_emails_by_any_label, get_mailbox_emails, get_mailbox_emails_page, get_new_inbox_emails, get_recent_inbox_emails, list_gmail_labels, mark_email_handled, process_new_inbox_emails, trash_email, update_email
 from app.google_oauth import begin_google_oauth, finish_google_oauth, get_google_oauth_instructions
@@ -27,16 +27,37 @@ from app.food_log_store import init_food_log_store
 from app.job_alerts import clear_email_parse_cache, get_job_alerts_cached, invalidate_job_alerts_cache, run_job_alerts_job
 from app.journal import extract_journal_day_citations, get_journal, get_journal_day, get_journal_entry_dates, save_journal_day
 from app.journal_store import init_journal_store
+from app.journal_scan import extract_journal_entries
+from app.journal_import import commit_batch, existing_dates_for_batch, make_dedupe_key
+from app.journal_import_store import (
+    create_batch,
+    get_batch,
+    init_journal_import_store,
+    insert_fragment,
+    list_batches,
+    list_fragments,
+    set_batch_status,
+    update_fragment,
+)
 from app.language_learning import create_language_conversation_reply, create_language_session, create_language_vocab, delete_language_session, delete_language_vocab, explain_language_word, export_language_vocab_anki, generate_language_practice, get_language_dashboard, get_language_pronunciation_feedback, get_language_writing_feedback, normalize_existing_language_vocab, review_language_vocab, synthesize_language_speech, update_language_profile, update_language_session, update_language_vocab
 from app.language_store import backfill_pronunciation_from_notes, init_language_store, purge_kana_in_romanization_records, purge_kana_in_vocab_pronunciation
-from app.people import get_person_timeline, list_people_summaries
+from app.people import (
+    get_person_timeline,
+    get_unresolved_count,
+    get_unresolved_review_queue,
+    list_people_summaries,
+)
 from app.people_store import (
     create_person,
+    delete_alias_default,
+    delete_journal_mention,
     delete_person,
     delete_photoprism_ref,
     init_people_store,
+    set_alias_default,
     set_photoprism_ref,
     update_person,
+    upsert_journal_mention,
 )
 from app.photoprism_client import PhotoPrismError, list_instance_subjects
 from app.config import get_photoprism_instances
@@ -44,7 +65,7 @@ from app.movement import list_movement_entries, sync_movement_daily_entry
 from app.movement_store import init_movement_store
 from app.planner import generate_schedule_plan
 from app.rules import classify_new_email_rule
-from app.schemas import AssistantAskRequest, JournalDayExtract, JournalImageExtractRequest, JournalImageExtractResponse, DailyFoodLog, FoodLogAddRequest, FoodLogEntry, FoodLogHistoryResponse, FoodLogUpdateRequest, FoodParseRequest, FoodParseResponse, JobAlertsJobStartResponse, JobAlertsJobStatus, JobAlertsResponse, JobListing, MacroTargets, MacroTargetsUpdateRequest, ManualWorkoutLog, ManualWorkoutLogRequest, MealPrepCreateRequest, MealPrepItem, AssistantAskResponse, AssistantChatListResponse, AssistantChatThread, CalendarAgendaResponse, CalendarEventCreateResponse, CalendarEventPreview, CalendarQuickAddRequest, CalendarQuickAddResponse, ClassifiedEmailResponse, ClassificationGuidanceRequest, ClassificationGuidanceResponse, ClassificationOverviewResponse, CleanupJobStartResponse, CleanupJobStatus, CleanupResponse, DashboardResponse, DashboardTaskItem, DeleteEmailResponse, EmailCommandRequest, EmailCommandResponse, EmailPageResponse, EmailSummary, EmailUpdateRequest, EmailUpdateResponse, GmailLabel, HandleEmailRequest, HandleEmailResponse, HealthDailySyncRequest, HealthDailySyncResponse, HealthListResponse, JournalDayEntry, JournalDayNoteUpdateRequest, JournalEntryDatesResponse, JournalResponse, LanguageCode, LanguageConversationRequest, LanguageConversationResponse, LanguageDashboardResponse, LanguageFeedbackResponse, LanguagePracticeGenerateRequest, LanguagePracticeGenerateResponse, LanguagePracticeSession, LanguagePracticeSessionCreateRequest, LanguagePracticeSessionUpdateRequest, LanguageProfile, LanguageProfileUpdateRequest, LanguageSpeechRequest, LanguageVocabCreateRequest, LanguageVocabItem, LanguageVocabNormalizeResponse, LanguageVocabReviewRequest, LanguageVocabUpdateRequest, LanguageWordExplainRequest, LanguageWordExplainResponse, LanguageWritingFeedbackRequest, MovementDailySyncRequest, MovementDailySyncResponse, MovementListResponse, PlanningCalendarBulkCreateRequest, PlanningCalendarBulkCreateResponse, PlanningCalendarCreateRequest, PlanningCalendarCreateResponse, PlanningJobStartResponse, PlanningJobStatus, PlanningRequest, PlanningResponse, RuleSuggestion, RuleSuggestionResponse, RuleProcessResponse, TaskCreateRequest, TaskListResponse, TaskUpdateRequest, UserRule, UserRuleCondition, UserRuleCreateRequest, UserRuleListResponse, UserRuleUpdateRequest, WorkoutBatchSyncRequest, WorkoutBatchSyncResponse, WorkoutListResponse, WorkoutSetEntry, PeopleListResponse, Person, PersonCreateRequest, PersonUpdateRequest, PersonPhotoprismRefRequest, PersonTimelineResponse, PhotoprismSubjectsResponse
+from app.schemas import AssistantAskRequest, JournalImageExtractRequest, JournalImagesExtractRequest, JournalImageExtractResponse, JournalScanStageRequest, JournalScanBatch, JournalScanBatchListResponse, JournalScanBatchDetail, JournalScanFragment, JournalFragmentUpdateRequest, JournalBatchCommitRequest, JournalBatchCommitResponse, JournalDateConflict, DailyFoodLog, FoodLogAddRequest, FoodLogEntry, FoodLogHistoryResponse, FoodLogUpdateRequest, FoodParseRequest, FoodParseResponse, JobAlertsJobStartResponse, JobAlertsJobStatus, JobAlertsResponse, JobListing, MacroTargets, MacroTargetsUpdateRequest, ManualWorkoutLog, ManualWorkoutLogRequest, MealPrepCreateRequest, MealPrepItem, AssistantAskResponse, AssistantChatListResponse, AssistantChatThread, CalendarAgendaResponse, CalendarEventCreateResponse, CalendarEventPreview, CalendarQuickAddRequest, CalendarQuickAddResponse, ClassifiedEmailResponse, ClassificationGuidanceRequest, ClassificationGuidanceResponse, ClassificationOverviewResponse, CleanupJobStartResponse, CleanupJobStatus, CleanupResponse, DashboardResponse, DashboardTaskItem, DeleteEmailResponse, EmailCommandRequest, EmailCommandResponse, EmailPageResponse, EmailSummary, EmailUpdateRequest, EmailUpdateResponse, GmailLabel, HandleEmailRequest, HandleEmailResponse, HealthDailySyncRequest, HealthDailySyncResponse, HealthListResponse, JournalDayEntry, JournalDayNoteUpdateRequest, JournalEntryDatesResponse, JournalResponse, LanguageCode, LanguageConversationRequest, LanguageConversationResponse, LanguageDashboardResponse, LanguageFeedbackResponse, LanguagePracticeGenerateRequest, LanguagePracticeGenerateResponse, LanguagePracticeSession, LanguagePracticeSessionCreateRequest, LanguagePracticeSessionUpdateRequest, LanguageProfile, LanguageProfileUpdateRequest, LanguageSpeechRequest, LanguageVocabCreateRequest, LanguageVocabItem, LanguageVocabNormalizeResponse, LanguageVocabReviewRequest, LanguageVocabUpdateRequest, LanguageWordExplainRequest, LanguageWordExplainResponse, LanguageWritingFeedbackRequest, MovementDailySyncRequest, MovementDailySyncResponse, MovementListResponse, PlanningCalendarBulkCreateRequest, PlanningCalendarBulkCreateResponse, PlanningCalendarCreateRequest, PlanningCalendarCreateResponse, PlanningJobStartResponse, PlanningJobStatus, PlanningRequest, PlanningResponse, RuleSuggestion, RuleSuggestionResponse, RuleProcessResponse, TaskCreateRequest, TaskListResponse, TaskUpdateRequest, UserRule, UserRuleCondition, UserRuleCreateRequest, UserRuleListResponse, UserRuleUpdateRequest, WorkoutBatchSyncRequest, WorkoutBatchSyncResponse, WorkoutListResponse, WorkoutSetEntry, PeopleListResponse, Person, PersonCreateRequest, PersonUpdateRequest, PersonPhotoprismRefRequest, PersonTimelineResponse, PhotoprismSubjectsResponse, ReviewQueueResponse, ReviewCountResponse, MentionUpsertRequest, MentionClearRequest, AliasDefaultRequest, AliasDefaultClearRequest
 from app.rule_parser import parse_rule_to_fields
 from app.task_service import create_task, delete_task, list_tasks, update_task
 from app.task_store import init_task_store
@@ -209,6 +230,7 @@ def start_background_new_mail_sorter() -> None:
     init_classification_cache()
     init_classification_guidance()
     init_journal_store()
+    init_journal_import_store()
     init_task_store()
     init_user_rules_store()
     init_health_store()
@@ -693,91 +715,155 @@ def journal_extract_citations(entry_date: str, payload: JournalDayNoteUpdateRequ
     )
 
 
+def _validate_base64(value: str) -> str:
+    """Strip any data-URL prefix and confirm the payload is real base64."""
+    import base64, re as _re
+
+    cleaned = _re.sub(r"^data:[^;]+;base64,", "", value or "")
+    try:
+        base64.b64decode(cleaned, validate=True)
+    except Exception:
+        raise ValueError("image is not valid base64")
+    return cleaned
+
+
 @api.post("/journal/extract-from-image", response_model=JournalImageExtractResponse)
 def journal_extract_from_image(payload: JournalImageExtractRequest):
-    import base64, re as _re
-    from app.config import OPENAI_API_KEY
-    from openai import OpenAI as _OpenAI
-
-    _client = _OpenAI(api_key=OPENAI_API_KEY)
-
-    # Strip data-URL prefix if the client sent one
-    b64 = _re.sub(r"^data:[^;]+;base64,", "", payload.image_base64)
-    # Validate it's real base64 before sending
-    try:
-        base64.b64decode(b64, validate=True)
-    except Exception:
-        raise ValueError("image_base64 is not valid base64")
-
-    prompt = (
-        "Transcribe this handwritten page verbatim. The page may contain entries for one or multiple dates.\n\n"
-        "STEP 1 — Identify date headings. Look for any dates written as section headers or at the start of "
-        "a paragraph (e.g. 'May 31', '5/31/26', 'Tuesday, May 31', 'May 31st'). Each date heading marks "
-        "the start of a new entry. If there are no date headings, treat the entire page as one entry.\n\n"
-        "STEP 2 — For EACH entry, transcribe every word verbatim from top to bottom within that section. "
-        "Do NOT summarize, skip, or stop early. For illegible words write [illegible]. "
-        "Preserve paragraph breaks with \\n\\n. The last word in the section must appear in the text.\n\n"
-        "Return ONLY valid JSON:\n"
-        "{\n"
-        "  \"entries\": [\n"
-        "    { \"detected_date\": \"yyyy-mm-dd or null\", \"text\": \"complete verbatim text for this entry\" }\n"
-        "  ],\n"
-        "  \"confidence\": \"high / medium / low\",\n"
-        "  \"notes\": \"any issues such as blurry image or cut-off edges\"\n"
-        "}"
+    # The live single-page phone flow is just the 1-page case of the batch path.
+    b64 = _validate_base64(payload.image_base64)
+    result = extract_journal_entries(
+        [b64], payload.media_type, payload.scan_target
     )
+    return result.response
 
-    response = _client.chat.completions.create(
-        model="gpt-4o",
-        max_tokens=8192,
-        response_format={"type": "json_object"},
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:{payload.media_type};base64,{b64}",
-                            "detail": "high",
-                        },
-                    },
-                    {"type": "text", "text": prompt},
-                ],
-            }
-        ],
-    )
 
-    import json as _json
-    choice = response.choices[0]
-    raw = choice.message.content or "{}"
-    print(f"[scan] finish_reason={choice.finish_reason} "
-          f"tokens(prompt={response.usage.prompt_tokens} "
-          f"completion={response.usage.completion_tokens} "
-          f"total={response.usage.total_tokens})")
-    print(f"[scan] raw response ({len(raw)} chars):\n{raw[:2000]}")
-    if len(raw) > 2000:
-        print(f"[scan] ... (truncated for log, full length {len(raw)})")
-    data = _json.loads(raw)
-    raw_entries = data.get("entries") or []
-    if not isinstance(raw_entries, list):
-        raw_entries = []
-    entries = [
-        JournalDayExtract(
-            detected_date=e.get("detected_date") or None,
-            text=str(e.get("text") or "").strip(),
+@api.post("/journal/extract-from-images", response_model=JournalImageExtractResponse)
+def journal_extract_from_images(payload: JournalImagesExtractRequest):
+    if not payload.pages:
+        raise ValueError("pages must contain at least one image")
+    pages = [_validate_base64(page) for page in payload.pages]
+    print(f"[scan] batch request pages={len(pages)} target={payload.scan_target}")
+    result = extract_journal_entries(pages, payload.media_type, payload.scan_target)
+    return result.response
+
+
+# --- Batch journal-import review + commit ------------------------------------
+
+
+@api.post("/journal/import/scan", response_model=JournalScanBatchDetail)
+def journal_scan_to_staging(payload: JournalScanStageRequest):
+    """Extract one uploaded image/PDF and stage it as a batch for review.
+
+    The date-aware alternative to /journal/extract-from-image: rather than
+    merging everything into one day, each detected entry becomes a dated fragment
+    the user reviews (and can re-date) at /journal/review before committing.
+    """
+    b64 = _validate_base64(payload.image_base64)
+    result = extract_journal_entries([b64], payload.media_type, payload.scan_target)
+    if not result.entries:
+        raise HTTPException(status_code=422, detail="No journal entries were found in the scan.")
+
+    source = (payload.source_name or "").strip() or "Web scan"
+    batch_id = create_batch(source, result.page_count, payload.scan_target, result.usage.model)
+    for entry in result.entries:
+        detected = entry.detected_date or None
+        # Undated fragments fall back to the launching day (flagged, still editable).
+        date_value = detected or (payload.fallback_date or None)
+        insert_fragment(
+            batch_id=batch_id,
+            page_index=entry.start_page,
+            detected_date=date_value,
+            date_detected=bool(detected),
+            text_markdown=entry.text,
+            confidence=result.response.confidence,
+            dedupe_key=make_dedupe_key(date_value, entry.text),
         )
-        for e in raw_entries
-        if isinstance(e, dict) and str(e.get("text") or "").strip()
-    ]
-    result = JournalImageExtractResponse(
-        entries=entries,
-        confidence=data.get("confidence", "medium"),
-        notes=str(data.get("notes") or "").strip(),
+    set_batch_status(batch_id, "extracted")
+
+    batch = get_batch(batch_id)
+    return JournalScanBatchDetail(
+        batch=_batch_to_schema(batch),
+        fragments=[_fragment_to_schema(f) for f in list_fragments(batch_id)],
+        existing_dates=existing_dates_for_batch(batch_id),
     )
-    print(f"[scan] {len(entries)} entries — " +
-          ", ".join(f"{e.detected_date or 'no-date'}:{len(e.text)}c" for e in entries))
-    return result
+
+
+def _batch_to_schema(batch: dict) -> JournalScanBatch:
+    return JournalScanBatch(
+        id=int(batch["id"]),
+        source_file=str(batch.get("source_file") or ""),
+        page_count=int(batch.get("page_count") or 0),
+        scan_target=batch.get("scan_target") or "journal",
+        model=str(batch.get("model") or ""),
+        status=batch.get("status") or "pending",
+        error=batch.get("error"),
+        created_at=batch.get("created_at"),
+        fragment_count=int(batch.get("fragment_count") or 0),
+        pending_count=int(batch.get("pending_count") or 0),
+        committed_count=int(batch.get("committed_count") or 0),
+    )
+
+
+def _fragment_to_schema(fragment: dict) -> JournalScanFragment:
+    return JournalScanFragment(
+        id=int(fragment["id"]),
+        batch_id=int(fragment["batch_id"]),
+        page_index=int(fragment.get("page_index") or 0),
+        detected_date=fragment.get("detected_date"),
+        date_detected=bool(fragment.get("date_detected")),
+        text_markdown=str(fragment.get("text_markdown") or ""),
+        confidence=fragment.get("confidence") or "medium",
+        status=fragment.get("status") or "pending",
+        created_at=fragment.get("created_at"),
+    )
+
+
+@api.get("/journal/import/batches", response_model=JournalScanBatchListResponse)
+def get_journal_import_batches():
+    return JournalScanBatchListResponse(
+        batches=[_batch_to_schema(batch) for batch in list_batches()]
+    )
+
+
+@api.get("/journal/import/batches/{batch_id}", response_model=JournalScanBatchDetail)
+def get_journal_import_batch(batch_id: int):
+    batch = get_batch(batch_id)
+    if batch is None:
+        raise HTTPException(status_code=404, detail="Batch not found.")
+    return JournalScanBatchDetail(
+        batch=_batch_to_schema(batch),
+        fragments=[_fragment_to_schema(f) for f in list_fragments(batch_id)],
+        existing_dates=existing_dates_for_batch(batch_id),
+    )
+
+
+@api.patch("/journal/import/fragments/{fragment_id}", response_model=JournalScanFragment)
+def patch_journal_import_fragment(fragment_id: int, payload: JournalFragmentUpdateRequest):
+    fields = payload.model_dump(exclude_unset=True)
+    updated = update_fragment(
+        fragment_id,
+        detected_date=payload.detected_date,
+        text_markdown=payload.text_markdown,
+        status=payload.status,
+        set_date="detected_date" in fields,
+    )
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Fragment not found.")
+    return _fragment_to_schema(updated)
+
+
+@api.post("/journal/import/batches/{batch_id}/commit", response_model=JournalBatchCommitResponse)
+def commit_journal_import_batch(batch_id: int, payload: JournalBatchCommitRequest):
+    if get_batch(batch_id) is None:
+        raise HTTPException(status_code=404, detail="Batch not found.")
+    result = commit_batch(batch_id, overwrite_existing=payload.overwrite_existing)
+    return JournalBatchCommitResponse(
+        batch_id=result["batch_id"],
+        committed_dates=result["committed_dates"],
+        committed_fragment_ids=result["committed_fragment_ids"],
+        conflicts=[JournalDateConflict(**c) for c in result["conflicts"]],
+        skipped_undated=result["skipped_undated"],
+    )
 
 
 @api.get("/classification-guidance", response_model=ClassificationGuidanceResponse)
@@ -1207,6 +1293,47 @@ def get_people():
 @api.post("/people", response_model=Person, status_code=201)
 def post_person(payload: PersonCreateRequest):
     return Person(**create_person(payload.canonical_name, payload.aliases))
+
+
+# Alias disambiguation — literal paths registered BEFORE /people/{person_id}
+# so e.g. DELETE /people/mentions is not captured by the {person_id} route.
+
+@api.get("/people/review/unresolved", response_model=ReviewQueueResponse)
+def get_review_unresolved():
+    return ReviewQueueResponse(items=get_unresolved_review_queue())
+
+
+@api.get("/people/review/count", response_model=ReviewCountResponse)
+def get_review_count():
+    return ReviewCountResponse(count=get_unresolved_count())
+
+
+@api.post("/people/mentions", status_code=204)
+def post_mention(payload: MentionUpsertRequest):
+    try:
+        upsert_journal_mention(
+            APP_DEFAULT_USER_ID, payload.entry_date, payload.alias, payload.person_id
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@api.delete("/people/mentions", status_code=204)
+def delete_mention(payload: MentionClearRequest):
+    delete_journal_mention(APP_DEFAULT_USER_ID, payload.entry_date, payload.alias)
+
+
+@api.put("/people/aliases/default", status_code=204)
+def put_alias_default(payload: AliasDefaultRequest):
+    try:
+        set_alias_default(APP_DEFAULT_USER_ID, payload.alias, payload.person_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@api.delete("/people/aliases/default", status_code=204)
+def delete_alias_default_route(payload: AliasDefaultClearRequest):
+    delete_alias_default(APP_DEFAULT_USER_ID, payload.alias)
 
 
 @api.get("/people/{person_id}", response_model=PersonTimelineResponse)

@@ -46,6 +46,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { MarkdownContent } from "@/components/markdown-content";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "/api";
 const IMPORTANT_LABEL = "Jarvis Important";
@@ -2584,9 +2585,15 @@ function JournalPreviewBlock({
             : "border-dashed border-white/10 bg-[rgba(20,22,37,0.42)] text-slate-500"
         }`}
       >
-        <div className="whitespace-pre-wrap break-words">
-          {hasValue ? highlightJournalTextWithReferences(value, query, studyLinks) : placeholder}
-        </div>
+        {hasValue ? (
+          <MarkdownContent
+            highlightText={(text) => highlightJournalTextWithReferences(text, query, studyLinks)}
+          >
+            {value}
+          </MarkdownContent>
+        ) : (
+          <div className="whitespace-pre-wrap break-words">{placeholder}</div>
+        )}
       </div>
     </div>
   );
@@ -2962,6 +2969,8 @@ export default function HomePage() {
   const [journalExtractingDate, setJournalExtractingDate] = useState<string | null>(null);
   const [journalScanningDate, setJournalScanningDate] = useState<string | null>(null);
   const [journalEditingDate, setJournalEditingDate] = useState<string | null>(null);
+  // While editing, toggles the markdown fields between raw textarea and a live preview.
+  const [journalMarkdownPreview, setJournalMarkdownPreview] = useState(false);
   const [journalSearchInput, setJournalSearchInput] = useState("");
   const [journalQuery, setJournalQuery] = useState("");
   const [journalSavedOnly, setJournalSavedOnly] = useState(false);
@@ -3737,6 +3746,9 @@ export default function HomePage() {
     reader.readAsDataURL(file);
   };
 
+  // Scan an image/PDF and stage it for review rather than merging into one day.
+  // The model dates each entry; undated fragments fall back to the launching day
+  // (still editable). Redirects to /journal/review for that batch on success.
   const scanJournalFromImage = async (
     entryDate: string,
     event: React.ChangeEvent<HTMLInputElement>
@@ -3744,8 +3756,6 @@ export default function HomePage() {
     const file = event.target.files?.[0];
     event.target.value = "";
     if (!file) return;
-    const currentDraft = journalDrafts[entryDate];
-    if (!currentDraft) return;
 
     setJournalScanningDate(entryDate);
     setError("");
@@ -3757,28 +3767,25 @@ export default function HomePage() {
       const base64 = btoa(binary);
       const mediaType = file.type || "image/jpeg";
 
-      const response = await fetch(`${API_BASE}/journal/extract-from-image`, {
+      const response = await fetch(`${API_BASE}/journal/import/scan`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ image_base64: base64, media_type: mediaType }),
+        body: JSON.stringify({
+          image_base64: base64,
+          media_type: mediaType,
+          scan_target: "journal",
+          source_name: file.name,
+          fallback_date: entryDate,
+        }),
       });
-      if (!response.ok) throw new Error(`Server returned ${response.status}`);
-      const result = await response.json() as {
-        detected_date?: string | null;
-        scripture_study?: string;
-        spiritual_notes?: string;
-        journal_entry?: string;
-        confidence?: string;
-      };
-
-      const nextDraft: JournalDraft = {
-        ...currentDraft,
-        ...(result.scripture_study ? { scripture_study: result.scripture_study } : {}),
-        ...(result.journal_entry ? { journal_entry: result.journal_entry } : {}),
-        ...(result.spiritual_notes ? { spiritual_notes: result.spiritual_notes } : {}),
-      };
-      setJournalDrafts((current) => ({ ...current, [entryDate]: nextDraft }));
-      setJournalEditingDate(entryDate);
+      if (!response.ok) {
+        const detail = await getErrorMessage(response, `Server returned ${response.status}`);
+        throw new Error(detail);
+      }
+      const batch = await response.json() as { batch?: { id?: number } };
+      const batchId = batch.batch?.id;
+      if (!batchId) throw new Error("Scan returned no batch to review.");
+      router.push(`/journal/review?batch=${batchId}`);
     } catch (err) {
       setError(`Scan failed: ${err instanceof Error ? err.message : "Unknown error"}`);
     } finally {
@@ -6868,6 +6875,17 @@ export default function HomePage() {
                                   size="sm"
                                   variant="outline"
                                   className="h-7 rounded-xl px-2.5 text-xs"
+                                  onClick={() => setJournalMarkdownPreview((v) => !v)}
+                                  title="Toggle markdown preview"
+                                >
+                                  {journalMarkdownPreview ? "Write" : "Preview"}
+                                </Button>
+                              ) : null}
+                              {isEditingJournalEntry ? (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-7 rounded-xl px-2.5 text-xs"
                                   onClick={() => { const d = journalDrafts[entry.date]; if (d) void extractJournalCitations(entry.date, d); }}
                                   disabled={journalSavingDate === entry.date || journalExtractingDate === entry.date}
                                 >
@@ -6891,12 +6909,11 @@ export default function HomePage() {
                                 className="h-7 rounded-xl px-2.5 text-xs"
                                 disabled={journalScanningDate === entry.date}
                               >
-                                <label className="cursor-pointer" title="Scan handwritten notes">
+                                <label className="cursor-pointer" title="Scan a photo or PDF of handwritten notes — dates are detected and sent to review">
                                   {journalScanningDate === entry.date ? "Scanning…" : "Scan notes"}
                                   <input
                                     type="file"
-                                    accept="image/*"
-                                    capture="environment"
+                                    accept="image/*,application/pdf"
                                     className="hidden"
                                     disabled={journalScanningDate === entry.date}
                                     onChange={(e) => void scanJournalFromImage(entry.date, e)}
@@ -6906,12 +6923,20 @@ export default function HomePage() {
                             </div>
                           </div>
                           {isEditingJournalEntry ? (
-                            <textarea
-                              value={draft.scripture_study}
-                              onChange={(e) => setJournalDrafts((c) => ({ ...c, [entry.date]: { ...draft, scripture_study: e.target.value } }))}
-                              placeholder="What did you study today?"
-                              className="min-h-[180px] w-full rounded-[1.2rem] border border-white/8 bg-[rgba(20,22,37,0.88)] px-4 py-3 text-sm leading-6 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-violet-300/40"
-                            />
+                            journalMarkdownPreview ? (
+                              <div className="min-h-[180px] rounded-[1.2rem] border border-violet-300/25 bg-[rgba(20,22,37,0.72)] px-4 py-3">
+                                {draft.scripture_study.trim()
+                                  ? <MarkdownContent>{draft.scripture_study}</MarkdownContent>
+                                  : <span className="text-sm text-slate-500">Nothing to preview yet.</span>}
+                              </div>
+                            ) : (
+                              <textarea
+                                value={draft.scripture_study}
+                                onChange={(e) => setJournalDrafts((c) => ({ ...c, [entry.date]: { ...draft, scripture_study: e.target.value } }))}
+                                placeholder="What did you study today? (markdown supported)"
+                                className="min-h-[180px] w-full rounded-[1.2rem] border border-white/8 bg-[rgba(20,22,37,0.88)] px-4 py-3 text-sm leading-6 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-violet-300/40"
+                              />
+                            )
                           ) : (
                             <>
                               <JournalPreviewBlock
@@ -6941,9 +6966,11 @@ export default function HomePage() {
                               ) : null}
                               {draft.spiritual_notes.trim() ? (
                                 <div className="rounded-[1.2rem] border border-white/8 bg-[rgba(20,22,37,0.55)] px-4 py-3 text-sm leading-6 text-slate-200">
-                                  <div className="whitespace-pre-wrap break-words">
-                                    {highlightJournalTextWithReferences(draft.spiritual_notes, journalQuery, entry.study_links)}
-                                  </div>
+                                  <MarkdownContent
+                                    highlightText={(text) => highlightJournalTextWithReferences(text, journalQuery, entry.study_links)}
+                                  >
+                                    {draft.spiritual_notes}
+                                  </MarkdownContent>
                                 </div>
                               ) : null}
                             </>
@@ -6956,12 +6983,20 @@ export default function HomePage() {
                             Journal
                           </div>
                           {isEditingJournalEntry ? (
-                            <textarea
-                              value={draft.journal_entry}
-                              onChange={(e) => setJournalDrafts((c) => ({ ...c, [entry.date]: { ...draft, journal_entry: e.target.value } }))}
-                              placeholder="What's on your mind?"
-                              className="min-h-[200px] w-full rounded-[1.2rem] border border-white/8 bg-[rgba(20,22,37,0.88)] px-4 py-3 text-sm leading-6 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-fuchsia-400/50"
-                            />
+                            journalMarkdownPreview ? (
+                              <div className="min-h-[200px] rounded-[1.2rem] border border-fuchsia-400/30 bg-[rgba(20,22,37,0.72)] px-4 py-3">
+                                {draft.journal_entry.trim()
+                                  ? <MarkdownContent>{draft.journal_entry}</MarkdownContent>
+                                  : <span className="text-sm text-slate-500">Nothing to preview yet.</span>}
+                              </div>
+                            ) : (
+                              <textarea
+                                value={draft.journal_entry}
+                                onChange={(e) => setJournalDrafts((c) => ({ ...c, [entry.date]: { ...draft, journal_entry: e.target.value } }))}
+                                placeholder="What's on your mind? (markdown supported)"
+                                className="min-h-[200px] w-full rounded-[1.2rem] border border-white/8 bg-[rgba(20,22,37,0.88)] px-4 py-3 text-sm leading-6 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-fuchsia-400/50"
+                              />
+                            )
                           ) : (
                             <JournalPreviewBlock
                               label="Journal entry"
