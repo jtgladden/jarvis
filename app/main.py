@@ -825,7 +825,10 @@ def journal_scan_to_staging(payload: JournalScanStageRequest):
             date_detected=bool(detected),
             text_markdown=entry.text,
             confidence=result.response.confidence,
-            dedupe_key=make_dedupe_key(date_value, entry.text),
+            # Dedupe on the *real* detected date (None -> text-prefix key), not the
+            # fallback-filled date_value: otherwise two undated entries on one page
+            # both key to the fallback date and one is silently dropped.
+            dedupe_key=make_dedupe_key(entry.start_page, detected, entry.text),
             source_model=result.usage.model,
             date_text=entry.date_text,
         )
