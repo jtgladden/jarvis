@@ -444,6 +444,9 @@ class JournalDayEntry(BaseModel):
     spiritual_notes: str = ""
     study_links: List[JournalStudyLink] = Field(default_factory=list)
     photo_data_url: Optional[str] = None
+    # URLs of the scanned source page image(s) this entry was transcribed from
+    # (empty unless the entry came from a photo/PDF import).
+    source_photos: List[str] = Field(default_factory=list)
     calendar_items: List[CalendarAgendaItem] = Field(default_factory=list)
     language_sessions: List["LanguagePracticeSession"] = Field(default_factory=list)
     updated_at: Optional[str] = None

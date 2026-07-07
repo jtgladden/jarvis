@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import sqlite3
 from contextlib import closing
 from datetime import datetime
@@ -38,6 +39,7 @@ def _ensure_journal_schema(connection: sqlite3.Connection) -> None:
             spiritual_notes TEXT NOT NULL DEFAULT '',
             study_links_json TEXT NOT NULL DEFAULT '[]',
             photo_data_url TEXT,
+            source_photos_json TEXT NOT NULL DEFAULT '[]',
             world_event_title TEXT,
             world_event_summary TEXT NOT NULL DEFAULT '',
             world_event_source TEXT,
@@ -78,6 +80,10 @@ def _ensure_journal_columns(connection: sqlite3.Connection) -> None:
         )
     if "photo_data_url" not in columns:
         connection.execute("ALTER TABLE journal_entries ADD COLUMN photo_data_url TEXT")
+    if "source_photos_json" not in columns:
+        connection.execute(
+            "ALTER TABLE journal_entries ADD COLUMN source_photos_json TEXT NOT NULL DEFAULT '[]'"
+        )
     if "world_event_title" not in columns:
         connection.execute("ALTER TABLE journal_entries ADD COLUMN world_event_title TEXT")
     if "world_event_summary" not in columns:
@@ -217,7 +223,7 @@ def list_journal_entries(user_id: str = APP_DEFAULT_USER_ID) -> dict[str, dict[s
             """
             SELECT entry_date, calendar_summary, journal_entry, accomplishments, gratitude_entry,
                    scripture_study, spiritual_notes, study_links_json,
-                   photo_data_url, world_event_title, world_event_summary, world_event_source,
+                   photo_data_url, source_photos_json, world_event_title, world_event_summary, world_event_source,
                    news_articles_json, news_updated_at, calendar_items_json, updated_at
             FROM journal_entries
             WHERE user_id = ?
@@ -235,6 +241,7 @@ def list_journal_entries(user_id: str = APP_DEFAULT_USER_ID) -> dict[str, dict[s
             "spiritual_notes": row["spiritual_notes"],
             "study_links_json": row["study_links_json"],
             "photo_data_url": row["photo_data_url"],
+            "source_photos_json": row["source_photos_json"],
             "world_event_title": row["world_event_title"],
             "world_event_summary": row["world_event_summary"],
             "world_event_source": row["world_event_source"],
@@ -267,6 +274,13 @@ def _content_clause() -> str:
 
 def _journal_search_clause(query: str) -> tuple[str, list[str]]:
     trimmed_query = query.strip()
+
+    # A bare 4-digit year is a year filter, not a free-text search: match it
+    # precisely against the date prefix so "2019" returns that year's entries
+    # rather than every entry whose prose happens to contain "2019".
+    if re.fullmatch(r"\d{4}", trimmed_query):
+        return "entry_date LIKE ?", [f"{trimmed_query}-%"]
+
     like_value = f"%{trimmed_query}%"
     clause_parts = [
         "entry_date LIKE ?",
@@ -543,7 +557,7 @@ def upsert_journal_entry(
             """
             SELECT entry_date, calendar_summary, journal_entry, accomplishments, gratitude_entry,
                    scripture_study, spiritual_notes, study_links_json,
-                   photo_data_url, world_event_title, world_event_summary, world_event_source,
+                   photo_data_url, source_photos_json, world_event_title, world_event_summary, world_event_source,
                    news_articles_json, news_updated_at, calendar_items_json, updated_at
             FROM journal_entries
             WHERE user_id = ? AND entry_date = ?
@@ -562,6 +576,7 @@ def upsert_journal_entry(
         "spiritual_notes": row["spiritual_notes"],
         "study_links_json": row["study_links_json"],
         "photo_data_url": row["photo_data_url"],
+        "source_photos_json": row["source_photos_json"],
         "world_event_title": row["world_event_title"],
         "world_event_summary": row["world_event_summary"],
         "world_event_source": row["world_event_source"],
@@ -570,6 +585,30 @@ def upsert_journal_entry(
         "calendar_items_json": row["calendar_items_json"],
         "updated_at": row["updated_at"],
     }
+
+
+def set_journal_source_photos(
+    entry_date: str,
+    source_photos_json: str,
+    user_id: str = APP_DEFAULT_USER_ID,
+) -> None:
+    """Record the source page images a committed entry was transcribed from.
+
+    Assumes the entry row already exists (commit upserts the body first). Only
+    touches source_photos_json so it never disturbs prose/calendar/news columns.
+    """
+    with _db_lock, closing(_connect()) as connection:
+        _ensure_journal_schema(connection)
+        _ensure_journal_columns(connection)
+        connection.execute(
+            """
+            UPDATE journal_entries
+            SET source_photos_json = ?
+            WHERE user_id = ? AND entry_date = ?
+            """,
+            (source_photos_json, user_id, entry_date),
+        )
+        connection.commit()
 
 
 def upsert_journal_news(

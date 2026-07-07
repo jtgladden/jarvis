@@ -239,7 +239,9 @@ def _fetch_feed_items(source_name: str, rss_url: str) -> list[dict[str, Any]]:
 
 
 def _format_date_label(day: date) -> str:
-    return day.strftime("%A, %B %d")
+    # Include the year — the archive spans decades of imported paper journals, so
+    # a label without a year is ambiguous (and hides which year an entry is from).
+    return day.strftime("%A, %B %d, %Y")
 
 
 def _calendar_payload_for_day(item) -> dict[str, str | bool | None]:
@@ -1328,6 +1330,20 @@ def _build_study_links_for_save(
     return _dedupe_study_links([*exact_links, *_existing_likely_study_links(existing_links)])[:12]
 
 
+def _source_photo_urls(entry_date: str, raw_value: Any) -> list[str]:
+    """Turn the stored source-photo path list into browser-fetchable API URLs.
+
+    The bytes are served by index through the API (see main.get_journal_entry_photo),
+    so the frontend only needs one URL per stored page image.
+    """
+    try:
+        paths = json.loads(raw_value or "[]")
+    except Exception:
+        paths = []
+    count = len(paths) if isinstance(paths, list) else 0
+    return [f"/api/journal/{entry_date}/photo/{index}" for index in range(count)]
+
+
 def _parse_study_links(raw_value: Any) -> list[JournalStudyLink]:
     try:
         payload = json.loads(raw_value or "[]")
@@ -1734,6 +1750,7 @@ def _build_journal_entries(
                 spiritual_notes=str(saved.get("spiritual_notes") or ""),
                 study_links=_parse_study_links(saved.get("study_links_json")),
                 photo_data_url=saved.get("photo_data_url"),
+                source_photos=_source_photo_urls(entry["date"], saved.get("source_photos_json")),
                 calendar_items=entry["calendar_items_full"],
                 language_sessions=sessions_by_day.get(entry["date"], []),
                 updated_at=saved.get("updated_at"),
@@ -1911,6 +1928,7 @@ def save_journal_day(
         spiritual_notes=saved["spiritual_notes"],
         study_links=study_links,
         photo_data_url=saved.get("photo_data_url"),
+        source_photos=_source_photo_urls(entry_date, saved.get("source_photos_json")),
         world_event_articles=[],
         calendar_items=[CalendarAgendaItem.model_validate(item) for item in json.loads(saved["calendar_items_json"] or "[]")],
         updated_at=saved["updated_at"],
@@ -1954,6 +1972,7 @@ def extract_journal_day_citations(
         spiritual_notes=saved["spiritual_notes"],
         study_links=study_links,
         photo_data_url=saved.get("photo_data_url"),
+        source_photos=_source_photo_urls(entry_date, saved.get("source_photos_json")),
         world_event_articles=[],
         calendar_items=[CalendarAgendaItem.model_validate(item) for item in json.loads(saved["calendar_items_json"] or "[]")],
         updated_at=saved["updated_at"],

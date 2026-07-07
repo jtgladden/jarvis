@@ -2320,6 +2320,7 @@ type JournalDayEntry = {
     matched_text?: string | null;
   }>;
   photo_data_url?: string | null;
+  source_photos?: string[];
   calendar_items: CalendarAgendaItem[];
   language_sessions: Array<{ id: string; language: string; mode: string; minutes: number; notes: string; created_at?: string | null }>;
   updated_at?: string | null;
@@ -2615,25 +2616,53 @@ function JournalHeatmap({
   days: JournalEntryDateCount[];
   onSelect: (date: string) => void;
 }) {
-  const WEEKS = 53;
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const wordsByDate = useMemo(
     () => new Map(days.map((day) => [day.date, day.words])),
     [days]
   );
+  // Distinct years that have entries, newest first — offered as toggle buttons.
+  const years = useMemo(
+    () =>
+      Array.from(new Set(days.map((day) => day.date.slice(0, 4))))
+        .sort()
+        .reverse(),
+    [days]
+  );
+  // null = the rolling "recent" window (default); a year string = that calendar year.
+  const [selectedYear, setSelectedYear] = useState<string | null>(null);
 
   const columns = useMemo(() => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    // Complete the current week so the final column isn't clipped.
-    const end = new Date(today);
-    end.setDate(end.getDate() + (6 - end.getDay()));
-    const cursor = new Date(end);
-    cursor.setDate(cursor.getDate() - (WEEKS * 7 - 1));
 
+    let start: Date;
+    let weeks: number;
+    let rangeEnd = today;
+    if (selectedYear) {
+      // A full calendar year: Jan 1 (snapped back to Sunday) through Dec 31.
+      const yearNum = Number(selectedYear);
+      const jan1 = new Date(yearNum, 0, 1);
+      start = new Date(jan1);
+      start.setDate(start.getDate() - start.getDay());
+      const dec31 = new Date(yearNum, 11, 31);
+      rangeEnd = dec31;
+      const lastCol = new Date(dec31);
+      lastCol.setDate(lastCol.getDate() + (6 - lastCol.getDay()));
+      weeks = Math.round((lastCol.getTime() - start.getTime()) / (7 * 86400000)) + 1;
+    } else {
+      // Rolling 53 weeks ending with the current (completed) week.
+      weeks = 53;
+      const end = new Date(today);
+      end.setDate(end.getDate() + (6 - end.getDay()));
+      start = new Date(end);
+      start.setDate(start.getDate() - (weeks * 7 - 1));
+    }
+
+    const cursor = new Date(start);
     const grid: { key: string; inRange: boolean; words: number; monthLabel: string | null; label: string }[][] = [];
     let lastMonth = -1;
-    for (let w = 0; w < WEEKS; w++) {
+    for (let w = 0; w < weeks; w++) {
       const col: { key: string; inRange: boolean; words: number; monthLabel: string | null; label: string }[] = [];
       for (let d = 0; d < 7; d++) {
         const key = formatLocalDateKey(cursor);
@@ -2642,9 +2671,11 @@ function JournalHeatmap({
           monthLabel = cursor.toLocaleString(undefined, { month: "short" });
           lastMonth = cursor.getMonth();
         }
+        // For a specific year, cells outside Jan–Dec (grid padding) are out of range.
+        const inYear = !selectedYear || cursor.getFullYear() === Number(selectedYear);
         col.push({
           key,
-          inRange: cursor <= today,
+          inRange: cursor <= rangeEnd && inYear,
           words: wordsByDate.get(key) ?? -1,
           monthLabel,
           label: cursor.toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" }),
@@ -2654,17 +2685,46 @@ function JournalHeatmap({
       grid.push(col);
     }
     return grid;
-  }, [wordsByDate]);
+  }, [wordsByDate, selectedYear]);
 
   useEffect(() => {
-    // Open on the most recent weeks rather than a year ago.
+    // Recent view opens on the latest weeks (right); a chosen year opens at January (left).
     if (scrollRef.current) {
-      scrollRef.current.scrollLeft = scrollRef.current.scrollWidth;
+      scrollRef.current.scrollLeft = selectedYear ? 0 : scrollRef.current.scrollWidth;
     }
-  }, [columns]);
+  }, [columns, selectedYear]);
 
   return (
     <div className="space-y-2">
+      {years.length ? (
+        <div className="flex flex-wrap items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => setSelectedYear(null)}
+            className={`rounded-full px-2.5 py-0.5 text-[11px] font-medium transition ${
+              selectedYear === null
+                ? "bg-violet-400/20 text-violet-100 ring-1 ring-violet-300/40"
+                : "text-slate-400 hover:text-slate-200"
+            }`}
+          >
+            Recent
+          </button>
+          {years.map((year) => (
+            <button
+              key={year}
+              type="button"
+              onClick={() => setSelectedYear(year)}
+              className={`rounded-full px-2.5 py-0.5 text-[11px] font-medium transition ${
+                selectedYear === year
+                  ? "bg-violet-400/20 text-violet-100 ring-1 ring-violet-300/40"
+                  : "text-slate-400 hover:text-slate-200"
+              }`}
+            >
+              {year}
+            </button>
+          ))}
+        </div>
+      ) : null}
       <div ref={scrollRef} className="overflow-x-auto pb-1">
         <div className="inline-flex flex-col gap-1">
           <div className="flex gap-[3px]">
@@ -2982,6 +3042,14 @@ export default function HomePage() {
   // Shared "which days have an entry" lookup for the heatmap and the jump-to picker.
   const journalEntryDateSet = useMemo(
     () => new Set((journalHeatmap ?? []).map((day) => day.date)),
+    [journalHeatmap]
+  );
+  // Distinct years with journaled entries, newest first — powers the year filter.
+  const journalYears = useMemo(
+    () =>
+      Array.from(new Set((journalHeatmap ?? []).map((day) => day.date.slice(0, 4))))
+        .sort()
+        .reverse(),
     [journalHeatmap]
   );
   const [classifiedBucket] = useState<"all" | "important" | "unimportant">("all");
@@ -3654,6 +3722,18 @@ export default function HomePage() {
       before: null,
       query: nextQuery,
       savedOnly: journalSavedOnly || Boolean(nextQuery),
+      history: [],
+    });
+  };
+
+  const filterJournalByYear = async (year: string) => {
+    // A bare 4-digit year is treated by the backend as a precise date-prefix
+    // filter, so this reuses the search pipeline (and populates the search box).
+    setJournalSearchInput(year);
+    await loadJournal({
+      before: null,
+      query: year,
+      savedOnly: Boolean(year) || journalSavedOnly,
       history: [],
     });
   };
@@ -6535,6 +6615,25 @@ export default function HomePage() {
                     />
                   </div>
                   <div className="flex gap-2">
+                    {journalYears.length ? (
+                      <select
+                        aria-label="Filter journal by year"
+                        value={/^\d{4}$/.test(journalQuery) ? journalQuery : ""}
+                        onChange={(e) => {
+                          const year = e.target.value;
+                          if (year) void filterJournalByYear(year);
+                          else void clearJournalSearch();
+                        }}
+                        className="h-11 rounded-2xl border border-white/10 bg-[rgba(20,22,37,0.88)] px-3 text-sm text-slate-100 outline-none transition focus:border-violet-300/40"
+                      >
+                        <option value="">All years</option>
+                        {journalYears.map((year) => (
+                          <option key={year} value={year}>
+                            {year}
+                          </option>
+                        ))}
+                      </select>
+                    ) : null}
                     <Button
                       className="rounded-2xl"
                       onClick={() => void applyJournalSearch()}
@@ -7006,6 +7105,35 @@ export default function HomePage() {
                             />
                           )}
                         </div>
+
+                        {/* Scanned source page(s) — shown when the entry came from a photo/PDF import */}
+                        {entry.source_photos?.length ? (
+                          <div className="space-y-2">
+                            <div className="text-xs font-semibold uppercase tracking-widest text-slate-400">
+                              Scanned page{entry.source_photos.length === 1 ? "" : "s"}
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                              {entry.source_photos.map((url, index) => (
+                                <a
+                                  key={url}
+                                  href={url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="block overflow-hidden rounded-[1.2rem] border border-white/8 transition hover:border-violet-300/30"
+                                  title="Open full-size scanned page"
+                                >
+                                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                                  <img
+                                    src={url}
+                                    alt={`Scanned page ${index + 1} from ${entry.date_label}`}
+                                    loading="lazy"
+                                    className="h-40 w-auto object-cover"
+                                  />
+                                </a>
+                              ))}
+                            </div>
+                          </div>
+                        ) : null}
 
                         {/* Photo of the day */}
                         {/* TODO: Replace manual upload with photo database sync */}

@@ -100,6 +100,10 @@ JOURNAL_IMPORT_RETRY_BASE_SECONDS = float(os.getenv("JOURNAL_IMPORT_RETRY_BASE_S
 JOURNAL_IMPORT_PREPROCESS = os.getenv("JOURNAL_IMPORT_PREPROCESS", "true").lower() in {"1", "true", "yes"}
 # Where rasterized source page images are cached (for review thumbnails + reuse).
 JOURNAL_IMPORT_PAGES_DIR = os.getenv("JOURNAL_IMPORT_PAGES_DIR", "data/journal_import_pages")
+# Permanent per-entry copies of the source page images a committed entry was
+# transcribed from. Unlike JOURNAL_IMPORT_PAGES_DIR (regenerable cache, cleared
+# with the batch), these survive batch deletion so the journal keeps its scan.
+JOURNAL_ENTRY_PHOTOS_DIR = os.getenv("JOURNAL_ENTRY_PHOTOS_DIR", "data/journal_entry_photos")
 JOURNAL_IMPORT_DB = os.getenv("JOURNAL_IMPORT_DB", "data/journal_import.db")
 OPENAI_TRANSCRIPTION_MODEL = os.getenv("OPENAI_TRANSCRIPTION_MODEL", "gpt-4o-mini-transcribe")
 OPENAI_TTS_MODEL = os.getenv("OPENAI_TTS_MODEL", "gpt-4o-mini-tts")

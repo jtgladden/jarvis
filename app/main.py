@@ -37,7 +37,7 @@ from app.journal_import import (
     record_usage,
     reextract_low_confidence_fragments,
 )
-from app.journal_ingest import page_image_path, preprocess_jpeg, rasterize_to_jpegs, save_page_image
+from app.journal_ingest import entry_photo_path, page_image_path, preprocess_jpeg, rasterize_to_jpegs, save_page_image
 from app.journal_import_store import (
     create_batch,
     get_batch,
@@ -72,7 +72,7 @@ from app.people_store import (
     update_person,
     upsert_journal_mention,
 )
-from app.photoprism_client import PhotoPrismError, list_instance_subjects
+from app.photoprism_client import PhotoPrismError, fetch_thumbnail, list_instance_subjects
 from app.config import get_photoprism_instances
 from app.movement import list_movement_entries, sync_movement_daily_entry
 from app.movement_store import init_movement_store
@@ -693,6 +693,16 @@ def journal(
 @api.get("/journal/entry-dates", response_model=JournalEntryDatesResponse)
 def journal_entry_dates():
     return get_journal_entry_dates()
+
+
+@api.get("/journal/{entry_date}/photo/{index}")
+def get_journal_entry_photo(entry_date: str, index: int):
+    """Serve a committed entry's scanned source page image by index."""
+    user_id = get_default_user_context().user_id
+    path = entry_photo_path(user_id, entry_date, index)
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="Source photo not found.")
+    return FileResponse(path, media_type="image/jpeg")
 
 
 @api.get("/journal/{entry_date}", response_model=JournalDayEntry)
@@ -1501,6 +1511,26 @@ def get_photoprism_subjects(instance_key: str):
     except PhotoPrismError as exc:
         raise HTTPException(status_code=502, detail=str(exc))
     return PhotoprismSubjectsResponse(instance_key=instance_key, subjects=subjects)
+
+
+@api.get("/photoprism/{instance_key}/thumb/{hash}/{token}/{size}")
+def get_photoprism_thumbnail(instance_key: str, hash: str, token: str, size: str):
+    """Proxy a PhotoPrism thumbnail through the API.
+
+    The instance's base URL is usually only reachable on the LAN (TrueNAS), so
+    the browser can't embed it directly. The backend fetches it server-side and
+    streams the bytes back. The preview token in the path authorizes the fetch.
+    """
+    try:
+        content, content_type = fetch_thumbnail(instance_key, hash, token, size)
+    except PhotoPrismError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+    # Thumbnails are content-addressed (hash + token), so they're safe to cache hard.
+    return Response(
+        content=content,
+        media_type=content_type,
+        headers={"Cache-Control": "private, max-age=86400"},
+    )
 
 
 app.include_router(api)

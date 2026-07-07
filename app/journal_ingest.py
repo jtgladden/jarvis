@@ -15,6 +15,7 @@ import logging
 import os
 
 from app.config import (
+    JOURNAL_ENTRY_PHOTOS_DIR,
     JOURNAL_IMPORT_PAGES_DIR,
     JOURNAL_IMPORT_PREPROCESS,
     JOURNAL_IMPORT_RASTER_DPI,
@@ -127,6 +128,54 @@ def delete_batch_pages(batch_id: int) -> None:
 
     directory = os.path.join(_pages_dir(), str(batch_id))
     shutil.rmtree(directory, ignore_errors=True)
+
+
+# --- Permanent per-entry source photos ---------------------------------------
+# These survive batch deletion (the cache above does not), so a committed entry
+# can always show the scanned page(s) it came from.
+
+
+def _entry_photos_dir() -> str:
+    return os.getenv("JOURNAL_ENTRY_PHOTOS_DIR", JOURNAL_ENTRY_PHOTOS_DIR)
+
+
+def _safe_segment(value: str) -> str:
+    """Keep a path segment to a safe charset (no traversal, no separators)."""
+    return "".join(ch for ch in str(value) if ch.isalnum() or ch in ("-", "_"))
+
+
+def entry_photo_dir(user_id: str, entry_date: str) -> str:
+    return os.path.join(_entry_photos_dir(), _safe_segment(user_id), _safe_segment(entry_date))
+
+
+def entry_photo_path(user_id: str, entry_date: str, index: int) -> str:
+    return os.path.join(entry_photo_dir(user_id, entry_date), f"{int(index)}.jpg")
+
+
+def save_entry_photos(user_id: str, entry_date: str, images: list[bytes]) -> list[str]:
+    """Write an entry's source page images, replacing any existing set. Returns paths."""
+    import shutil
+
+    directory = entry_photo_dir(user_id, entry_date)
+    shutil.rmtree(directory, ignore_errors=True)
+    if not images:
+        return []
+    os.makedirs(directory, exist_ok=True)
+    paths: list[str] = []
+    for index, data in enumerate(images):
+        path = entry_photo_path(user_id, entry_date, index)
+        with open(path, "wb") as handle:
+            handle.write(data)
+        paths.append(path)
+    return paths
+
+
+def load_entry_photo(user_id: str, entry_date: str, index: int) -> bytes | None:
+    path = entry_photo_path(user_id, entry_date, index)
+    if not os.path.exists(path):
+        return None
+    with open(path, "rb") as handle:
+        return handle.read()
 
 
 def prepare_and_store_pages(

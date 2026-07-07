@@ -14,6 +14,9 @@ data/job_alerts_email_cache.json
 # Cached rasterized journal-scan page images (regenerable from source PDFs)
 data/journal_import_pages/
 
+# Permanent per-entry copies of scanned source pages (user data, not committed)
+data/journal_entry_photos/
+
 # Local-only dummy/test journal data + seeder (never deploy to the server)
 data/_dummy_journal_dates.json
 scripts/seed_dummy_journal.py

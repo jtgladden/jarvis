@@ -15,6 +15,7 @@ grouping would need semantic entry-boundary detection and the dedupe would need 
 longer/normalized text hash or overlap-region reconciliation. See callers.
 """
 
+import json
 import logging
 import re
 from dataclasses import dataclass, field
@@ -29,7 +30,7 @@ from app.config import (
     OPENAI_JOURNAL_VISION_MODEL,
     estimate_vision_cost_usd,
 )
-from app.journal_ingest import delete_batch_pages, load_page_image
+from app.journal_ingest import delete_batch_pages, load_page_image, save_entry_photos
 from app.journal_scan import _date_from_heading, extract_journal_entries
 from app.journal_import_store import (
     delete_batch_fragments,
@@ -47,7 +48,7 @@ from app.journal_import_store import (
     set_fragments_status,
     update_fragment,
 )
-from app.journal_store import list_journal_entries, upsert_journal_entry
+from app.journal_store import list_journal_entries, set_journal_source_photos, upsert_journal_entry
 
 logger = logging.getLogger(__name__)
 
@@ -650,6 +651,23 @@ def commit_batch(
             calendar_items_json=str(base.get("calendar_items_json") or "[]"),
             user_id=user_id,
         )
+        # Copy the source page image(s) into permanent per-entry storage so the
+        # committed entry can show the scanned page even after this batch's
+        # regenerable page cache is deleted. Page order, deduped across fragments.
+        seen_pages: set[int] = set()
+        page_images: list[bytes] = []
+        for fragment in group_fragments:
+            page_index = int(fragment.get("page_index") or 0)
+            if page_index in seen_pages:
+                continue
+            seen_pages.add(page_index)
+            data = load_page_image(batch_id, page_index)
+            if data is not None:
+                page_images.append(data)
+        if page_images:
+            paths = save_entry_photos(user_id, entry_date, page_images)
+            set_journal_source_photos(entry_date, json.dumps(paths), user_id=user_id)
+
         # Record which committed fragments had their year supplied by the resolver.
         for fid in fragment_ids:
             if resolved.get(fid, {}).get("year_inferred"):

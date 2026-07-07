@@ -86,12 +86,44 @@ def search_photos_by_person(
 
 
 def thumb_url(base_url: str, hash: str, preview_token: str, size: str = "tile_500") -> str:
-    """Build a directly-embeddable thumbnail URL (token is in the path).
+    """Build a directly-embeddable PhotoPrism thumbnail URL (token is in the path).
 
     Valid sizes include tile_50, tile_100, tile_224, tile_500, fit_720,
-    fit_1280. These render in <img src> with no auth header.
+    fit_1280. These render in <img src> with no auth header — but only from a
+    client that can reach the instance's base URL (a LAN/TrueNAS address). Use
+    ``proxy_thumb_url`` for a URL the browser can always reach.
     """
     return f"{base_url}/api/v1/t/{hash}/{preview_token}/{size}"
+
+
+def proxy_thumb_url(instance_key: str, hash: str, preview_token: str, size: str = "tile_500") -> str:
+    """Build a thumbnail URL served by the Jarvis backend, not PhotoPrism directly.
+
+    The instance's base URL is often only reachable on the LAN (e.g. a TrueNAS
+    box), so embedding it in the browser fails for remote clients. This routes
+    the image through the API, which fetches it server-side (see
+    ``fetch_thumbnail`` and the ``/photoprism/{instance}/thumb/...`` route).
+    """
+    return f"/api/photoprism/{instance_key}/thumb/{hash}/{preview_token}/{size}"
+
+
+def fetch_thumbnail(
+    instance_key: str, hash: str, preview_token: str, size: str = "tile_500"
+) -> tuple[bytes, str]:
+    """Fetch a thumbnail's bytes from a configured instance, returning (bytes, content_type).
+
+    Runs server-side so the browser never needs to reach the instance's base URL.
+    The preview token authenticates the request (it lives in the path), so no
+    Authorization header is sent.
+    """
+    instance = _instance(instance_key)
+    url = f"{instance['base_url']}/api/v1/t/{hash}/{preview_token}/{size}"
+    request = Request(url, method="GET")
+    try:
+        with urlopen(request, timeout=_HTTP_TIMEOUT) as response:
+            return response.read(), response.headers.get("Content-Type", "image/jpeg")
+    except (HTTPError, URLError) as exc:
+        raise PhotoPrismError(f"PhotoPrism thumbnail fetch failed for {instance_key}: {exc}") from exc
 
 
 def list_subjects(base_url: str, token: str, count: int = 1000) -> list[dict]:
@@ -126,7 +158,9 @@ def search_person_photos(instance_key: str, name: str, count: int = 100, offset:
     base_url, token = instance["base_url"], instance["token"]
     photos, preview_token = search_photos_by_person(base_url, token, name, count, offset)
     for photo in photos:
-        photo["thumb_url"] = thumb_url(base_url, photo["hash"], preview_token)
+        # Serve through the backend proxy: the instance base URL is often only
+        # reachable on the LAN, so a direct thumb URL fails for remote browsers.
+        photo["thumb_url"] = proxy_thumb_url(instance_key, photo["hash"], preview_token)
         photo["instance_key"] = instance_key
     return photos
 
