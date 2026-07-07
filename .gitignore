@@ -4,19 +4,15 @@ token.json
 .env
 .env.local
 .deriveddata/
-data/classification_cache.db
-data/journal_entries.db
-data/tasks.db
-data/health.db
-data/movement.db
-data/assistant_chat.db
-data/workouts.db
-data/language_learning.db
-data/user_rules.db
-data/food_log.db
-data/people.db
+# SQLite domain databases (one .db per domain) + WAL sidecars — never committed.
+# Glob so new domain stores are ignored automatically.
+data/*.db
+data/*.db-wal
+data/*.db-shm
 data/job_alerts_email_cache.json
-data/journal_import.db
+
+# Cached rasterized journal-scan page images (regenerable from source PDFs)
+data/journal_import_pages/
 
 # Local-only dummy/test journal data + seeder (never deploy to the server)
 data/_dummy_journal_dates.json

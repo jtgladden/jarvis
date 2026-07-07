@@ -7,7 +7,7 @@ from uuid import uuid4
 from fastapi import APIRouter, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 
 from app.assistant import ask_jarvis_assistant
 from app.assistant_chat_store import archive_chat, delete_chat, get_chat_thread, init_assistant_chat_store, list_chats
@@ -28,17 +28,30 @@ from app.job_alerts import clear_email_parse_cache, get_job_alerts_cached, inval
 from app.journal import extract_journal_day_citations, get_journal, get_journal_day, get_journal_entry_dates, save_journal_day
 from app.journal_store import init_journal_store
 from app.journal_scan import extract_journal_entries
-from app.journal_import import commit_batch, existing_dates_for_batch, make_dedupe_key
+from app.journal_import import (
+    analyze_batch,
+    commit_batch,
+    delete_import_batch,
+    existing_dates_for_batch,
+    make_dedupe_key,
+    record_usage,
+    reextract_low_confidence_fragments,
+)
+from app.journal_ingest import page_image_path, preprocess_jpeg, rasterize_to_jpegs, save_page_image
 from app.journal_import_store import (
     create_batch,
     get_batch,
+    get_spend_summary,
+    get_tokens_used_today,
     init_journal_import_store,
     insert_fragment,
     list_batches,
     list_fragments,
+    set_batch_default_year,
     set_batch_status,
     update_fragment,
 )
+from app.config import JOURNAL_IMPORT_BUDGET_USD, JOURNAL_IMPORT_DAILY_TOKEN_CAP, OPENAI_JOURNAL_VISION_MODEL
 from app.language_learning import create_language_conversation_reply, create_language_session, create_language_vocab, delete_language_session, delete_language_vocab, explain_language_word, export_language_vocab_anki, generate_language_practice, get_language_dashboard, get_language_pronunciation_feedback, get_language_writing_feedback, normalize_existing_language_vocab, review_language_vocab, synthesize_language_speech, update_language_profile, update_language_session, update_language_vocab
 from app.language_store import backfill_pronunciation_from_notes, init_language_store, purge_kana_in_romanization_records, purge_kana_in_vocab_pronunciation
 from app.people import (
@@ -65,7 +78,7 @@ from app.movement import list_movement_entries, sync_movement_daily_entry
 from app.movement_store import init_movement_store
 from app.planner import generate_schedule_plan
 from app.rules import classify_new_email_rule
-from app.schemas import AssistantAskRequest, JournalImageExtractRequest, JournalImagesExtractRequest, JournalImageExtractResponse, JournalScanStageRequest, JournalScanBatch, JournalScanBatchListResponse, JournalScanBatchDetail, JournalScanFragment, JournalFragmentUpdateRequest, JournalBatchCommitRequest, JournalBatchCommitResponse, JournalDateConflict, DailyFoodLog, FoodLogAddRequest, FoodLogEntry, FoodLogHistoryResponse, FoodLogUpdateRequest, FoodParseRequest, FoodParseResponse, JobAlertsJobStartResponse, JobAlertsJobStatus, JobAlertsResponse, JobListing, MacroTargets, MacroTargetsUpdateRequest, ManualWorkoutLog, ManualWorkoutLogRequest, MealPrepCreateRequest, MealPrepItem, AssistantAskResponse, AssistantChatListResponse, AssistantChatThread, CalendarAgendaResponse, CalendarEventCreateResponse, CalendarEventPreview, CalendarQuickAddRequest, CalendarQuickAddResponse, ClassifiedEmailResponse, ClassificationGuidanceRequest, ClassificationGuidanceResponse, ClassificationOverviewResponse, CleanupJobStartResponse, CleanupJobStatus, CleanupResponse, DashboardResponse, DashboardTaskItem, DeleteEmailResponse, EmailCommandRequest, EmailCommandResponse, EmailPageResponse, EmailSummary, EmailUpdateRequest, EmailUpdateResponse, GmailLabel, HandleEmailRequest, HandleEmailResponse, HealthDailySyncRequest, HealthDailySyncResponse, HealthListResponse, JournalDayEntry, JournalDayNoteUpdateRequest, JournalEntryDatesResponse, JournalResponse, LanguageCode, LanguageConversationRequest, LanguageConversationResponse, LanguageDashboardResponse, LanguageFeedbackResponse, LanguagePracticeGenerateRequest, LanguagePracticeGenerateResponse, LanguagePracticeSession, LanguagePracticeSessionCreateRequest, LanguagePracticeSessionUpdateRequest, LanguageProfile, LanguageProfileUpdateRequest, LanguageSpeechRequest, LanguageVocabCreateRequest, LanguageVocabItem, LanguageVocabNormalizeResponse, LanguageVocabReviewRequest, LanguageVocabUpdateRequest, LanguageWordExplainRequest, LanguageWordExplainResponse, LanguageWritingFeedbackRequest, MovementDailySyncRequest, MovementDailySyncResponse, MovementListResponse, PlanningCalendarBulkCreateRequest, PlanningCalendarBulkCreateResponse, PlanningCalendarCreateRequest, PlanningCalendarCreateResponse, PlanningJobStartResponse, PlanningJobStatus, PlanningRequest, PlanningResponse, RuleSuggestion, RuleSuggestionResponse, RuleProcessResponse, TaskCreateRequest, TaskListResponse, TaskUpdateRequest, UserRule, UserRuleCondition, UserRuleCreateRequest, UserRuleListResponse, UserRuleUpdateRequest, WorkoutBatchSyncRequest, WorkoutBatchSyncResponse, WorkoutListResponse, WorkoutSetEntry, PeopleListResponse, Person, PersonCreateRequest, PersonUpdateRequest, PersonPhotoprismRefRequest, PersonTimelineResponse, PhotoprismSubjectsResponse, ReviewQueueResponse, ReviewCountResponse, MentionUpsertRequest, MentionClearRequest, AliasDefaultRequest, AliasDefaultClearRequest
+from app.schemas import AssistantAskRequest, JournalImageExtractRequest, JournalImagesExtractRequest, JournalImageExtractResponse, JournalScanStageRequest, JournalScanBatch, JournalScanBatchListResponse, JournalScanBatchDetail, JournalScanFragment, JournalFragmentUpdateRequest, JournalBatchUpdateRequest, JournalBatchCommitRequest, JournalBatchCommitResponse, JournalDateConflict, JournalImportSpendResponse, JournalTriageRequest, JournalTriageResponse, DailyFoodLog, FoodLogAddRequest, FoodLogEntry, FoodLogHistoryResponse, FoodLogUpdateRequest, FoodParseRequest, FoodParseResponse, JobAlertsJobStartResponse, JobAlertsJobStatus, JobAlertsResponse, JobListing, MacroTargets, MacroTargetsUpdateRequest, ManualWorkoutLog, ManualWorkoutLogRequest, MealPrepCreateRequest, MealPrepItem, AssistantAskResponse, AssistantChatListResponse, AssistantChatThread, CalendarAgendaResponse, CalendarEventCreateResponse, CalendarEventPreview, CalendarQuickAddRequest, CalendarQuickAddResponse, ClassifiedEmailResponse, ClassificationGuidanceRequest, ClassificationGuidanceResponse, ClassificationOverviewResponse, CleanupJobStartResponse, CleanupJobStatus, CleanupResponse, DashboardResponse, DashboardTaskItem, DeleteEmailResponse, EmailCommandRequest, EmailCommandResponse, EmailPageResponse, EmailSummary, EmailUpdateRequest, EmailUpdateResponse, GmailLabel, HandleEmailRequest, HandleEmailResponse, HealthDailySyncRequest, HealthDailySyncResponse, HealthListResponse, JournalDayEntry, JournalDayNoteUpdateRequest, JournalEntryDatesResponse, JournalResponse, LanguageCode, LanguageConversationRequest, LanguageConversationResponse, LanguageDashboardResponse, LanguageFeedbackResponse, LanguagePracticeGenerateRequest, LanguagePracticeGenerateResponse, LanguagePracticeSession, LanguagePracticeSessionCreateRequest, LanguagePracticeSessionUpdateRequest, LanguageProfile, LanguageProfileUpdateRequest, LanguageSpeechRequest, LanguageVocabCreateRequest, LanguageVocabItem, LanguageVocabNormalizeResponse, LanguageVocabReviewRequest, LanguageVocabUpdateRequest, LanguageWordExplainRequest, LanguageWordExplainResponse, LanguageWritingFeedbackRequest, MovementDailySyncRequest, MovementDailySyncResponse, MovementListResponse, PlanningCalendarBulkCreateRequest, PlanningCalendarBulkCreateResponse, PlanningCalendarCreateRequest, PlanningCalendarCreateResponse, PlanningJobStartResponse, PlanningJobStatus, PlanningRequest, PlanningResponse, RuleSuggestion, RuleSuggestionResponse, RuleProcessResponse, TaskCreateRequest, TaskListResponse, TaskUpdateRequest, UserRule, UserRuleCondition, UserRuleCreateRequest, UserRuleListResponse, UserRuleUpdateRequest, WorkoutBatchSyncRequest, WorkoutBatchSyncResponse, WorkoutListResponse, WorkoutSetEntry, PeopleListResponse, Person, PersonCreateRequest, PersonUpdateRequest, PersonPhotoprismRefRequest, PersonTimelineResponse, PhotoprismSubjectsResponse, ReviewQueueResponse, ReviewCountResponse, MentionUpsertRequest, MentionClearRequest, AliasDefaultRequest, AliasDefaultClearRequest
 from app.rule_parser import parse_rule_to_fields
 from app.task_service import create_task, delete_task, list_tasks, update_task
 from app.task_store import init_task_store
@@ -756,15 +769,41 @@ def journal_scan_to_staging(payload: JournalScanStageRequest):
 
     The date-aware alternative to /journal/extract-from-image: rather than
     merging everything into one day, each detected entry becomes a dated fragment
-    the user reviews (and can re-date) at /journal/review before committing.
+    the user reviews (and can re-date) at /journal/review before committing. Page
+    images are rasterized, preprocessed, and cached so the reviewer can show the
+    original page next to each fragment.
     """
-    b64 = _validate_base64(payload.image_base64)
-    result = extract_journal_entries([b64], payload.media_type, payload.scan_target)
-    if not result.entries:
-        raise HTTPException(status_code=422, detail="No journal entries were found in the scan.")
+    import base64 as _base64
+
+    data = _base64.b64decode(_validate_base64(payload.image_base64))
+    raw_pages = rasterize_to_jpegs(data, payload.media_type)
+    if not raw_pages:
+        raise HTTPException(status_code=422, detail="No pages found in the upload.")
 
     source = (payload.source_name or "").strip() or "Web scan"
-    batch_id = create_batch(source, result.page_count, payload.scan_target, result.usage.model)
+    # Seed year resolution: explicit default_year, else the launching day's year.
+    default_year = payload.default_year
+    if default_year is None and payload.fallback_date and len(payload.fallback_date) >= 4:
+        try:
+            default_year = int(payload.fallback_date[:4])
+        except ValueError:
+            default_year = None
+    batch_id = create_batch(
+        source, len(raw_pages), payload.scan_target, OPENAI_JOURNAL_VISION_MODEL, default_year=default_year
+    )
+
+    pages_b64: list[str] = []
+    for index, page_bytes in enumerate(raw_pages):
+        processed = preprocess_jpeg(page_bytes)
+        save_page_image(batch_id, index, processed)
+        pages_b64.append(_base64.b64encode(processed).decode("ascii"))
+
+    result = extract_journal_entries(pages_b64, "image/jpeg", payload.scan_target)
+    record_usage(result.usage)
+    if not result.entries:
+        set_batch_status(batch_id, "extracted")
+        raise HTTPException(status_code=422, detail="No journal entries were found in the scan.")
+
     for entry in result.entries:
         detected = entry.detected_date or None
         # Undated fragments fall back to the launching day (flagged, still editable).
@@ -777,15 +816,11 @@ def journal_scan_to_staging(payload: JournalScanStageRequest):
             text_markdown=entry.text,
             confidence=result.response.confidence,
             dedupe_key=make_dedupe_key(date_value, entry.text),
+            source_model=result.usage.model,
+            date_text=entry.date_text,
         )
     set_batch_status(batch_id, "extracted")
-
-    batch = get_batch(batch_id)
-    return JournalScanBatchDetail(
-        batch=_batch_to_schema(batch),
-        fragments=[_fragment_to_schema(f) for f in list_fragments(batch_id)],
-        existing_dates=existing_dates_for_batch(batch_id),
-    )
+    return _build_batch_detail(batch_id)
 
 
 def _batch_to_schema(batch: dict) -> JournalScanBatch:
@@ -801,20 +836,67 @@ def _batch_to_schema(batch: dict) -> JournalScanBatch:
         fragment_count=int(batch.get("fragment_count") or 0),
         pending_count=int(batch.get("pending_count") or 0),
         committed_count=int(batch.get("committed_count") or 0),
+        low_confidence_count=int(batch.get("low_confidence_count") or 0),
+        failed_group_count=int(batch.get("failed_group_count") or 0),
+        default_year=batch.get("default_year"),
     )
 
 
-def _fragment_to_schema(fragment: dict) -> JournalScanFragment:
+def _fragment_to_schema(
+    fragment: dict, anomalies: list[str] | None = None, resolved: dict | None = None
+) -> JournalScanFragment:
+    resolved = resolved or {}
     return JournalScanFragment(
         id=int(fragment["id"]),
         batch_id=int(fragment["batch_id"]),
         page_index=int(fragment.get("page_index") or 0),
         detected_date=fragment.get("detected_date"),
+        date_text=fragment.get("date_text"),
         date_detected=bool(fragment.get("date_detected")),
         text_markdown=str(fragment.get("text_markdown") or ""),
         confidence=fragment.get("confidence") or "medium",
         status=fragment.get("status") or "pending",
+        source_model=str(fragment.get("source_model") or ""),
+        anomalies=anomalies or [],
+        resolved_date=resolved.get("resolved_date"),
+        year_inferred=bool(resolved.get("year_inferred")),
+        year_rollover=bool(resolved.get("rollover")),
         created_at=fragment.get("created_at"),
+    )
+
+
+def _build_batch_detail(batch_id: int) -> JournalScanBatchDetail:
+    batch = get_batch(batch_id)
+    if batch is None:
+        raise HTTPException(status_code=404, detail="Batch not found.")
+    existing = existing_dates_for_batch(batch_id)
+    analysis = analyze_batch(batch_id)
+    per_fragment = analysis["per_fragment"]
+    resolved = analysis["resolved"]
+    return JournalScanBatchDetail(
+        batch=_batch_to_schema(batch),
+        fragments=[
+            _fragment_to_schema(f, per_fragment.get(int(f["id"])), resolved.get(int(f["id"])))
+            for f in list_fragments(batch_id)
+        ],
+        existing_dates=existing,
+        anomaly_summary=analysis["summary"],
+    )
+
+
+@api.get("/journal/import/spend", response_model=JournalImportSpendResponse)
+def get_journal_import_spend():
+    from datetime import date as _date
+
+    summary = get_spend_summary()
+    return JournalImportSpendResponse(
+        total_cost_usd=summary["total_cost_usd"],
+        total_tokens=summary["total_tokens"],
+        total_calls=summary["total_calls"],
+        budget_usd=JOURNAL_IMPORT_BUDGET_USD,
+        tokens_today=get_tokens_used_today(_date.today().isoformat()),
+        daily_token_cap=JOURNAL_IMPORT_DAILY_TOKEN_CAP,
+        by_model=summary["by_model"],
     )
 
 
@@ -827,29 +909,61 @@ def get_journal_import_batches():
 
 @api.get("/journal/import/batches/{batch_id}", response_model=JournalScanBatchDetail)
 def get_journal_import_batch(batch_id: int):
-    batch = get_batch(batch_id)
-    if batch is None:
+    return _build_batch_detail(batch_id)
+
+
+@api.patch("/journal/import/batches/{batch_id}", response_model=JournalScanBatchDetail)
+def patch_journal_import_batch(batch_id: int, payload: JournalBatchUpdateRequest):
+    """Set the batch's default_year, then re-resolve years across its fragments."""
+    if get_batch(batch_id) is None:
         raise HTTPException(status_code=404, detail="Batch not found.")
-    return JournalScanBatchDetail(
-        batch=_batch_to_schema(batch),
-        fragments=[_fragment_to_schema(f) for f in list_fragments(batch_id)],
-        existing_dates=existing_dates_for_batch(batch_id),
-    )
+    set_batch_default_year(batch_id, payload.default_year)
+    return _build_batch_detail(batch_id)
+
+
+@api.delete("/journal/import/batches/{batch_id}", status_code=204)
+def delete_journal_import_batch(batch_id: int):
+    if not delete_import_batch(batch_id):
+        raise HTTPException(status_code=404, detail="Batch not found.")
+
+
+@api.get("/journal/import/batches/{batch_id}/pages/{page_index}")
+def get_journal_import_page_image(batch_id: int, page_index: int):
+    path = page_image_path(batch_id, page_index)
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="Page image not found.")
+    return FileResponse(path, media_type="image/jpeg")
 
 
 @api.patch("/journal/import/fragments/{fragment_id}", response_model=JournalScanFragment)
 def patch_journal_import_fragment(fragment_id: int, payload: JournalFragmentUpdateRequest):
     fields = payload.model_dump(exclude_unset=True)
+    sets_date = "detected_date" in fields
     updated = update_fragment(
         fragment_id,
         detected_date=payload.detected_date,
         text_markdown=payload.text_markdown,
         status=payload.status,
-        set_date="detected_date" in fields,
+        # A user-supplied date is authoritative — it's no longer an inferred year.
+        year_inferred=False if sets_date else None,
+        set_date=sets_date,
     )
     if updated is None:
         raise HTTPException(status_code=404, detail="Fragment not found.")
     return _fragment_to_schema(updated)
+
+
+@api.post("/journal/import/batches/{batch_id}/triage", response_model=JournalTriageResponse)
+def triage_journal_import_batch(batch_id: int, payload: JournalTriageRequest):
+    """Re-run low-confidence fragments on the premium model (cached pages)."""
+    if get_batch(batch_id) is None:
+        raise HTTPException(status_code=404, detail="Batch not found.")
+    result = reextract_low_confidence_fragments(
+        batch_id,
+        model=payload.model or OPENAI_JOURNAL_VISION_MODEL,
+        threshold=payload.threshold,
+    )
+    return JournalTriageResponse(**result)
 
 
 @api.post("/journal/import/batches/{batch_id}/commit", response_model=JournalBatchCommitResponse)
@@ -863,6 +977,7 @@ def commit_journal_import_batch(batch_id: int, payload: JournalBatchCommitReques
         committed_fragment_ids=result["committed_fragment_ids"],
         conflicts=[JournalDateConflict(**c) for c in result["conflicts"]],
         skipped_undated=result["skipped_undated"],
+        unresolved_years=result.get("unresolved_years", []),
     )
 
 

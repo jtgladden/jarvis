@@ -8,4 +8,5 @@ python-multipart
 pydantic
 openai
 PyMuPDF
+Pillow
 tzdata

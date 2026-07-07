@@ -498,10 +498,13 @@ class JournalScanStageRequest(BaseModel):
     # Date to assign to any fragment the model couldn't date (still flagged for
     # review). Typically the journal day the scan was launched from.
     fallback_date: Optional[str] = None
+    # Seeds year resolution for partial (MM-DD) dates. Defaults to fallback_date's year.
+    default_year: Optional[int] = None
 
 
 class JournalDayExtract(BaseModel):
     detected_date: Optional[str] = None  # ISO yyyy-mm-dd or null
+    date_text: Optional[str] = None  # the date heading exactly as written (year may be missing)
     text: str = ""  # markdown body (no date heading inside)
     start_page: int = 0  # 0-based page index within the batch where the entry begins
 
@@ -519,11 +522,17 @@ class JournalScanFragment(BaseModel):
     id: int
     batch_id: int
     page_index: int
-    detected_date: Optional[str] = None
+    detected_date: Optional[str] = None  # full YYYY-MM-DD or partial MM-DD as written
+    date_text: Optional[str] = None  # raw date heading as written (useful when year is missing)
     date_detected: bool = False  # True when the model detected a date (vs. defaulted)
     text_markdown: str = ""
     confidence: Literal["high", "medium", "low"] = "medium"
     status: Literal["pending", "reviewed", "committed", "discarded"] = "pending"
+    source_model: str = ""  # which model produced this transcription
+    anomalies: List[str] = Field(default_factory=list)  # review-triage flags
+    resolved_date: Optional[str] = None  # full date the year-resolver would commit
+    year_inferred: bool = False  # True when the resolver supplied a year the page lacked
+    year_rollover: bool = False  # True when a Dec->Jan rollover bumped the inferred year
     created_at: Optional[str] = None
 
 
@@ -540,6 +549,9 @@ class JournalScanBatch(BaseModel):
     fragment_count: int = 0
     pending_count: int = 0
     committed_count: int = 0
+    low_confidence_count: int = 0
+    failed_group_count: int = 0
+    default_year: Optional[int] = None  # seeds year resolution before any full date
 
 
 class JournalScanBatchListResponse(BaseModel):
@@ -551,12 +563,40 @@ class JournalScanBatchDetail(BaseModel):
     fragments: List[JournalScanFragment] = Field(default_factory=list)
     # Resolved dates in this batch that already have a real journal_entries row.
     existing_dates: List[str] = Field(default_factory=list)
+    anomaly_summary: List[str] = Field(default_factory=list)
+
+
+class JournalImportSpendResponse(BaseModel):
+    total_cost_usd: float = 0.0
+    total_tokens: int = 0
+    total_calls: int = 0
+    budget_usd: float = 0.0
+    tokens_today: int = 0
+    daily_token_cap: int = 0
+    by_model: List[dict] = Field(default_factory=list)
+
+
+class JournalTriageRequest(BaseModel):
+    model: Optional[str] = None  # defaults to the premium vision model
+    threshold: Optional[Literal["low", "medium", "high"]] = None
+
+
+class JournalTriageResponse(BaseModel):
+    batch_id: int
+    candidates: int = 0
+    reviewed: int = 0
+    upgraded: int = 0
+    cost_usd: float = 0.0
 
 
 class JournalFragmentUpdateRequest(BaseModel):
     detected_date: Optional[str] = None
     text_markdown: Optional[str] = None
     status: Optional[Literal["pending", "reviewed", "committed", "discarded"]] = None
+
+
+class JournalBatchUpdateRequest(BaseModel):
+    default_year: Optional[int] = None  # re-seeds year resolution for the batch
 
 
 class JournalBatchCommitRequest(BaseModel):
@@ -576,6 +616,8 @@ class JournalBatchCommitResponse(BaseModel):
     committed_fragment_ids: List[int] = Field(default_factory=list)
     conflicts: List[JournalDateConflict] = Field(default_factory=list)
     skipped_undated: List[int] = Field(default_factory=list)
+    # Partial-date fragments whose year couldn't be resolved — left pending.
+    unresolved_years: List[int] = Field(default_factory=list)
 
 
 class HealthDailySyncRequest(BaseModel):

@@ -33,9 +33,13 @@ OPENAI_LANGUAGE_MAX_TOKENS = int(os.getenv("OPENAI_LANGUAGE_MAX_TOKENS", "1400")
 # gpt-5.4 uses the Responses API (client.responses.create), not Chat Completions.
 # These are the throughput / accuracy / cost knobs — keep them env-overridable.
 OPENAI_JOURNAL_VISION_MODEL = os.getenv("OPENAI_JOURNAL_VISION_MODEL", "gpt-5.4")
-# Future triage path: bulk on the cheap high-quota model, re-run low-confidence
-# fragments on the premium model. Not wired yet, but the constant reserves it.
+# Triage path: run the bulk on the cheap high-quota model, then re-run only
+# low-confidence fragments on the premium model. Makes a 300-page archive
+# affordable — most tokens go to the mini tier (~2.5M/day) and only the
+# uncertain minority hits the premium tier (~250k/day).
 OPENAI_JOURNAL_VISION_TRIAGE_MODEL = os.getenv("OPENAI_JOURNAL_VISION_TRIAGE_MODEL", "gpt-5.4-mini")
+# Fragments at or below this confidence are candidates for a premium re-run.
+JOURNAL_IMPORT_LOW_CONFIDENCE = os.getenv("JOURNAL_IMPORT_LOW_CONFIDENCE", "medium")  # low | medium | high
 # "original" keeps handwriting/low-quality scans un-downscaled (do not use "high"
 # / "low" for this workload). Per-page image detail.
 OPENAI_JOURNAL_VISION_IMAGE_DETAIL = os.getenv("OPENAI_JOURNAL_VISION_IMAGE_DETAIL", "original")
@@ -46,10 +50,56 @@ JOURNAL_IMPORT_BATCH_PAGES = int(os.getenv("JOURNAL_IMPORT_BATCH_PAGES", "4"))
 JOURNAL_IMPORT_OVERLAP_PAGES = int(os.getenv("JOURNAL_IMPORT_OVERLAP_PAGES", "1"))
 # Rasterization DPI for PDF pages -> images (high enough for handwriting).
 JOURNAL_IMPORT_RASTER_DPI = int(os.getenv("JOURNAL_IMPORT_RASTER_DPI", "200"))
-# Daily token cap for the free/low tier that includes gpt-5.4 (~250k/day). The
-# processor tracks per-call usage and stops-and-resumes so a long run drips
-# across days instead of spilling into billed rates. 0 disables the cap.
+# Daily token cap for the free/low tier that includes gpt-5.4 (~250k/day). This
+# is the *free-tier* guard: 0 disables it. When paying, the USD budget below is
+# the primary throttle and you'll usually set this to 0.
 JOURNAL_IMPORT_DAILY_TOKEN_CAP = int(os.getenv("JOURNAL_IMPORT_DAILY_TOKEN_CAP", "240000"))
+# Hard dollar budget for the whole import. The processor tracks estimated spend
+# from per-call token usage and stops before exceeding it (resumable). A ~300pg
+# archive runs well under $10 with triage. 0 disables the budget check.
+JOURNAL_IMPORT_BUDGET_USD = float(os.getenv("JOURNAL_IMPORT_BUDGET_USD", "10"))
+
+# Per-model token pricing in USD per 1M tokens (input, output), used only to
+# estimate spend against the budget above. VERIFY against current OpenAI pricing
+# and override via env — defaults lean slightly HIGH so the budget trips early
+# rather than overspending. Format: "INPUT,OUTPUT" per million tokens.
+def _price_pair(env_name: str, default: str) -> tuple[float, float]:
+    raw = os.getenv(env_name, default)
+    try:
+        parts = [float(p.strip()) for p in raw.split(",")]
+        return (parts[0], parts[1])
+    except (ValueError, IndexError):
+        parts = [float(p.strip()) for p in default.split(",")]
+        return (parts[0], parts[1])
+
+
+# {model_name: (input_$/Mtok, output_$/Mtok)}
+OPENAI_JOURNAL_VISION_PRICES: dict[str, tuple[float, float]] = {
+    OPENAI_JOURNAL_VISION_MODEL: _price_pair("OPENAI_JOURNAL_VISION_PRICE", "1.50,12.00"),
+    OPENAI_JOURNAL_VISION_TRIAGE_MODEL: _price_pair("OPENAI_JOURNAL_VISION_TRIAGE_PRICE", "0.30,2.40"),
+}
+# Fallback price for an unknown model (leans high).
+OPENAI_JOURNAL_VISION_PRICE_FALLBACK: tuple[float, float] = _price_pair(
+    "OPENAI_JOURNAL_VISION_PRICE_FALLBACK", "1.50,12.00"
+)
+
+
+def estimate_vision_cost_usd(model: str, input_tokens: int, output_tokens: int) -> float:
+    """Estimated USD cost of one vision call from its token usage."""
+    input_price, output_price = OPENAI_JOURNAL_VISION_PRICES.get(
+        model, OPENAI_JOURNAL_VISION_PRICE_FALLBACK
+    )
+    return (input_tokens / 1_000_000.0) * input_price + (output_tokens / 1_000_000.0) * output_price
+
+
+# Retry policy for transient Responses API failures (rate limits, 5xx, timeouts)
+# during a long unattended run. Exponential backoff between attempts.
+JOURNAL_IMPORT_MAX_RETRIES = int(os.getenv("JOURNAL_IMPORT_MAX_RETRIES", "4"))
+JOURNAL_IMPORT_RETRY_BASE_SECONDS = float(os.getenv("JOURNAL_IMPORT_RETRY_BASE_SECONDS", "5"))
+# Pre-send image cleanup (grayscale + autocontrast) to lift handwriting accuracy.
+JOURNAL_IMPORT_PREPROCESS = os.getenv("JOURNAL_IMPORT_PREPROCESS", "true").lower() in {"1", "true", "yes"}
+# Where rasterized source page images are cached (for review thumbnails + reuse).
+JOURNAL_IMPORT_PAGES_DIR = os.getenv("JOURNAL_IMPORT_PAGES_DIR", "data/journal_import_pages")
 JOURNAL_IMPORT_DB = os.getenv("JOURNAL_IMPORT_DB", "data/journal_import.db")
 OPENAI_TRANSCRIPTION_MODEL = os.getenv("OPENAI_TRANSCRIPTION_MODEL", "gpt-4o-mini-transcribe")
 OPENAI_TTS_MODEL = os.getenv("OPENAI_TTS_MODEL", "gpt-4o-mini-tts")
