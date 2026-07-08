@@ -90,15 +90,16 @@ def _findings_payload(report: JournalPatternsResponse) -> dict:
         "habits_emerging": [_trend_payload(t) for t in report.habits_emerging],
         "themes_rising": [_trend_payload(t) for t in report.themes_rising],
         "themes_falling": [_trend_payload(t) for t in report.themes_falling],
-        "streaks": [
+        "rhythms": [
             {
-                "slug": s.slug,
-                "label": s.label,
-                "current_streak": s.current_streak,
-                "longest_streak": s.longest_streak,
-                "days_since_last": s.days_since_last,
+                "slug": r.slug,
+                "name": _humanize(r.slug),
+                "status": r.status,  # active | slowing | lapsed | new
+                "typical_gap_days": r.typical_gap_days,
+                "days_since_last": r.days_since_last,
+                "total_occurrences": r.total_occurrences,
             }
-            for s in report.habit_streaks
+            for r in report.habit_rhythms
         ],
         "caveats": report.caveats,
     }
@@ -110,7 +111,7 @@ def _has_findings(report: JournalPatternsResponse) -> bool:
         or report.habits_emerging
         or report.themes_rising
         or report.themes_falling
-        or report.habit_streaks
+        or report.habit_rhythms
     )
 
 
@@ -175,7 +176,7 @@ def narrate_patterns(
     # one Layer 2 actually surfaced (or blank, meaning general advice).
     known_slugs = {t.slug for t in report.habits_dropping}
     known_slugs |= {t.slug for t in report.habits_emerging}
-    known_slugs |= {s.slug for s in report.habit_streaks}
+    known_slugs |= {r.slug for r in report.habit_rhythms}
     known_slugs |= {t.slug for t in report.themes_rising}
     known_slugs |= {t.slug for t in report.themes_falling}
 

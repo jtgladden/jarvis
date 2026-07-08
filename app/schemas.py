@@ -1508,14 +1508,26 @@ class HabitTrend(BaseModel):
     provenance_dates: List[str] = Field(default_factory=list)
 
 
-class HabitStreak(BaseModel):
+class HabitRhythm(BaseModel):
+    """Gap-tolerant view of a habit's cadence — replaces the old day-"streak".
+
+    A journal mention is positive-only, noisy evidence: not writing about a habit
+    on a given day does NOT mean it wasn't done. So instead of consecutive-day
+    streaks (which any missed mention destroys), we describe the habit's rhythm
+    and judge recency against the habit's OWN typical interval.
+    """
+
     slug: str
     label: str = ""
-    current_streak: int = 0  # consecutive most-recent journaled days with the habit
-    longest_streak: int = 0
-    days_since_last: int | None = None  # calendar days from last occurrence to as_of
+    # active: last mention within its usual interval; slowing: somewhat overdue;
+    # lapsed: far past its usual interval (likely dropped); new: only one mention.
+    status: Literal["active", "slowing", "lapsed", "new"] = "new"
     last_date: Optional[str] = None
+    days_since_last: int | None = None  # calendar days from last mention to as_of
+    typical_gap_days: float | None = None  # median days between mentions (None if <2)
     total_occurrences: int = 0
+    months_active: int = 0  # recent journaled months with >=1 mention (consistency)
+    months_window: int = 0  # recent journaled months considered (the denominator)
     provenance_dates: List[str] = Field(default_factory=list)
 
 
@@ -1539,7 +1551,7 @@ class JournalPatternsResponse(BaseModel):
     prior_window: WindowStat
     habits_dropping: List[HabitTrend] = Field(default_factory=list)
     habits_emerging: List[HabitTrend] = Field(default_factory=list)
-    habit_streaks: List[HabitStreak] = Field(default_factory=list)
+    habit_rhythms: List[HabitRhythm] = Field(default_factory=list)
     themes_rising: List[ThemeTrend] = Field(default_factory=list)
     themes_falling: List[ThemeTrend] = Field(default_factory=list)
     caveats: List[str] = Field(default_factory=list)  # honesty notes (low coverage, etc.)

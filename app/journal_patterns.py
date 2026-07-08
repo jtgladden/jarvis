@@ -5,7 +5,7 @@ set of journaled dates) and computes, over rolling windows:
 
 * habits DROPPING OFF (frequent before, declining now) and EMERGING habits,
 * theme trends (rising / falling),
-* per-habit streaks and gaps.
+* per-habit rhythm (typical cadence, recency, and active/slowing/lapsed status).
 
 Design commitments:
 
@@ -20,6 +20,7 @@ Design commitments:
   coverage. Report-level ``caveats`` call out low coverage. No correlation claims.
 """
 
+import statistics
 from datetime import date, datetime, timedelta
 
 from app.config import JOURNAL_PATTERN_WINDOW_DAYS, LOCAL_TIMEZONE
@@ -29,7 +30,7 @@ from app.journal_signals_store import (
     list_theme_events,
 )
 from app.schemas import (
-    HabitStreak,
+    HabitRhythm,
     HabitTrend,
     JournalPatternsResponse,
     ThemeTrend,
@@ -54,8 +55,15 @@ MIN_ACTIVE_DAYS = 5
 # Sample size (mention-days across both windows) banding for strength.
 WEAK_SAMPLE_MAX = 4  # sample < this -> weak
 STRONG_SAMPLE_MIN = 8  # sample >= this (with adequate coverage) -> strong
-# Cap on how many streak rows we surface.
-MAX_STREAKS = 12
+# Cap on how many rhythm rows we surface.
+MAX_RHYTHM_ROWS = 12
+# Minimum mentions to show a rhythm row: need >=2 to have any interval to time.
+RHYTHM_MIN_OCCURRENCES = 2
+# How many of the most-recent journaled months to measure consistency over.
+CONSISTENCY_MONTHS = 6
+# Recency-vs-cadence status thresholds (multiples of the habit's own median gap).
+RHYTHM_ACTIVE_MAX = 1.5  # within 1.5x its usual interval -> active
+RHYTHM_SLOWING_MAX = 3.0  # up to 3x -> slowing; beyond -> lapsed
 
 
 def _parse_dates(values) -> list[date]:
@@ -140,39 +148,51 @@ def _dedupe_events(events: list[dict], slug_key: str, label_key: str):
     return dates_by_slug, label_by_slug
 
 
-def _streak_for(slug_dates: set[date], ordered_active: list[date], as_of: date) -> HabitStreak:
-    """Streaks measured over consecutive JOURNALED days (robust to journaling gaps).
+def _rhythm_for(slug_dates: set[date], active_dates: list[date], as_of: date) -> HabitRhythm:
+    """Cadence-based rhythm for one habit — gap-tolerant, no consecutive-day logic.
 
-    current_streak counts back from the most recent journaled day while it keeps
-    mentioning the habit; longest_streak is the longest such run anywhere in the
-    ordered journaled history. days_since_last is calendar days to as_of.
+    Describes the habit's *typical interval* (median days between mentions) and
+    judges recency against that interval, so a habit you mention roughly weekly
+    isn't penalized for the many days you simply didn't write about it. Absence
+    only becomes a signal ("lapsed") when you've gone far past your own rhythm.
     """
-    present = [d in slug_dates for d in ordered_active]
-
-    longest = run = 0
-    for hit in present:
-        run = run + 1 if hit else 0
-        longest = max(longest, run)
-
-    current = 0
-    streak_dates: list[date] = []
-    for d, hit in zip(reversed(ordered_active), reversed(present)):
-        if not hit:
-            break
-        current += 1
-        streak_dates.append(d)
-
-    occurrence_dates = sorted(slug_dates)
-    last_date = occurrence_dates[-1] if occurrence_dates else None
+    occ = sorted(slug_dates)
+    total = len(occ)
+    last_date = occ[-1] if occ else None
     days_since = (as_of - last_date).days if last_date else None
-    return HabitStreak(
+
+    # Median of consecutive gaps (dates are distinct, so every gap is >= 1 day).
+    gaps = [(occ[i + 1] - occ[i]).days for i in range(len(occ) - 1)]
+    typical = float(statistics.median(gaps)) if gaps else None
+
+    if total <= 1 or typical is None or days_since is None:
+        status = "new"
+    else:
+        ratio = days_since / typical
+        if ratio <= RHYTHM_ACTIVE_MAX:
+            status = "active"
+        elif ratio <= RHYTHM_SLOWING_MAX or total < 3:
+            # With only 2 mentions the cadence is too shaky to declare "lapsed".
+            status = "slowing"
+        else:
+            status = "lapsed"
+
+    # Consistency over the most-recent journaled months (both numerator and
+    # denominator are journaled months, so quiet months don't count against it).
+    journaled_months = sorted({(d.year, d.month) for d in active_dates})
+    recent_months = set(journaled_months[-CONSISTENCY_MONTHS:])
+    active_months = {(d.year, d.month) for d in occ} & recent_months
+
+    return HabitRhythm(
         slug="",  # filled by caller
-        current_streak=current,
-        longest_streak=longest,
-        days_since_last=days_since,
+        status=status,
         last_date=last_date.isoformat() if last_date else None,
-        total_occurrences=len(slug_dates),
-        provenance_dates=sorted(d.isoformat() for d in streak_dates),
+        days_since_last=days_since,
+        typical_gap_days=round(typical, 1) if typical is not None else None,
+        total_occurrences=total,
+        months_active=len(active_months),
+        months_window=len(recent_months),
+        provenance_dates=[d.isoformat() for d in occ],
     )
 
 
@@ -272,17 +292,18 @@ def analyze(
     themes_rising.sort(key=lambda t: (-t.delta_rate, -t.sample_size))
     themes_falling.sort(key=lambda t: (t.delta_rate, -t.sample_size))
 
-    # Streaks for habits with enough history to be meaningful.
-    streaks: list[HabitStreak] = []
+    # Rhythm for habits with enough history to establish a cadence.
+    rhythms: list[HabitRhythm] = []
     for slug, dates in habit_dates.items():
-        if len(dates) < MIN_SUPPORT:
+        if len(dates) < RHYTHM_MIN_OCCURRENCES:
             continue
-        streak = _streak_for(dates, active_dates, as_of)
-        streak.slug = slug
-        streak.label = habit_labels.get(slug, "")
-        streaks.append(streak)
-    streaks.sort(key=lambda s: (-s.current_streak, -s.total_occurrences))
-    streaks = streaks[:MAX_STREAKS]
+        rhythm = _rhythm_for(dates, active_dates, as_of)
+        rhythm.slug = slug
+        rhythm.label = habit_labels.get(slug, "")
+        rhythms.append(rhythm)
+    # Most-established habits first (stable, informative ordering).
+    rhythms.sort(key=lambda r: (-r.total_occurrences, r.slug))
+    rhythms = rhythms[:MAX_RHYTHM_ROWS]
 
     caveats = _build_caveats(prior_window, recent_window, len(active_dates), window_days)
 
@@ -294,7 +315,7 @@ def analyze(
         prior_window=prior_window,
         habits_dropping=habits_dropping,
         habits_emerging=habits_emerging,
-        habit_streaks=streaks,
+        habit_rhythms=rhythms,
         themes_rising=themes_rising,
         themes_falling=themes_falling,
         caveats=caveats,
@@ -336,7 +357,7 @@ def compute_patterns(
 ) -> JournalPatternsResponse:
     """Store-backed entry point: load Layer 1 signals and run ``analyze()``.
 
-    Reads the full history (streaks need it), so no date filter on the store
+    Reads the full history (rhythm/cadence needs it), so no date filter on the store
     reads. ``as_of`` (ISO date) overrides the default anchor (latest journaled day).
     """
     resolved_user = user_id or get_default_user_context().user_id

@@ -40,14 +40,16 @@ type Trend = {
   provenance_dates: string[];
 };
 
-type Streak = {
+type Rhythm = {
   slug: string;
   label: string;
-  current_streak: number;
-  longest_streak: number;
-  days_since_last: number | null;
+  status: "active" | "slowing" | "lapsed" | "new";
   last_date: string | null;
+  days_since_last: number | null;
+  typical_gap_days: number | null;
   total_occurrences: number;
+  months_active: number;
+  months_window: number;
   provenance_dates: string[];
 };
 
@@ -65,7 +67,7 @@ type PatternsResponse = {
   prior_window: WindowStat;
   habits_dropping: Trend[];
   habits_emerging: Trend[];
-  habit_streaks: Streak[];
+  habit_rhythms: Rhythm[];
   themes_rising: Trend[];
   themes_falling: Trend[];
   caveats: string[];
@@ -151,25 +153,38 @@ function TrendCard({ trend }: { trend: Trend }) {
   );
 }
 
-function StreakCard({ streak }: { streak: Streak }) {
+const RHYTHM_STATUS: Record<string, { label: string; cls: string }> = {
+  active: { label: "active", cls: "border-emerald-300/30 bg-emerald-400/15 text-emerald-100" },
+  slowing: { label: "slowing", cls: "border-amber-300/30 bg-amber-400/15 text-amber-100" },
+  lapsed: { label: "lapsed", cls: "border-rose-300/30 bg-rose-400/15 text-rose-100" },
+  new: { label: "new", cls: "border-slate-300/20 bg-slate-400/10 text-slate-300" },
+};
+
+function RhythmCard({ r }: { r: Rhythm }) {
+  const s = RHYTHM_STATUS[r.status] || RHYTHM_STATUS.new;
   return (
     <div className="rounded-[1.2rem] border border-white/8 bg-[rgba(20,22,37,0.55)] p-4">
       <div className="flex items-center justify-between gap-2">
-        <div className="font-medium text-slate-100">{humanizeSlug(streak.slug)}</div>
-        {streak.current_streak > 0 ? (
-          <Badge className="border border-orange-300/30 bg-orange-400/15 text-orange-100">
-            <Flame className="mr-1 h-3 w-3" />
-            {streak.current_streak} in a row
-          </Badge>
-        ) : streak.days_since_last != null ? (
-          <span className="text-xs text-slate-500">{streak.days_since_last}d since last</span>
-        ) : null}
+        <div className="font-medium text-slate-100">{humanizeSlug(r.slug)}</div>
+        <Badge className={`border ${s.cls}`}>{s.label}</Badge>
       </div>
       <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-400">
-        <span>Longest run: <span className="text-slate-200">{streak.longest_streak}</span></span>
-        <span>Total: <span className="text-slate-200">{streak.total_occurrences}</span></span>
-        {streak.last_date ? <span>Last: <span className="text-slate-200">{streak.last_date}</span></span> : null}
+        {r.typical_gap_days != null ? (
+          <span>Typically ~every <span className="text-slate-200">{r.typical_gap_days}d</span></span>
+        ) : null}
+        {r.days_since_last != null ? (
+          <span>Last <span className="text-slate-200">{r.days_since_last}d</span> ago</span>
+        ) : null}
+        <span>
+          <span className="text-slate-200">{r.total_occurrences}</span> mention{r.total_occurrences === 1 ? "" : "s"}
+        </span>
+        {r.months_window ? (
+          <span>
+            Active <span className="text-slate-200">{r.months_active}/{r.months_window}</span> recent months
+          </span>
+        ) : null}
       </div>
+      <ProvenanceDates dates={r.provenance_dates} />
     </div>
   );
 }
@@ -510,11 +525,11 @@ export default function JournalPatternsPage() {
                 render={() => patterns.habits_emerging.map((t) => <TrendCard key={t.slug} trend={t} />)}
               />
               <Section
-                title="Streaks"
+                title="Rhythm"
                 icon={<Flame className="h-4 w-4 text-orange-300" />}
-                items={patterns.habit_streaks}
-                empty="No streaks yet."
-                render={() => patterns.habit_streaks.map((s) => <StreakCard key={s.slug} streak={s} />)}
+                items={patterns.habit_rhythms}
+                empty="Not enough history to gauge rhythm yet."
+                render={() => patterns.habit_rhythms.map((r) => <RhythmCard key={r.slug} r={r} />)}
               />
               <Section
                 title="Themes rising"

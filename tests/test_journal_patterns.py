@@ -2,7 +2,7 @@
 
 The analytics core is pure — it takes plain lists of habit/theme mention-days
 plus the set of journaled dates and returns a fully-computed report — so these
-tests exercise the drop-off / emerging / streak / theme-trend logic on synthetic
+tests exercise the drop-off / emerging / rhythm / theme-trend logic on synthetic
 fixtures with NO database and NO network.
 
 Runnable with pytest or directly: ``python tests/test_journal_patterns.py``.
@@ -131,28 +131,38 @@ def test_rate_uses_journaled_days_as_denominator():
     assert abs(x.recent.rate - 1.0) < 1e-9
 
 
-# --- streaks ----------------------------------------------------------------
+# --- rhythm (cadence, not streaks) ------------------------------------------
 
-def test_streaks_and_gaps():
-    read_days = ["2026-06-03", "2026-06-04", "2026-06-05", "2026-06-06", "2026-06-07",  # 5-run
-                 "2026-06-27", "2026-06-28", "2026-06-29", "2026-06-30"]  # 4-run to as_of
+def test_rhythm_active_when_within_cadence():
+    # Mentioned every ~7 days, most recent is as_of -> active, gap-tolerant.
+    read_days = ["2026-06-02", "2026-06-09", "2026-06-16", "2026-06-23", "2026-06-30"]
     report = _run(habit_map={"read": read_days}, active=ALL_JUNE)
-    streak = _find(report.habit_streaks, "read")
-    assert streak is not None
-    assert streak.current_streak == 4  # 06-27..06-30 consecutive journaled days
-    assert streak.longest_streak == 5  # 06-03..06-07
-    assert streak.days_since_last == 0  # last occurrence is as_of
-    assert streak.last_date == "2026-06-30"
-    assert streak.total_occurrences == 9
-    assert streak.provenance_dates == ["2026-06-27", "2026-06-28", "2026-06-29", "2026-06-30"]
+    r = _find(report.habit_rhythms, "read")
+    assert r is not None
+    assert r.status == "active"
+    assert r.typical_gap_days == 7.0  # median of the 7-day gaps
+    assert r.days_since_last == 0
+    assert r.total_occurrences == 5
 
 
-def test_gap_since_last_occurrence():
+def test_rhythm_lapsed_when_far_past_cadence():
+    # ~weekly for a stretch, then silent for 20 days -> well past its rhythm.
     report = _run(habit_map={"garden": ["2026-06-01", "2026-06-05", "2026-06-10"]}, active=ALL_JUNE)
-    streak = _find(report.habit_streaks, "garden")
-    assert streak is not None
-    assert streak.current_streak == 0  # not done on the most recent journaled day
-    assert streak.days_since_last == 20  # 06-10 -> 06-30
+    r = _find(report.habit_rhythms, "garden")
+    assert r is not None
+    assert r.days_since_last == 20  # 06-10 -> 06-30
+    assert r.typical_gap_days == 4.5  # median gap of [4, 5]
+    assert r.status == "lapsed"  # 20 / 4.5 ~= 4.4x its usual interval
+
+
+def test_rhythm_two_mentions_never_called_lapsed():
+    # With only two mentions the cadence is too shaky to declare a lapse.
+    report = _run(habit_map={"cook": ["2026-06-01", "2026-06-08"]}, active=ALL_JUNE)
+    r = _find(report.habit_rhythms, "cook")
+    assert r is not None
+    assert r.total_occurrences == 2
+    assert r.status in ("active", "slowing")
+    assert r.status != "lapsed"
 
 
 # --- theme trends -----------------------------------------------------------
@@ -174,7 +184,7 @@ def test_empty_inputs_do_not_crash():
     report = analyze([], [], [], window_days=WINDOW, now_iso=NOW)
     assert report.habits_dropping == []
     assert report.habits_emerging == []
-    assert report.habit_streaks == []
+    assert report.habit_rhythms == []
     assert report.caveats  # should note there is no signal
 
 
