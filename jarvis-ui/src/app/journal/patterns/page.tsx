@@ -204,6 +204,7 @@ export default function JournalPatternsPage() {
   const [extracting, setExtracting] = useState(false);
   const [extractResult, setExtractResult] = useState<ExtractResult | null>(null);
   const [extractError, setExtractError] = useState<string | null>(null);
+  const [extractProgress, setExtractProgress] = useState<string | null>(null);
 
   const [windowDays, setWindowDays] = useState("30");
   const [narrate, setNarrate] = useState(true);
@@ -226,25 +227,66 @@ export default function JournalPatternsPage() {
     void loadStatus();
   }, [loadStatus]);
 
+  // Extraction runs in small batches so no single request approaches the
+  // gateway timeout (a 297-entry run as one request 524s behind Cloudflare).
+  // Each batch commits server-side and is idempotent, so the loop just walks
+  // the backlog; an interrupted run resumes cleanly on the next click.
+  const BATCH_SIZE = 10;
+
   const runExtraction = useCallback(async () => {
     setExtracting(true);
     setExtractError(null);
     setExtractResult(null);
+    setExtractProgress(null);
+
+    const n = parseInt(limit, 10);
+    const target = !Number.isNaN(n) && n > 0 ? n : Infinity;
+
     try {
-      const params = new URLSearchParams();
-      const n = parseInt(limit, 10);
-      if (!Number.isNaN(n) && n > 0) params.set("limit", String(n));
-      if (dryRun) params.set("dry_run", "true");
-      const res = await fetch(`${API_BASE}/journal/signals/extract?${params.toString()}`, {
-        method: "POST",
-      });
-      if (!res.ok) throw new Error(`extract failed: ${res.status}`);
-      setExtractResult((await res.json()) as ExtractResult);
+      // Dry run: one fast, API-free call that returns the full candidate count.
+      if (dryRun) {
+        const res = await fetch(`${API_BASE}/journal/signals/extract?dry_run=true`, { method: "POST" });
+        if (!res.ok) throw new Error(`preview failed: ${res.status}`);
+        setExtractResult((await res.json()) as ExtractResult);
+        return;
+      }
+
+      let done = 0;
+      let failed = 0;
+      let candidates = 0;
+      let version = 0;
+      let model = "";
+      while (done < target) {
+        const batch = Math.min(BATCH_SIZE, target - done);
+        setExtractProgress(`Extracting… ${done}${candidates ? ` of ~${candidates}` : ""} done`);
+        const res = await fetch(`${API_BASE}/journal/signals/extract?limit=${batch}`, { method: "POST" });
+        if (!res.ok) throw new Error(`extract failed after ${done} processed: ${res.status}`);
+        const r = (await res.json()) as ExtractResult;
+        done += r.processed;
+        failed += r.failed;
+        candidates = r.total_candidates;
+        version = r.extraction_version;
+        model = r.model;
+        setExtractResult({
+          total_candidates: candidates,
+          processed: done,
+          skipped_up_to_date: r.skipped_up_to_date,
+          failed,
+          extraction_version: version,
+          model,
+          dry_run: false,
+        });
+        // Fewer processed than the batch cap means the backlog is drained (or
+        // only persistently-failing entries remain) — stop.
+        if (r.processed < batch) break;
+      }
       await loadStatus();
     } catch (err) {
       setExtractError(err instanceof Error ? err.message : "Extraction failed");
+      await loadStatus(); // reflect whatever committed before the failure
     } finally {
       setExtracting(false);
+      setExtractProgress(null);
     }
   }, [limit, dryRun, loadStatus]);
 
@@ -303,8 +345,9 @@ export default function JournalPatternsPage() {
             <Info className="mt-0.5 h-4 w-4 shrink-0" />
             <span>
               Running extraction sends your journal entry text to OpenAI ({status?.model || "the extraction model"}).
-              This is the only step that leaves your machine. Use “Dry run” to preview counts without any API call,
-              or a small “limit” for a first taste before extracting everything.
+              This is the only step that leaves your machine. It runs in small batches, so a full backfill takes a
+              little while but won’t time out — leave this tab open until it finishes. Use “Dry run” to preview counts
+              without any API call, a small “limit” for a first taste, or leave the limit blank to process everything.
             </span>
           </div>
 
@@ -348,7 +391,12 @@ export default function JournalPatternsPage() {
             </Button>
           </div>
 
-          {extractError ? <div className="text-sm text-rose-300">{extractError}</div> : null}
+          {extractProgress ? <div className="text-sm text-slate-400">{extractProgress}</div> : null}
+          {extractError ? (
+            <div className="text-sm text-rose-300">
+              {extractError} — anything already processed was saved; click again to resume.
+            </div>
+          ) : null}
           {extractResult ? (
             <div className="rounded-[1rem] border border-white/8 bg-[rgba(20,22,37,0.55)] p-3 text-sm text-slate-300">
               {extractResult.dry_run ? "Dry run — " : ""}
