@@ -30,7 +30,7 @@ from app.journal_store import init_journal_store
 from app.journal_signal_extract import EXTRACTION_VERSION, run_extraction
 from app.journal_signals_store import get_signals_status, init_journal_signals_store
 from app.journal_patterns import compute_patterns
-from app.journal_pattern_narrate import narrate_patterns
+from app.journal_pattern_narrate import narrate_patterns_cached
 from app.config import JOURNAL_PATTERN_WINDOW_DAYS, OPENAI_JOURNAL_SIGNALS_MODEL
 from app.schemas import JournalPatternsResponse, SignalExtractionResponse, SignalsStatusResponse
 from app.journal_scan import extract_journal_entries
@@ -737,12 +737,21 @@ def journal_patterns(
     window_days: int = Query(default=JOURNAL_PATTERN_WINDOW_DAYS, ge=1, le=365),
     as_of: str | None = Query(default=None),
     narrate: bool = Query(default=False),
+    refresh: bool = Query(default=False),
 ):
-    """Layer 2 (always) + Layer 3 (when narrate=true). Layer 2 is deterministic;
-    narration is phrased only from Layer 2's computed findings."""
+    """Layer 2 (always) + Layer 3 (when narrate=true). Layer 2 is deterministic
+    and recomputed each call; the LLM narration is cached and only regenerated
+    when the findings change or refresh=true."""
     report = compute_patterns(window_days=window_days, as_of=as_of)
     if narrate:
-        report.narration = narrate_patterns(report)
+        narration, was_cached = narrate_patterns_cached(
+            report,
+            window_days=window_days,
+            user_id=get_default_user_context().user_id,
+            refresh=refresh,
+        )
+        report.narration = narration
+        report.narration_cached = was_cached
     return report
 
 

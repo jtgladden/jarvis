@@ -1559,6 +1559,9 @@ class JournalPatternsResponse(BaseModel):
     # unless narration was requested. The narrator sees ONLY the findings, never
     # raw entry text.
     narration: Optional["JournalPatternNarration"] = None
+    # True when `narration` was served from cache (findings unchanged since it was
+    # generated) rather than freshly produced by the model.
+    narration_cached: bool = False
 
 
 # --- Layer 3 — narration over Layer 2 findings ------------------------------

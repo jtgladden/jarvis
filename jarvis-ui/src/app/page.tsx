@@ -15,6 +15,7 @@ import {
   ChevronLeft,
   ChevronDown,
   ChevronRight,
+  ChevronUp,
   ExternalLink,
   Inbox,
   Languages,
@@ -32,6 +33,7 @@ import {
   Users,
 } from "lucide-react";
 import { AssistantPanel } from "@/components/assistant-panel";
+import { JournalPatternsPanel } from "@/components/journal-patterns-panel";
 import { JournalDatePicker } from "@/components/ui/journal-date-picker";
 import { MailCommandPanel } from "@/components/mail-command-panel";
 import { MailRulesPanel } from "@/components/mail-rules-panel";
@@ -3040,6 +3042,13 @@ export default function HomePage() {
   const [journalJumpDate, setJournalJumpDate] = useState<string | null>(null);
   const [journalHeatmap, setJournalHeatmap] = useState<JournalEntryDateCount[] | null>(null);
   const [journalHeatmapOpen, setJournalHeatmapOpen] = useState(false);
+  // Journal tab layout toggles. The top tool panel (search/filters/pagination)
+  // collapses to just its header; the right sidebar hosts the migrated pattern &
+  // signal insights and collapses into a slim rail. Both default open and are
+  // restored from localStorage after mount (deferred to an effect so server and
+  // first client render agree and hydration stays clean).
+  const [journalToolsOpen, setJournalToolsOpen] = useState(true);
+  const [journalSidebarOpen, setJournalSidebarOpen] = useState(true);
   // Shared "which days have an entry" lookup for the heatmap and the jump-to picker.
   const journalEntryDateSet = useMemo(
     () => new Set((journalHeatmap ?? []).map((day) => day.date)),
@@ -3106,6 +3115,29 @@ export default function HomePage() {
   useEffect(() => {
     void loadGoogleAuthStatus();
   }, []);
+
+  // Restore the journal layout preferences (tool panel + sidebar) after mount.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const tools = window.localStorage.getItem("jarvis:journalToolsOpen");
+      if (tools !== null) setJournalToolsOpen(tools === "1");
+      const sidebar = window.localStorage.getItem("jarvis:journalSidebarOpen");
+      if (sidebar !== null) setJournalSidebarOpen(sidebar === "1");
+    } catch {
+      // Ignore storage errors and keep the defaults.
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem("jarvis:journalToolsOpen", journalToolsOpen ? "1" : "0");
+      window.localStorage.setItem("jarvis:journalSidebarOpen", journalSidebarOpen ? "1" : "0");
+    } catch {
+      // Ignore storage errors and keep the app functional.
+    }
+  }, [journalToolsOpen, journalSidebarOpen]);
 
   const syncSelectedId = (nextEmails: Email[]) => {
     if (nextEmails.length > 0) {
@@ -6532,7 +6564,9 @@ export default function HomePage() {
             </div>
           </div>
         ) : mode === "journal" ? (
-          <div className="mx-auto w-full max-w-6xl space-y-6">
+          <div className="mx-auto w-full max-w-[112rem] space-y-6">
+            {/* Main tool panel — full width at the top; its body collapses so the
+                entries (and the pattern sidebar) can fill the screen. */}
             <Card className="rounded-[2rem] border border-white/8 bg-[rgba(17,19,34,0.82)] shadow-[0_16px_44px_rgba(6,7,14,0.36)] backdrop-blur-xl">
               <CardHeader className="pb-3">
                 <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
@@ -6545,7 +6579,8 @@ export default function HomePage() {
                       Browse recent days or jump into saved entries without rendering your whole history at once.
                     </p>
                   </div>
-                  <div className="flex flex-wrap gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    {/* In-page layout toggles */}
                     <Button
                       size="sm"
                       variant={!journalSavedOnly ? "default" : "outline"}
@@ -6574,40 +6609,34 @@ export default function HomePage() {
                       <LayoutGrid className="mr-1.5 h-3.5 w-3.5" />
                       Heatmap
                     </Button>
+                    {/* Divider: everything left of this only changes THIS page's
+                        layout. The Patterns button toggles the insight sidebar. */}
+                    <span className="mx-1 hidden h-6 w-px self-center bg-white/10 sm:block" aria-hidden />
                     <Button
                       size="sm"
-                      variant="outline"
-                      className="rounded-2xl"
-                      onClick={() => router.push("/journal/patterns")}
+                      variant={journalSidebarOpen ? "default" : "outline"}
+                      className={`rounded-2xl ${journalSidebarOpen ? "" : "text-violet-200 hover:bg-violet-400/10 hover:text-violet-100"}`}
+                      title={journalSidebarOpen ? "Hide patterns & signals" : "Show patterns & signals"}
+                      onClick={() => setJournalSidebarOpen((open) => !open)}
                     >
                       <BarChart3 className="mr-1.5 h-3.5 w-3.5" />
                       Patterns
                     </Button>
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      aria-label={journalToolsOpen ? "Collapse tools" : "Expand tools"}
+                      title={journalToolsOpen ? "Collapse tools" : "Expand tools"}
+                      className="h-8 w-8 rounded-xl text-slate-400 hover:text-slate-100"
+                      onClick={() => setJournalToolsOpen((open) => !open)}
+                    >
+                      {journalToolsOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                    </Button>
                   </div>
                 </div>
               </CardHeader>
+              {journalToolsOpen ? (
               <CardContent className="space-y-4">
-                {journalHeatmapOpen ? (
-                  <div className="rounded-[1.4rem] border border-white/8 bg-[rgba(20,22,37,0.55)] p-4">
-                    <div className="mb-3 flex items-center justify-between gap-2">
-                      <div className="text-xs font-semibold uppercase tracking-widest text-slate-400">
-                        Journaled days
-                      </div>
-                      {journalHeatmap ? (
-                        <div className="text-xs text-slate-500">
-                          {journalHeatmap.length} day{journalHeatmap.length === 1 ? "" : "s"} journaled
-                        </div>
-                      ) : null}
-                    </div>
-                    {journalHeatmap === null ? (
-                      <div className="text-sm text-slate-500">Loading heatmap…</div>
-                    ) : journalHeatmap.length ? (
-                      <JournalHeatmap days={journalHeatmap} onSelect={(date) => void jumpToJournalDate(date)} />
-                    ) : (
-                      <div className="text-sm text-slate-500">No journaled days yet.</div>
-                    )}
-                  </div>
-                ) : null}
                 <div className="flex flex-col gap-3 lg:flex-row">
                   <div className="relative flex-1">
                     <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
@@ -6624,7 +6653,7 @@ export default function HomePage() {
                       placeholder="Search dates, reflections, gratitude, or world events"
                     />
                   </div>
-                  <div className="flex gap-2">
+                  <div className="flex flex-wrap gap-2">
                     {journalYears.length ? (
                       <select
                         aria-label="Filter journal by year"
@@ -6713,15 +6742,50 @@ export default function HomePage() {
                   </div>
                 </div>
               </CardContent>
+              ) : null}
             </Card>
+
+            {/* Journaled-days heatmap — full width, independent of the tool panel. */}
+            {journalHeatmapOpen ? (
+              <div className="rounded-[1.4rem] border border-white/8 bg-[rgba(20,22,37,0.55)] p-4">
+                <div className="mb-3 flex items-center justify-between gap-2">
+                  <div className="text-xs font-semibold uppercase tracking-widest text-slate-400">
+                    Journaled days
+                  </div>
+                  {journalHeatmap ? (
+                    <div className="text-xs text-slate-500">
+                      {journalHeatmap.length} day{journalHeatmap.length === 1 ? "" : "s"} journaled
+                    </div>
+                  ) : null}
+                </div>
+                {journalHeatmap === null ? (
+                  <div className="text-sm text-slate-500">Loading heatmap…</div>
+                ) : journalHeatmap.length ? (
+                  <JournalHeatmap days={journalHeatmap} onSelect={(date) => void jumpToJournalDate(date)} />
+                ) : (
+                  <div className="text-sm text-slate-500">No journaled days yet.</div>
+                )}
+              </div>
+            ) : null}
+
             {error ? (
               <div className="flex items-start gap-3 rounded-[1.4rem] border border-rose-400/20 bg-rose-500/10 p-4 text-sm text-rose-200">
                 <AlertCircle className="mt-0.5 h-4 w-4" />
                 <div>{error}</div>
               </div>
             ) : null}
+
+            {/* Entry stream + migrated pattern/signal insights (collapsible rail). */}
+            <div
+              className={`grid gap-6 ${
+                journalSidebarOpen
+                  ? "xl:grid-cols-[minmax(0,1fr)_380px]"
+                  : "xl:grid-cols-[minmax(0,1fr)_48px]"
+              }`}
+            >
+              <div className="min-w-0 space-y-6">
             {journal?.entries?.length ? (
-              <div className="grid items-start gap-4 lg:grid-cols-2">
+              <div className={`grid items-start gap-4 ${journalSidebarOpen ? "2xl:grid-cols-2" : "lg:grid-cols-2"}`}>
               {journal.entries.map((entry) => {
                 const draft = journalDrafts[entry.date] || {
                   journal_entry: entry.journal_entry || "",
@@ -7231,6 +7295,62 @@ export default function HomePage() {
                 </CardContent>
               </Card>
             )}
+              </div>
+
+              {/* Patterns & signals sidebar (migrated from /journal/patterns). */}
+              {journalSidebarOpen ? (
+                <aside className="min-w-0 xl:sticky xl:top-6 xl:self-start">
+                  <div className="mb-3 flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 text-sm font-semibold text-slate-200">
+                      <BarChart3 className="h-4 w-4 text-violet-300" />
+                      Patterns &amp; signals
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        aria-label="Open patterns in full page"
+                        title="Open patterns in full page"
+                        className="h-8 w-8 rounded-xl text-slate-400 hover:text-slate-100"
+                        onClick={() => router.push("/journal/patterns")}
+                      >
+                        <ExternalLink className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        aria-label="Collapse patterns sidebar"
+                        title="Collapse patterns sidebar"
+                        className="h-8 w-8 rounded-xl text-slate-400 hover:text-slate-100"
+                        onClick={() => setJournalSidebarOpen(false)}
+                      >
+                        <ChevronRight className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </div>
+                  <JournalPatternsPanel compact />
+                </aside>
+              ) : (
+                // Collapsed: a slim rail on the right edge with an expand control
+                // (wide screens only; elsewhere the "Patterns" button toggles it).
+                <div className="hidden xl:sticky xl:top-6 xl:flex xl:h-[calc(100vh-3rem)] xl:flex-col xl:items-center xl:gap-3 xl:self-start xl:rounded-[1.4rem] xl:border xl:border-white/8 xl:bg-[rgba(17,19,34,0.82)] xl:py-4 xl:shadow-[0_16px_44px_rgba(6,7,14,0.36)] xl:backdrop-blur-xl">
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    aria-label="Expand patterns sidebar"
+                    title="Expand patterns sidebar"
+                    className="h-8 w-8 rounded-xl text-slate-400 hover:text-slate-100"
+                    onClick={() => setJournalSidebarOpen(true)}
+                  >
+                    <ChevronLeft className="h-4 w-4" />
+                  </Button>
+                  <BarChart3 className="h-4 w-4 text-violet-300" />
+                  <span className="mt-1 text-[0.65rem] font-semibold uppercase tracking-[0.3em] text-slate-500 [writing-mode:vertical-rl]">
+                    Patterns
+                  </span>
+                </div>
+              )}
+            </div>
           </div>
         ) : isSchedulePlannerMode ? (
           <div className="grid gap-6 lg:grid-cols-[320px_360px_1fr]">

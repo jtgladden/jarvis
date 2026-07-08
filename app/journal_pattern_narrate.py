@@ -11,16 +11,19 @@ unavailable it degrades to a deterministic summary rather than failing the
 whole patterns request.
 """
 
+import hashlib
 import json
 import logging
 
 from openai import OpenAI
 
 from app.config import (
+    APP_DEFAULT_USER_ID,
     OPENAI_API_KEY,
     OPENAI_JOURNAL_NARRATE_MODEL,
     OPENAI_JOURNAL_NARRATE_TIMEOUT_SECONDS,
 )
+from app.journal_signals_store import get_cached_narration, set_cached_narration
 from app.schemas import (
     JournalPatternNarration,
     JournalPatternRecommendation,
@@ -197,3 +200,51 @@ def narrate_patterns(
         recommendations=recommendations,
         model=used_model,
     )
+
+
+def findings_fingerprint(report: JournalPatternsResponse) -> str:
+    """Stable hash of the deterministic findings that drive narration.
+
+    Excludes the always-changing ``generated_at`` and the ``narration`` itself, so
+    two reports with identical findings hash the same and reuse the cached prose.
+    """
+    data = report.model_dump()
+    data.pop("generated_at", None)
+    data.pop("narration", None)
+    data.pop("narration_cached", None)
+    return hashlib.sha256(
+        json.dumps(data, sort_keys=True, default=str).encode("utf-8")
+    ).hexdigest()
+
+
+def narrate_patterns_cached(
+    report: JournalPatternsResponse,
+    *,
+    window_days: int,
+    user_id: str = APP_DEFAULT_USER_ID,
+    refresh: bool = False,
+) -> tuple[JournalPatternNarration, bool]:
+    """Narration with caching. Returns ``(narration, was_cached)``.
+
+    Regenerates via the model only when the findings changed since the cached
+    prose was produced, or when ``refresh`` forces it — otherwise the same summary
+    is reused with no API call.
+    """
+    fingerprint = findings_fingerprint(report)
+    if not refresh:
+        cached = get_cached_narration(window_days, user_id=user_id)
+        if cached and cached["findings_hash"] == fingerprint:
+            try:
+                return JournalPatternNarration.model_validate_json(cached["narration_json"]), True
+            except Exception as exc:  # corrupt cache row — fall through to regenerate
+                logger.warning("[patterns] bad cached narration, regenerating: %s", exc)
+
+    narration = narrate_patterns(report)
+    # Don't cache a fallback: a transient model failure shouldn't get pinned as the
+    # answer — the next load should retry. (Fallbacks are marked "... (fallback)".)
+    if not narration.model.endswith("(fallback)"):
+        try:
+            set_cached_narration(window_days, fingerprint, narration.model_dump_json(), user_id=user_id)
+        except Exception as exc:
+            logger.warning("[patterns] failed to cache narration: %s", exc)
+    return narration, False

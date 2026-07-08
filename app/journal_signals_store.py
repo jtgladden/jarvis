@@ -81,6 +81,22 @@ def _ensure_schema(connection: sqlite3.Connection) -> None:
         )
         """
     )
+    # Cache of the Layer 3 LLM narration, keyed per (user, window). We only
+    # regenerate when the deterministic Layer 2 findings actually change, so
+    # loading the patterns page doesn't re-hit the model every time. The
+    # findings_hash is a fingerprint of the Layer 2 report (see the narrator).
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS narration_cache (
+            user_id TEXT NOT NULL,
+            window_days INTEGER NOT NULL,
+            findings_hash TEXT NOT NULL,
+            narration_json TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (user_id, window_days)
+        )
+        """
+    )
     # Analytics query by (user, slug, date-range); index the hot paths.
     connection.execute(
         "CREATE INDEX IF NOT EXISTS idx_habit_events_user_slug_date "
@@ -294,6 +310,49 @@ def list_extracted_dates(
             connection, "entry_signals", "entry_date", user_id, start_date, end_date
         )
     return [row["entry_date"] for row in rows]
+
+
+def get_cached_narration(
+    window_days: int, user_id: str = APP_DEFAULT_USER_ID
+) -> dict[str, str] | None:
+    """Return the cached narration for (user, window), or None if absent."""
+    with _db_lock, closing(_connect()) as connection:
+        _ensure_schema(connection)
+        row = connection.execute(
+            "SELECT findings_hash, narration_json, created_at FROM narration_cache "
+            "WHERE user_id = ? AND window_days = ?",
+            (user_id, window_days),
+        ).fetchone()
+    if row is None:
+        return None
+    return {
+        "findings_hash": row["findings_hash"],
+        "narration_json": row["narration_json"],
+        "created_at": row["created_at"],
+    }
+
+
+def set_cached_narration(
+    window_days: int,
+    findings_hash: str,
+    narration_json: str,
+    user_id: str = APP_DEFAULT_USER_ID,
+) -> None:
+    """Store/replace the narration for (user, window)."""
+    with _db_lock, closing(_connect()) as connection:
+        _ensure_schema(connection)
+        connection.execute(
+            """
+            INSERT INTO narration_cache (user_id, window_days, findings_hash, narration_json, created_at)
+            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(user_id, window_days) DO UPDATE SET
+                findings_hash = excluded.findings_hash,
+                narration_json = excluded.narration_json,
+                created_at = CURRENT_TIMESTAMP
+            """,
+            (user_id, window_days, findings_hash, narration_json),
+        )
+        connection.commit()
 
 
 def get_signals_status(user_id: str = APP_DEFAULT_USER_ID) -> dict[str, int]:
