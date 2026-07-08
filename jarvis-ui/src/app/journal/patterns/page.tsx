@@ -101,6 +101,14 @@ function fmtRate(w: WindowStat): string {
   return `${w.count}/${w.active_days} days (${pct}%)`;
 }
 
+// Habits/themes are identified by a normalized slug (e.g. "write", "call_family").
+// Display the slug, humanized — NOT the raw surface phrase from one occurrence,
+// which is an arbitrary (often event-specific) example and misleads as a title.
+function humanizeSlug(slug: string): string {
+  const s = slug.replace(/_/g, " ").trim();
+  return s ? s.charAt(0).toUpperCase() + s.slice(1) : slug;
+}
+
 function ProvenanceDates({ dates }: { dates: string[] }) {
   if (!dates.length) return null;
   return (
@@ -123,7 +131,7 @@ function TrendCard({ trend }: { trend: Trend }) {
   return (
     <div className="rounded-[1.2rem] border border-white/8 bg-[rgba(20,22,37,0.55)] p-4">
       <div className="flex items-center justify-between gap-2">
-        <div className="font-medium text-slate-100">{trend.label || trend.slug}</div>
+        <div className="font-medium text-slate-100">{humanizeSlug(trend.slug)}</div>
         <Badge className={`border ${STRENGTH_STYLES[trend.strength] || STRENGTH_STYLES.weak}`}>
           {trend.strength}
         </Badge>
@@ -147,7 +155,7 @@ function StreakCard({ streak }: { streak: Streak }) {
   return (
     <div className="rounded-[1.2rem] border border-white/8 bg-[rgba(20,22,37,0.55)] p-4">
       <div className="flex items-center justify-between gap-2">
-        <div className="font-medium text-slate-100">{streak.label || streak.slug}</div>
+        <div className="font-medium text-slate-100">{humanizeSlug(streak.slug)}</div>
         {streak.current_streak > 0 ? (
           <Badge className="border border-orange-300/30 bg-orange-400/15 text-orange-100">
             <Flame className="mr-1 h-3 w-3" />

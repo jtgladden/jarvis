@@ -52,10 +52,21 @@ _SYSTEM = (
 )
 
 
+def _humanize(slug: str) -> str:
+    """Readable name from a normalized slug (write -> Write, call_family -> Call family).
+
+    We deliberately do NOT use the free-text ``label`` here: it is one occurrence's
+    surface phrasing (e.g. "started writing 'Leafs of Faith'") and misrepresents an
+    aggregated habit. The slug is the stable identity.
+    """
+    s = slug.replace("_", " ").strip()
+    return (s[:1].upper() + s[1:]) if s else slug
+
+
 def _trend_payload(trend) -> dict:
     return {
         "slug": trend.slug,
-        "label": trend.label,
+        "name": _humanize(trend.slug),
         "direction": trend.direction,
         "strength": trend.strength,
         "prior_rate": round(trend.prior.rate, 3),
@@ -108,14 +119,14 @@ def _fallback(report: JournalPatternsResponse, model: str) -> JournalPatternNarr
     bits: list[str] = []
     if report.habits_dropping:
         bits.append(
-            "habits easing off: " + ", ".join(t.label or t.slug for t in report.habits_dropping[:3])
+            "habits easing off: " + ", ".join(_humanize(t.slug) for t in report.habits_dropping[:3])
         )
     if report.habits_emerging:
         bits.append(
-            "new habits taking hold: " + ", ".join(t.label or t.slug for t in report.habits_emerging[:3])
+            "new habits taking hold: " + ", ".join(_humanize(t.slug) for t in report.habits_emerging[:3])
         )
     if report.themes_rising:
-        bits.append("themes on the rise: " + ", ".join(t.label or t.slug for t in report.themes_rising[:3]))
+        bits.append("themes on the rise: " + ", ".join(_humanize(t.slug) for t in report.themes_rising[:3]))
     summary = (
         ("Here's what stood out — " + "; ".join(bits) + ". Read these as directional, not definitive.")
         if bits
