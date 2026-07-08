@@ -105,6 +105,24 @@ JOURNAL_IMPORT_PAGES_DIR = os.getenv("JOURNAL_IMPORT_PAGES_DIR", "data/journal_i
 # with the batch), these survive batch deletion so the journal keeps its scan.
 JOURNAL_ENTRY_PHOTOS_DIR = os.getenv("JOURNAL_ENTRY_PHOTOS_DIR", "data/journal_entry_photos")
 JOURNAL_IMPORT_DB = os.getenv("JOURNAL_IMPORT_DB", "data/journal_import.db")
+
+# --- Journal pattern-surfacing feature (3-layer: extract -> analytics -> narrate) ---
+# Layer 1 stores per-entry derived signals in a SEPARATE db from the source
+# journal so extraction never mutates the entries it reads.
+JOURNAL_SIGNALS_DB = os.getenv("JOURNAL_SIGNALS_DB", "data/journal_signals.db")
+# Layer 1 extraction model. A cheap structured-extraction model is plenty here;
+# gpt-5.4-mini goes through the Responses API (client.responses.create), same as
+# the photo pipeline. NOTE: Layer 1 is the ONLY layer that sends raw entry prose
+# to OpenAI — Layers 2 (analytics) and 3 (narration over aggregates) do not.
+OPENAI_JOURNAL_SIGNALS_MODEL = os.getenv("OPENAI_JOURNAL_SIGNALS_MODEL", "gpt-5.4-mini")
+OPENAI_JOURNAL_SIGNALS_TIMEOUT_SECONDS = float(os.getenv("OPENAI_JOURNAL_SIGNALS_TIMEOUT_SECONDS", "60"))
+# Layer 3 narration model: turns Layer 2's computed findings into prose. It sees
+# only the deterministic aggregates, never raw entries.
+OPENAI_JOURNAL_NARRATE_MODEL = os.getenv("OPENAI_JOURNAL_NARRATE_MODEL", "gpt-5.4-mini")
+OPENAI_JOURNAL_NARRATE_TIMEOUT_SECONDS = float(os.getenv("OPENAI_JOURNAL_NARRATE_TIMEOUT_SECONDS", "45"))
+# Default rolling-window length (days) for Layer 2 trend comparison. The analytics
+# compare the most-recent window against the window immediately before it.
+JOURNAL_PATTERN_WINDOW_DAYS = int(os.getenv("JOURNAL_PATTERN_WINDOW_DAYS", "30"))
 OPENAI_TRANSCRIPTION_MODEL = os.getenv("OPENAI_TRANSCRIPTION_MODEL", "gpt-4o-mini-transcribe")
 OPENAI_TTS_MODEL = os.getenv("OPENAI_TTS_MODEL", "gpt-4o-mini-tts")
 OPENAI_TTS_VOICE = os.getenv("OPENAI_TTS_VOICE", "cedar")

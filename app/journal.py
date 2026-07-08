@@ -1883,36 +1883,29 @@ def get_journal_day(entry_date: str) -> JournalDayEntry:
 def save_journal_day(
     entry_date: str,
     journal_entry: str,
-    accomplishments: str,
-    gratitude_entry: str,
     scripture_study: str,
-    spiritual_notes: str,
     photo_data_url: str | None,
     calendar_items: list[CalendarAgendaItem],
 ) -> JournalDayEntry:
     user_id = get_default_user_context().user_id
     existing_entry = list_journal_entries(user_id=user_id).get(entry_date, {})
     existing_links = _parse_study_links(existing_entry.get("study_links_json"))
-    notes_changed = (
-        str(existing_entry.get("scripture_study") or "") != scripture_study
-        or str(existing_entry.get("spiritual_notes") or "") != spiritual_notes
-    )
+    # "Study" is now a single section backed by scripture_study; spiritual_notes
+    # is retired, so study-link extraction reads scripture_study alone.
+    notes_changed = str(existing_entry.get("scripture_study") or "") != scripture_study
     study_links = _build_study_links_for_save(
         scripture_study,
-        spiritual_notes,
+        "",
         existing_links,
         notes_changed=notes_changed,
     )
     saved = upsert_journal_entry(
-        entry_date,
-        journal_entry,
-        accomplishments,
-        gratitude_entry,
-        scripture_study,
-        spiritual_notes,
-        json.dumps([item.model_dump() for item in study_links], ensure_ascii=True),
-        photo_data_url,
-        json.dumps([item.model_dump() for item in calendar_items], ensure_ascii=True),
+        entry_date=entry_date,
+        journal_entry=journal_entry,
+        scripture_study=scripture_study,
+        study_links_json=json.dumps([item.model_dump() for item in study_links], ensure_ascii=True),
+        photo_data_url=photo_data_url,
+        calendar_items_json=json.dumps([item.model_dump() for item in calendar_items], ensure_ascii=True),
         user_id=user_id,
     )
     day = date.fromisoformat(entry_date)
@@ -1938,25 +1931,20 @@ def save_journal_day(
 def extract_journal_day_citations(
     entry_date: str,
     journal_entry: str,
-    accomplishments: str,
-    gratitude_entry: str,
     scripture_study: str,
-    spiritual_notes: str,
     photo_data_url: str | None,
     calendar_items: list[CalendarAgendaItem],
 ) -> JournalDayEntry:
     user_id = get_default_user_context().user_id
-    study_links = _extract_study_links(scripture_study, spiritual_notes, include_likely=True)
+    # Study links come from the single "Study" section (scripture_study only).
+    study_links = _extract_study_links(scripture_study, "", include_likely=True)
     saved = upsert_journal_entry(
-        entry_date,
-        journal_entry,
-        accomplishments,
-        gratitude_entry,
-        scripture_study,
-        spiritual_notes,
-        json.dumps([item.model_dump() for item in study_links], ensure_ascii=True),
-        photo_data_url,
-        json.dumps([item.model_dump() for item in calendar_items], ensure_ascii=True),
+        entry_date=entry_date,
+        journal_entry=journal_entry,
+        scripture_study=scripture_study,
+        study_links_json=json.dumps([item.model_dump() for item in study_links], ensure_ascii=True),
+        photo_data_url=photo_data_url,
+        calendar_items_json=json.dumps([item.model_dump() for item in calendar_items], ensure_ascii=True),
         user_id=user_id,
     )
     day = date.fromisoformat(entry_date)

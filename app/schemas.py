@@ -406,11 +406,13 @@ class TaskListResponse(BaseModel):
 
 
 class JournalDayNoteUpdateRequest(BaseModel):
+    # The editor now captures only two author-filled sections: the journal entry
+    # and "Study" (scripture_study). The retired accomplishments/gratitude/
+    # spiritual_notes fields are no longer accepted here; any that an older client
+    # still sends are ignored (pydantic drops unknown fields) and their historical
+    # column values are preserved by upsert_journal_entry.
     journal_entry: str = ""
-    accomplishments: str = ""
-    gratitude_entry: str = ""
     scripture_study: str = ""
-    spiritual_notes: str = ""
     photo_data_url: Optional[str] = None
     calendar_items: List[CalendarAgendaItem] = Field(default_factory=list)
 
@@ -1418,3 +1420,146 @@ class AliasDefaultRequest(BaseModel):
 
 class AliasDefaultClearRequest(BaseModel):
     alias: str
+
+
+# ---------------------------------------------------------------------------
+# Journal pattern-surfacing feature (3 layers)
+# ---------------------------------------------------------------------------
+# Layer 1 — per-entry structured extraction output. These are the validated
+# shapes the LLM must produce; the extractor coerces the raw JSON into them.
+
+MoodLabel = Literal["very_low", "low", "neutral", "high", "very_high"]
+
+
+class HabitMention(BaseModel):
+    slug: str  # normalized canonical id, e.g. "run", "read", "pray"
+    label: str = ""  # surface form as written, e.g. "read for an hour before bed"
+    evidence: str = ""  # short quote grounding the mention
+
+
+class ThemeTag(BaseModel):
+    slug: str  # normalized topic id, e.g. "work_stress", "family"
+    label: str = ""
+
+
+class PersonMention(BaseModel):
+    name: str
+
+
+class EventMention(BaseModel):
+    text: str
+
+
+class EntrySignalsExtract(BaseModel):
+    """The full per-entry record Layer 1 pulls from a single journal entry."""
+
+    mood_score: int = 0  # -2 (very low) .. +2 (very high)
+    mood_label: MoodLabel = "neutral"
+    habits: List[HabitMention] = Field(default_factory=list)
+    themes: List[ThemeTag] = Field(default_factory=list)
+    people: List[PersonMention] = Field(default_factory=list)
+    events: List[EventMention] = Field(default_factory=list)
+
+
+# --- Layer 1 driver / status responses --------------------------------------
+
+class SignalExtractionResponse(BaseModel):
+    total_candidates: int = 0  # entries with content in range
+    processed: int = 0  # entries (re)extracted this run
+    skipped_up_to_date: int = 0  # already-current extractions left alone
+    failed: int = 0  # entries whose extraction errored
+    extraction_version: int = 0
+    model: str = ""
+    dry_run: bool = False
+
+
+class SignalsStatusResponse(BaseModel):
+    extracted_entries: int = 0
+    distinct_habits: int = 0
+    distinct_themes: int = 0
+    extraction_version: int = 0
+    model: str = ""
+
+
+# --- Layer 2 — deterministic analytics output -------------------------------
+# Every finding carries provenance (the exact entry dates it is based on) and a
+# `strength` that is honest about small samples.
+
+TrendStrength = Literal["strong", "moderate", "weak"]
+
+
+class WindowStat(BaseModel):
+    start: str  # inclusive ISO date
+    end: str  # inclusive ISO date
+    active_days: int = 0  # journaled (extracted) days in the window
+    count: int = 0  # days within the window that mention the item
+    rate: float = 0.0  # count / active_days (0 when no active days)
+
+
+class HabitTrend(BaseModel):
+    slug: str
+    label: str = ""
+    direction: Literal["dropping", "emerging", "rising", "falling", "steady"]
+    prior: WindowStat
+    recent: WindowStat
+    delta_rate: float = 0.0  # recent.rate - prior.rate
+    strength: TrendStrength = "weak"
+    sample_size: int = 0  # total mention-days across both windows
+    provenance_dates: List[str] = Field(default_factory=list)
+
+
+class HabitStreak(BaseModel):
+    slug: str
+    label: str = ""
+    current_streak: int = 0  # consecutive most-recent journaled days with the habit
+    longest_streak: int = 0
+    days_since_last: int | None = None  # calendar days from last occurrence to as_of
+    last_date: Optional[str] = None
+    total_occurrences: int = 0
+    provenance_dates: List[str] = Field(default_factory=list)
+
+
+class ThemeTrend(BaseModel):
+    slug: str
+    label: str = ""
+    direction: Literal["rising", "falling", "steady"]
+    prior: WindowStat
+    recent: WindowStat
+    delta_rate: float = 0.0
+    strength: TrendStrength = "weak"
+    sample_size: int = 0
+    provenance_dates: List[str] = Field(default_factory=list)
+
+
+class JournalPatternsResponse(BaseModel):
+    generated_at: str
+    as_of: str  # the date the windows are anchored on (inclusive end of "recent")
+    window_days: int
+    recent_window: WindowStat  # coverage of the recent window (active_days etc.)
+    prior_window: WindowStat
+    habits_dropping: List[HabitTrend] = Field(default_factory=list)
+    habits_emerging: List[HabitTrend] = Field(default_factory=list)
+    habit_streaks: List[HabitStreak] = Field(default_factory=list)
+    themes_rising: List[ThemeTrend] = Field(default_factory=list)
+    themes_falling: List[ThemeTrend] = Field(default_factory=list)
+    caveats: List[str] = Field(default_factory=list)  # honesty notes (low coverage, etc.)
+    # Layer 3 (optional): natural-language narration of the findings above. Null
+    # unless narration was requested. The narrator sees ONLY the findings, never
+    # raw entry text.
+    narration: Optional["JournalPatternNarration"] = None
+
+
+# --- Layer 3 — narration over Layer 2 findings ------------------------------
+
+class JournalPatternRecommendation(BaseModel):
+    habit_slug: str = ""  # which finding this ties back to (provenance)
+    text: str
+
+
+class JournalPatternNarration(BaseModel):
+    summary: str = ""
+    recommendations: List[JournalPatternRecommendation] = Field(default_factory=list)
+    model: str = ""
+
+
+JournalPatternsResponse.model_rebuild()

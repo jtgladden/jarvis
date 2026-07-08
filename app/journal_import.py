@@ -629,23 +629,20 @@ def commit_batch(
         )
 
         # Preserve any existing columns; only the target column receives the scan.
+        # The scan target is always journal_entry or scripture_study (never a
+        # retired column), and upsert_journal_entry now leaves the retired columns
+        # untouched on update, so we only carry these two forward here.
         base = existing.get(entry_date, {})
         fields = {
             "journal_entry": str(base.get("journal_entry") or ""),
-            "accomplishments": str(base.get("accomplishments") or ""),
-            "gratitude_entry": str(base.get("gratitude_entry") or ""),
             "scripture_study": str(base.get("scripture_study") or ""),
-            "spiritual_notes": str(base.get("spiritual_notes") or ""),
         }
         fields[target_column] = body
 
         upsert_journal_entry(
             entry_date=entry_date,
             journal_entry=fields["journal_entry"],
-            accomplishments=fields["accomplishments"],
-            gratitude_entry=fields["gratitude_entry"],
             scripture_study=fields["scripture_study"],
-            spiritual_notes=fields["spiritual_notes"],
             study_links_json=str(base.get("study_links_json") or "[]"),
             photo_data_url=base.get("photo_data_url"),
             calendar_items_json=str(base.get("calendar_items_json") or "[]"),

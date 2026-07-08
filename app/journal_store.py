@@ -510,31 +510,34 @@ def get_oldest_journal_entry_date(user_id: str = APP_DEFAULT_USER_ID) -> str | N
 def upsert_journal_entry(
     entry_date: str,
     journal_entry: str,
-    accomplishments: str,
-    gratitude_entry: str,
     scripture_study: str,
-    spiritual_notes: str,
     study_links_json: str,
     photo_data_url: str | None,
     calendar_items_json: str,
     user_id: str = APP_DEFAULT_USER_ID,
 ) -> dict[str, str]:
+    """Write the two author-filled sections for a day: journal entry + study.
+
+    As of the two-section redesign, the editor only captures ``journal_entry``
+    and ``scripture_study`` (the "Study" section). The retired columns
+    ``accomplishments``, ``gratitude_entry`` and ``spiritual_notes`` are
+    intentionally NOT written here: on INSERT they fall back to their ``''``
+    schema defaults, and on UPDATE they are omitted from the SET clause so any
+    historical values authored before the redesign are preserved untouched.
+    """
     with _db_lock, closing(_connect()) as connection:
         _ensure_journal_schema(connection)
         _ensure_journal_columns(connection)
         connection.execute(
             """
             INSERT INTO journal_entries (
-                user_id, entry_date, calendar_summary, journal_entry, accomplishments, gratitude_entry,
-                scripture_study, spiritual_notes, study_links_json, photo_data_url, calendar_items_json, updated_at
+                user_id, entry_date, calendar_summary, journal_entry,
+                scripture_study, study_links_json, photo_data_url, calendar_items_json, updated_at
             )
-            VALUES (?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            VALUES (?, ?, '', ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(user_id, entry_date) DO UPDATE SET
                 journal_entry = excluded.journal_entry,
-                accomplishments = excluded.accomplishments,
-                gratitude_entry = excluded.gratitude_entry,
                 scripture_study = excluded.scripture_study,
-                spiritual_notes = excluded.spiritual_notes,
                 study_links_json = excluded.study_links_json,
                 photo_data_url = excluded.photo_data_url,
                 calendar_items_json = excluded.calendar_items_json,
@@ -544,10 +547,7 @@ def upsert_journal_entry(
                 user_id,
                 entry_date,
                 journal_entry,
-                accomplishments,
-                gratitude_entry,
                 scripture_study,
-                spiritual_notes,
                 study_links_json,
                 photo_data_url,
                 calendar_items_json,

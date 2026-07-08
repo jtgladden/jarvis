@@ -27,6 +27,12 @@ from app.food_log_store import init_food_log_store
 from app.job_alerts import clear_email_parse_cache, get_job_alerts_cached, invalidate_job_alerts_cache, run_job_alerts_job
 from app.journal import extract_journal_day_citations, get_journal, get_journal_day, get_journal_entry_dates, save_journal_day
 from app.journal_store import init_journal_store
+from app.journal_signal_extract import EXTRACTION_VERSION, run_extraction
+from app.journal_signals_store import get_signals_status, init_journal_signals_store
+from app.journal_patterns import compute_patterns
+from app.journal_pattern_narrate import narrate_patterns
+from app.config import JOURNAL_PATTERN_WINDOW_DAYS, OPENAI_JOURNAL_SIGNALS_MODEL
+from app.schemas import JournalPatternsResponse, SignalExtractionResponse, SignalsStatusResponse
 from app.journal_scan import extract_journal_entries
 from app.journal_import import (
     analyze_batch,
@@ -244,6 +250,7 @@ def start_background_new_mail_sorter() -> None:
     init_classification_guidance()
     init_journal_store()
     init_journal_import_store()
+    init_journal_signals_store()
     init_task_store()
     init_user_rules_store()
     init_health_store()
@@ -695,6 +702,50 @@ def journal_entry_dates():
     return get_journal_entry_dates()
 
 
+# --- Pattern-surfacing feature (Layers 1-3). Literal paths, declared before
+# /journal/{entry_date} so they are not captured as a date param. ------------
+@api.post("/journal/signals/extract", response_model=SignalExtractionResponse)
+def journal_signals_extract(
+    force: bool = Query(default=False),
+    limit: int | None = Query(default=None, ge=1),
+    start_date: str | None = Query(default=None),
+    end_date: str | None = Query(default=None),
+    dry_run: bool = Query(default=False),
+):
+    """Layer 1: (re)extract per-entry signals. Idempotent — only unextracted or
+    stale entries are processed. `limit` caps API calls for a first backfill;
+    `dry_run` reports what would run without calling the model."""
+    return run_extraction(
+        force=force, limit=limit, start_date=start_date, end_date=end_date, dry_run=dry_run
+    )
+
+
+@api.get("/journal/signals/status", response_model=SignalsStatusResponse)
+def journal_signals_status():
+    status = get_signals_status(user_id=get_default_user_context().user_id)
+    return SignalsStatusResponse(
+        extracted_entries=status["extracted_entries"],
+        distinct_habits=status["distinct_habits"],
+        distinct_themes=status["distinct_themes"],
+        extraction_version=EXTRACTION_VERSION,
+        model=OPENAI_JOURNAL_SIGNALS_MODEL,
+    )
+
+
+@api.get("/journal/patterns", response_model=JournalPatternsResponse)
+def journal_patterns(
+    window_days: int = Query(default=JOURNAL_PATTERN_WINDOW_DAYS, ge=1, le=365),
+    as_of: str | None = Query(default=None),
+    narrate: bool = Query(default=False),
+):
+    """Layer 2 (always) + Layer 3 (when narrate=true). Layer 2 is deterministic;
+    narration is phrased only from Layer 2's computed findings."""
+    report = compute_patterns(window_days=window_days, as_of=as_of)
+    if narrate:
+        report.narration = narrate_patterns(report)
+    return report
+
+
 @api.get("/journal/{entry_date}/photo/{index}")
 def get_journal_entry_photo(entry_date: str, index: int):
     """Serve a committed entry's scanned source page image by index."""
@@ -715,10 +766,7 @@ def journal_save(entry_date: str, payload: JournalDayNoteUpdateRequest):
     return save_journal_day(
         entry_date=entry_date,
         journal_entry=payload.journal_entry,
-        accomplishments=payload.accomplishments,
-        gratitude_entry=payload.gratitude_entry,
         scripture_study=payload.scripture_study,
-        spiritual_notes=payload.spiritual_notes,
         photo_data_url=payload.photo_data_url,
         calendar_items=payload.calendar_items,
     )
@@ -729,10 +777,7 @@ def journal_extract_citations(entry_date: str, payload: JournalDayNoteUpdateRequ
     return extract_journal_day_citations(
         entry_date=entry_date,
         journal_entry=payload.journal_entry,
-        accomplishments=payload.accomplishments,
-        gratitude_entry=payload.gratitude_entry,
         scripture_study=payload.scripture_study,
-        spiritual_notes=payload.spiritual_notes,
         photo_data_url=payload.photo_data_url,
         calendar_items=payload.calendar_items,
     )

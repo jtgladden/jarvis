@@ -8,6 +8,7 @@ import {
   AlertCircle,
   Activity,
   Archive,
+  BarChart3,
   BookOpen,
   Briefcase,
   CalendarDays,
@@ -6572,6 +6573,15 @@ export default function HomePage() {
                     >
                       <LayoutGrid className="mr-1.5 h-3.5 w-3.5" />
                       Heatmap
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="rounded-2xl"
+                      onClick={() => router.push("/journal/patterns")}
+                    >
+                      <BarChart3 className="mr-1.5 h-3.5 w-3.5" />
+                      Patterns
                     </Button>
                   </div>
                 </div>
