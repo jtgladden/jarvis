@@ -489,6 +489,16 @@ class JournalImagesExtractRequest(BaseModel):
     scan_target: Literal["scripture", "journal"] = "journal"
 
 
+class JournalSourcePagesRequest(BaseModel):
+    """Attach the scanned source page images an entry was transcribed from.
+
+    Persists the pages into permanent per-entry storage (same shape the web
+    batch commit uses) so a phone-scanned entry can show its source page later.
+    """
+
+    pages: List[str] = Field(default_factory=list)  # ordered base64 JPEG page images
+
+
 class JournalScanStageRequest(BaseModel):
     """Extract one uploaded image/PDF and stage the results for review.
 

@@ -233,19 +233,46 @@ struct JarvisAPIClient {
         try await get(JournalDayEntry.self, baseURL: baseURL, path: "/journal/\(date)")
     }
 
-    static func extractJournalFromImage(baseURL: String, imageBase64: String, mediaType: String = "image/jpeg", scanTarget: String = "journal") async throws -> JournalImageExtractResponse {
-        struct Body: Encodable { let image_base64: String; let media_type: String; let scan_target: String }
-        let body = Body(image_base64: imageBase64, media_type: mediaType, scan_target: scanTarget)
-        var request = URLRequest(url: try url(baseURL, path: "/journal/extract-from-image"))
+    /// Extract one or more ORDERED journal pages in a single call.
+    ///
+    /// Multiple pages hit `/journal/extract-from-images`, which engages the
+    /// server's continuation logic: a page whose top has no date heading is
+    /// attached to the still-open entry from the previous page (rather than
+    /// starting a new, undated entry). A single page is handled the same way —
+    /// the batch endpoint treats a 1-page list as the single-page case.
+    static func extractJournalFromImages(baseURL: String, pagesBase64: [String], mediaType: String = "image/jpeg", scanTarget: String = "journal") async throws -> JournalImageExtractResponse {
+        struct Body: Encodable { let pages: [String]; let media_type: String; let scan_target: String }
+        let body = Body(pages: pagesBase64, media_type: mediaType, scan_target: scanTarget)
+        var request = URLRequest(url: try url(baseURL, path: "/journal/extract-from-images"))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONEncoder().encode(body)
-        request.timeoutInterval = 180  // GPT-4o vision on a full page can take 60–90s
+        // Vision transcription runs per page, so scale the budget with page count.
+        request.timeoutInterval = max(180, Double(pagesBase64.count) * 90)
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
             throw APIError.badResponse((response as? HTTPURLResponse)?.statusCode ?? 0)
         }
         do { return try decoder.decode(JournalImageExtractResponse.self, from: data) }
+        catch { throw APIError.decoding(error) }
+    }
+
+    /// Attach the scanned source page image(s) an entry was transcribed from.
+    /// Call after saving the entry text; the pages are stored server-side and
+    /// served back via the entry's `source_photos` URLs.
+    @discardableResult
+    static func saveJournalSourcePages(baseURL: String, date: String, pagesBase64: [String]) async throws -> JournalDayEntry {
+        struct Body: Encodable { let pages: [String] }
+        var request = URLRequest(url: try url(baseURL, path: "/journal/\(date)/source-pages"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(Body(pages: pagesBase64))
+        request.timeoutInterval = 120
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+            throw APIError.badResponse((response as? HTTPURLResponse)?.statusCode ?? 0)
+        }
+        do { return try decoder.decode(JournalDayEntry.self, from: data) }
         catch { throw APIError.decoding(error) }
     }
 

@@ -72,11 +72,34 @@ _MONTHS = {
     "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
     "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
 }
-_NUMERIC_DATE_RE = re.compile(r"(\d{1,2})\s*[/\-]\s*(\d{1,2})(?:\s*[/\-]\s*(\d{2,4}))?")
-_MONTH_NAME_RE = re.compile(
-    r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})(?:st|nd|rd|th)?(?:,?\s*(\d{4}))?",
+_MONTH_TOKEN = r"(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?"
+# `Month D`, `Month Dst, YYYY`. The `(?!\d)` after the day stops us swallowing
+# the leading digits of a bare `Month YYYY` (e.g. "May 2026") as a day.
+_MONTH_FIRST_RE = re.compile(
+    rf"\b{_MONTH_TOKEN}\s+(\d{{1,2}})(?!\d)(?:st|nd|rd|th)?(?:,?\s*(\d{{4}}))?",
     re.IGNORECASE,
 )
+# Day-first: `31 May`, `31st May 2026`, `9th of July`.
+_DAY_FIRST_RE = re.compile(
+    rf"\b(\d{{1,2}})(?!\d)(?:st|nd|rd|th)?\s+(?:of\s+)?{_MONTH_TOKEN}(?:,?\s*(\d{{4}}))?",
+    re.IGNORECASE,
+)
+# Numeric dates with `/`, `-`, or `.` separators, month-first (M/D[/Y]) or
+# ISO year-first (YYYY-M-D).
+_NUMERIC_DATE_RE = re.compile(
+    r"\b(\d{1,4})\s*[/\-.]\s*(\d{1,2})(?:\s*[/\-.]\s*(\d{1,4}))?\b"
+)
+
+
+def _ymd(month: int, day: int, year: str | int | None) -> str | None:
+    """Assemble YYYY-MM-DD (year given) or MM-DD (no year) if month/day are sane."""
+    if not (1 <= month <= 12 and 1 <= day <= 31):
+        return None
+    if year in (None, ""):
+        return f"{month:02d}-{day:02d}"
+    yi = int(year)
+    yi = 2000 + yi if yi < 100 else yi  # two-digit year -> 20xx
+    return f"{yi:04d}-{month:02d}-{day:02d}"
 
 
 def _normalize_detected(value: str) -> str | None:
@@ -84,50 +107,89 @@ def _normalize_detected(value: str) -> str | None:
     v = (value or "").strip()
     m = re.match(r"^(\d{4})-(\d{1,2})-(\d{1,2})$", v)
     if m:
-        y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
-        return f"{y:04d}-{mo:02d}-{d:02d}" if 1 <= mo <= 12 and 1 <= d <= 31 else None
+        return _ymd(int(m.group(2)), int(m.group(3)), m.group(1))
     m = re.match(r"^(\d{1,2})-(\d{1,2})$", v)
     if m:
-        mo, d = int(m.group(1)), int(m.group(2))
-        return f"{mo:02d}-{d:02d}" if 1 <= mo <= 12 and 1 <= d <= 31 else None
+        return _ymd(int(m.group(1)), int(m.group(2)), None)
     return None
+
+
+def _from_month_name(text: str) -> str | None:
+    m = _MONTH_FIRST_RE.search(text)
+    if m:
+        month = _MONTHS.get(m.group(1)[:3].lower())
+        if month:
+            return _ymd(month, int(m.group(2)), m.group(3))
+    m = _DAY_FIRST_RE.search(text)
+    if m:
+        month = _MONTHS.get(m.group(2)[:3].lower())
+        if month:
+            return _ymd(month, int(m.group(1)), m.group(3))
+    return None
+
+
+def _from_numeric(text: str) -> str | None:
+    m = _NUMERIC_DATE_RE.search(text)
+    if not m:
+        return None
+    first, second, third = m.group(1), m.group(2), m.group(3)
+    if len(first) == 4:  # ISO year-first YYYY-MM-DD (day is required)
+        return _ymd(int(second), int(third), first) if third else None
+    return _ymd(int(first), int(second), third)  # month-first M/D[/Y]
 
 
 def _date_from_heading(date_text: str) -> str | None:
     """Parse a written date heading into YYYY-MM-DD (year present) or MM-DD.
 
-    Handles 'Feb 24th', 'Sat. March 2', 'Tuesday, May 31', 'May 31, 2024',
-    '5/31', '5/31/26', '05-31-2024', etc. Deterministic backstop for when the
-    model captures the heading in date_text but doesn't fill detected_date.
+    Handles month names in either order ('Feb 24th', 'Sat. March 2',
+    'Tuesday, May 31', 'May 31, 2024', '31 May 2026', '9th of July') and numeric
+    dates with `/`, `-`, or `.` separators in month-first or ISO order ('5/31',
+    '5.31.26', '05-31-2024', '2026-05-31'). Deterministic backstop for when the
+    model captures the heading but doesn't fill detected_date.
     """
     text = (date_text or "").strip().lower()
     if not text:
         return None
-    m = _MONTH_NAME_RE.search(text)
-    if m:
-        month = _MONTHS.get(m.group(1)[:3].lower())
-        day = int(m.group(2))
-        year = m.group(3)
-        if month and 1 <= day <= 31:
-            if year:
-                return f"{int(year):04d}-{month:02d}-{day:02d}"
-            return f"{month:02d}-{day:02d}"
-    m = _NUMERIC_DATE_RE.search(text)
-    if m:
-        month, day = int(m.group(1)), int(m.group(2))
-        year = m.group(3)
-        if 1 <= month <= 12 and 1 <= day <= 31:
-            if year:
-                yi = int(year)
-                yi = 2000 + yi if yi < 100 else yi
-                return f"{yi:04d}-{month:02d}-{day:02d}"
-            return f"{month:02d}-{day:02d}"
-    return None
+    return _from_month_name(text) or _from_numeric(text)
 
 
-def _resolve_detected(detected_raw: str | None, date_text: str | None) -> str | None:
-    """detected_date, normalized — falling back to parsing the written heading."""
-    return _normalize_detected(detected_raw or "") or _date_from_heading(date_text or "")
+_WEEKDAYS = (
+    "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
+    "mon", "tues", "tue", "weds", "wed", "thurs", "thur", "thu", "fri", "sat", "sun",
+)
+
+
+def _date_from_leading_line(text: str) -> str | None:
+    """Last-resort: a date the model left as the entry's first line instead of
+    in date_text. Guarded so we only accept a line that is essentially JUST a
+    date heading (optionally a weekday) — not prose that happens to mention a
+    date — so we never misdate real journal text.
+    """
+    first = next((ln.strip() for ln in (text or "").splitlines() if ln.strip()), "")
+    if not first or len(first) > 35:
+        return None
+    parsed = _date_from_heading(first)
+    if not parsed:
+        return None
+    residue = re.sub(r"[0-9]", "", first.lower())
+    for word in (*_WEEKDAYS, *_MONTHS, "st", "nd", "rd", "th", "of"):
+        residue = residue.replace(word, "")
+    residue = re.sub(r"[^a-z]", "", residue)  # drop punctuation/whitespace
+    return parsed if len(residue) <= 3 else None
+
+
+def _resolve_detected(
+    detected_raw: str | None, date_text: str | None, text: str | None = None
+) -> str | None:
+    """detected_date, normalized — falling back to parsing the raw value (in case
+    the model emitted a non-canonical form), then the written heading, then a
+    date the model left as the entry's leading line."""
+    return (
+        _normalize_detected(detected_raw or "")
+        or _date_from_heading(detected_raw or "")
+        or _date_from_heading(date_text or "")
+        or _date_from_leading_line(text or "")
+    )
 
 _JSON_SHAPE = (
     "Return ONLY valid JSON with this exact shape:\n"
@@ -405,8 +467,9 @@ def extract_journal_entries(
         entries.append(
             JournalDayExtract(
                 # Normalize the model's date; if it left it blank but read a
-                # heading, parse the heading ourselves (Feb 24th -> 02-24).
-                detected_date=_resolve_detected(item.get("detected_date"), date_text),
+                # heading, parse the heading ourselves (Feb 24th -> 02-24), and
+                # as a last resort a date it dropped into the entry's first line.
+                detected_date=_resolve_detected(item.get("detected_date"), date_text, text),
                 date_text=date_text,
                 text=text,
                 start_page=start_page,
