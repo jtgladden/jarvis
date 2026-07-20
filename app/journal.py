@@ -16,6 +16,8 @@ from openai import OpenAI
 from app.calendar_client import list_events_between
 from app.config import LOCAL_TIMEZONE, OPENAI_API_KEY, OPENAI_PLANNING_MAX_TOKENS, OPENAI_PLANNING_MODEL, OPENAI_PLANNING_TIMEOUT_SECONDS
 from app.journal_store import (
+    UNSET,
+    _Unset,
     count_journal_entries,
     get_oldest_journal_entry_date,
     list_journal_entries,
@@ -1870,7 +1872,11 @@ def get_journal_day(entry_date: str) -> JournalDayEntry:
     user_id = get_default_user_context().user_id
     day = date.fromisoformat(entry_date)
     today_local = datetime.now(LOCAL_TIMEZONE).date()
-    saved_entries = list_journal_entries(user_id=user_id)
+    # Single-day view: bound the read to this date so the journal-api fetch
+    # doesn't pull the whole archive to render one day.
+    saved_entries = list_journal_entries(
+        user_id=user_id, start=day.isoformat(), end=day.isoformat()
+    )
     entries = _build_journal_entries(
         day_keys=[day.isoformat()],
         saved_entries=saved_entries,
@@ -1884,8 +1890,8 @@ def save_journal_day(
     entry_date: str,
     journal_entry: str,
     scripture_study: str,
-    photo_data_url: str | None,
-    calendar_items: list[CalendarAgendaItem],
+    photo_data_url: str | None | _Unset = UNSET,
+    calendar_items: list[CalendarAgendaItem] | _Unset = UNSET,
 ) -> JournalDayEntry:
     user_id = get_default_user_context().user_id
     existing_entry = list_journal_entries(user_id=user_id).get(entry_date, {})
@@ -1905,15 +1911,24 @@ def save_journal_day(
         scripture_study=scripture_study,
         study_links_json=json.dumps([item.model_dump() for item in study_links], ensure_ascii=True),
         photo_data_url=photo_data_url,
-        calendar_items_json=json.dumps([item.model_dump() for item in calendar_items], ensure_ascii=True),
+        calendar_items_json=UNSET
+        if isinstance(calendar_items, _Unset)
+        else json.dumps([item.model_dump() for item in calendar_items], ensure_ascii=True),
         user_id=user_id,
     )
     day = date.fromisoformat(entry_date)
+    # A caller that omitted calendar_items has none to summarise; fall back to
+    # whatever the day already had stored.
+    summary_items = (
+        json.loads(saved.get("calendar_items_json") or "[]")
+        if isinstance(calendar_items, _Unset)
+        else [item.model_dump() for item in calendar_items]
+    )
     return JournalDayEntry(
         date=entry_date,
         date_label=_format_date_label(day),
         calendar_summary=str(saved.get("calendar_summary") or "").strip()
-        or _fallback_calendar_summary([item.model_dump() for item in calendar_items]),
+        or _fallback_calendar_summary(summary_items),
         journal_entry=saved["journal_entry"],
         accomplishments=saved["accomplishments"],
         gratitude_entry=saved["gratitude_entry"],
@@ -1932,8 +1947,8 @@ def extract_journal_day_citations(
     entry_date: str,
     journal_entry: str,
     scripture_study: str,
-    photo_data_url: str | None,
-    calendar_items: list[CalendarAgendaItem],
+    photo_data_url: str | None | _Unset = UNSET,
+    calendar_items: list[CalendarAgendaItem] | _Unset = UNSET,
 ) -> JournalDayEntry:
     user_id = get_default_user_context().user_id
     # Study links come from the single "Study" section (scripture_study only).
@@ -1944,15 +1959,22 @@ def extract_journal_day_citations(
         scripture_study=scripture_study,
         study_links_json=json.dumps([item.model_dump() for item in study_links], ensure_ascii=True),
         photo_data_url=photo_data_url,
-        calendar_items_json=json.dumps([item.model_dump() for item in calendar_items], ensure_ascii=True),
+        calendar_items_json=UNSET
+        if isinstance(calendar_items, _Unset)
+        else json.dumps([item.model_dump() for item in calendar_items], ensure_ascii=True),
         user_id=user_id,
     )
     day = date.fromisoformat(entry_date)
+    summary_items = (
+        json.loads(saved.get("calendar_items_json") or "[]")
+        if isinstance(calendar_items, _Unset)
+        else [item.model_dump() for item in calendar_items]
+    )
     return JournalDayEntry(
         date=entry_date,
         date_label=_format_date_label(day),
         calendar_summary=str(saved.get("calendar_summary") or "").strip()
-        or _fallback_calendar_summary([item.model_dump() for item in calendar_items]),
+        or _fallback_calendar_summary(summary_items),
         journal_entry=saved["journal_entry"],
         accomplishments=saved["accomplishments"],
         gratitude_entry=saved["gratitude_entry"],

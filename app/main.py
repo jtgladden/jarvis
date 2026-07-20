@@ -770,14 +770,29 @@ def journal_day(entry_date: str):
     return get_journal_day(entry_date)
 
 
+def _journal_owned_fields(payload: JournalDayNoteUpdateRequest) -> dict:
+    """Pass through only the optional fields the client actually sent.
+
+    A field the request omitted stays UNSET, so the stored value survives. This
+    keeps a prose-only client (the iOS app sends no photo or agenda) from
+    blanking the day's photo and calendar items on every save.
+    """
+    provided = payload.model_fields_set
+    owned = {}
+    if "photo_data_url" in provided:
+        owned["photo_data_url"] = payload.photo_data_url
+    if "calendar_items" in provided:
+        owned["calendar_items"] = payload.calendar_items
+    return owned
+
+
 @api.put("/journal/{entry_date}", response_model=JournalDayEntry)
 def journal_save(entry_date: str, payload: JournalDayNoteUpdateRequest):
     return save_journal_day(
         entry_date=entry_date,
         journal_entry=payload.journal_entry,
         scripture_study=payload.scripture_study,
-        photo_data_url=payload.photo_data_url,
-        calendar_items=payload.calendar_items,
+        **_journal_owned_fields(payload),
     )
 
 
@@ -787,8 +802,7 @@ def journal_extract_citations(entry_date: str, payload: JournalDayNoteUpdateRequ
         entry_date=entry_date,
         journal_entry=payload.journal_entry,
         scripture_study=payload.scripture_study,
-        photo_data_url=payload.photo_data_url,
-        calendar_items=payload.calendar_items,
+        **_journal_owned_fields(payload),
     )
 
 

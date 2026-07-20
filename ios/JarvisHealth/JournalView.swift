@@ -122,6 +122,12 @@ final class JournalViewModel: ObservableObject {
     @Published var isSaving = false
     @Published var error: String?
     @Published var selectedDate = Date()
+    /// True when the last load(day) failed. Saving is blocked while set: the
+    /// text fields are cleared on a failed load (so the previous day's text is
+    /// never attributed to this one), and journal prose now lives in the
+    /// journal-api service, where a save of those empty fields would replace
+    /// the real entry rather than merge with it.
+    @Published var loadFailed = false
 
     @Published var journalText = ""
     @Published var gratitudeText = ""
@@ -154,16 +160,26 @@ final class JournalViewModel: ObservableObject {
         do {
             let e = try await JarvisAPIClient.getJournalEntry(baseURL: baseURL, date: isoDate)
             populateFields(from: e)
+            loadFailed = false
         } catch {
+            // Clear the fields so the previously-loaded day's text can't be
+            // saved onto this date, and flag the failure so save() refuses --
+            // writing these empties would erase the day's real entry.
             entry = nil
             journalText = ""; gratitudeText = ""; accomplishmentsText = ""
             scriptureText = ""; spiritualText = ""
+            loadFailed = true
+            self.error = "Couldn't load this day (\(error.localizedDescription)). Saving is disabled until it loads."
         }
         await loadPhotoOfTheDay()
         isLoading = false
     }
 
     func save(baseURL: String) async {
+        guard !loadFailed else {
+            error = "Not saving: this day never loaded, so saving would overwrite it with empty text."
+            return
+        }
         isSaving = true; error = nil
         do {
             let updated = try await JarvisAPIClient.saveJournalEntry(
@@ -270,16 +286,25 @@ final class JournalViewModel: ObservableObject {
         for entry in toSave {
             let dateStr = isoFmt.string(from: entry.date)
             do {
-                let existing = (try? await JarvisAPIClient.getJournalEntry(baseURL: baseURL, date: dateStr))
-                let scripture = scanTarget == .scripture ? entry.text : (existing?.scripture_study ?? "")
-                let journal   = scanTarget == .journal   ? entry.text : (existing?.journal_entry ?? "")
+                // The save replaces BOTH sections, so the untouched one has to be
+                // carried over from the stored entry. A failed read must abort this
+                // date -- substituting "" would erase the section we aren't scanning.
+                let existing: JournalDayEntry
+                do {
+                    existing = try await JarvisAPIClient.getJournalEntry(baseURL: baseURL, date: dateStr)
+                } catch {
+                    errors.append("\(dateStr): couldn't read the existing entry, so it was skipped rather than risk overwriting it")
+                    continue
+                }
+                let scripture = scanTarget == .scripture ? entry.text : existing.scripture_study
+                let journal   = scanTarget == .journal   ? entry.text : existing.journal_entry
                 _ = try await JarvisAPIClient.saveJournalEntry(
                     baseURL: baseURL, date: dateStr,
                     journalEntry: journal,
-                    accomplishments: existing?.accomplishments ?? "",
-                    gratitudeEntry: existing?.gratitude_entry ?? "",
+                    accomplishments: existing.accomplishments,
+                    gratitudeEntry: existing.gratitude_entry,
                     scriptureStudy: scripture,
-                    spiritualNotes: existing?.spiritual_notes ?? "")
+                    spiritualNotes: existing.spiritual_notes)
             } catch {
                 errors.append("\(dateStr): \(error.localizedDescription)")
             }
@@ -810,15 +835,17 @@ struct JournalView: View {
         Button { Task { await vm.save(baseURL: hk.selectedBaseURL) } } label: {
             HStack(spacing: 8) {
                 if vm.isSaving { ProgressView().tint(.black).scaleEffect(0.75) }
-                Text(vm.isSaving ? "Saving…" : "Save Entry")
+                Text(vm.isSaving ? "Saving…" : vm.loadFailed ? "Unavailable" : "Save Entry")
                     .font(.system(size: 15, weight: .semibold, design: .rounded))
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 15)
-            .background(Capsule().fill(JarvisPalette.cyan))
+            .background(Capsule().fill(vm.loadFailed ? Color.gray.opacity(0.4) : JarvisPalette.cyan))
             .foregroundStyle(.black)
         }
-        .disabled(vm.isSaving)
+        // Blocked while the day failed to load -- the fields are empty in that
+        // state, and saving them would replace the stored entry with nothing.
+        .disabled(vm.isSaving || vm.loadFailed)
     }
 
     // MARK: - Inline banners

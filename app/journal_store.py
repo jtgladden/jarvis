@@ -7,8 +7,49 @@ from datetime import datetime
 from threading import Lock
 
 from app.config import APP_DEFAULT_USER_ID
+from app.journal_api_client import (
+    ENTRY_TYPE_FOR_COLUMN,
+    list_prose_by_date,
+    put_entry_content,
+)
 
 _db_lock = Lock()
+
+
+class _Unset:
+    """Sentinel: this field was absent from the request, so leave it as stored.
+
+    Distinct from ``None``/``[]``, which mean "the caller explicitly cleared
+    this". Clients that don't own a field (the iOS app has no calendar data,
+    for instance) omit it and keep whatever is already there.
+    """
+
+    def __repr__(self) -> str:  # pragma: no cover - debug aid only
+        return "UNSET"
+
+
+UNSET = _Unset()
+
+# Shape of a journal_entries row as returned by list_journal_entries, used to
+# give journal-api-only dates (no local row yet) the same keys as a SQL row.
+_EMPTY_ROW: dict[str, str | None] = {
+    "calendar_summary": "",
+    "journal_entry": "",
+    "accomplishments": "",
+    "gratitude_entry": "",
+    "scripture_study": "",
+    "spiritual_notes": "",
+    "study_links_json": "[]",
+    "photo_data_url": None,
+    "source_photos_json": "[]",
+    "world_event_title": None,
+    "world_event_summary": "",
+    "world_event_source": None,
+    "news_articles_json": "[]",
+    "news_updated_at": None,
+    "calendar_items_json": "[]",
+    "updated_at": None,
+}
 
 
 def _db_path() -> str:
@@ -215,23 +256,43 @@ def init_journal_store() -> None:
         connection.commit()
 
 
-def list_journal_entries(user_id: str = APP_DEFAULT_USER_ID) -> dict[str, dict[str, str | None]]:
+def list_journal_entries(
+    user_id: str = APP_DEFAULT_USER_ID,
+    start: str | None = None,
+    end: str | None = None,
+) -> dict[str, dict[str, str | None]]:
+    """Full journal rows keyed by entry_date, prose overlaid from journal-api.
+
+    ``start``/``end`` are inclusive ISO dates bounding both the local query and
+    the journal-api fetch. Callers that need only a known span should pass them
+    so a single-day read doesn't pull the whole archive over HTTP. Omitting both
+    returns every entry, as before.
+    """
+    where_clauses = ["user_id = ?"]
+    params: list[str] = [user_id]
+    if start:
+        where_clauses.append("entry_date >= ?")
+        params.append(start)
+    if end:
+        where_clauses.append("entry_date <= ?")
+        params.append(end)
+
     with _db_lock, closing(_connect()) as connection:
         _ensure_journal_schema(connection)
         _ensure_journal_columns(connection)
         rows = connection.execute(
-            """
+            f"""
             SELECT entry_date, calendar_summary, journal_entry, accomplishments, gratitude_entry,
                    scripture_study, spiritual_notes, study_links_json,
                    photo_data_url, source_photos_json, world_event_title, world_event_summary, world_event_source,
                    news_articles_json, news_updated_at, calendar_items_json, updated_at
             FROM journal_entries
-            WHERE user_id = ?
+            WHERE {' AND '.join(where_clauses)}
             """,
-            (user_id,),
+            params,
         ).fetchall()
 
-    return {
+    entries: dict[str, dict[str, str | None]] = {
         row["entry_date"]: {
             "calendar_summary": row["calendar_summary"],
             "journal_entry": row["journal_entry"],
@@ -252,6 +313,15 @@ def list_journal_entries(user_id: str = APP_DEFAULT_USER_ID) -> dict[str, dict[s
         }
         for row in rows
     }
+
+    # journal-api is the system of record for prose, so its journal_entry /
+    # scripture_study values replace whatever the local columns still hold. A
+    # date the service knows about but SQLite doesn't gets a default row, so a
+    # prose-only day is still visible to callers.
+    for entry_date, prose in list_prose_by_date(user_id, start=start, end=end).items():
+        entries.setdefault(entry_date, dict(_EMPTY_ROW)).update(prose)
+
+    return entries
 
 
 def _content_clause() -> str:
@@ -512,46 +582,73 @@ def upsert_journal_entry(
     journal_entry: str,
     scripture_study: str,
     study_links_json: str,
-    photo_data_url: str | None,
-    calendar_items_json: str,
+    photo_data_url: str | None | _Unset = UNSET,
+    calendar_items_json: str | _Unset = UNSET,
     user_id: str = APP_DEFAULT_USER_ID,
 ) -> dict[str, str]:
     """Write the two author-filled sections for a day: journal entry + study.
 
-    As of the two-section redesign, the editor only captures ``journal_entry``
-    and ``scripture_study`` (the "Study" section). The retired columns
-    ``accomplishments``, ``gratitude_entry`` and ``spiritual_notes`` are
-    intentionally NOT written here: on INSERT they fall back to their ``''``
-    schema defaults, and on UPDATE they are omitted from the SET clause so any
-    historical values authored before the redesign are preserved untouched.
+    Split write. The prose (``journal_entry`` / ``scripture_study``) goes to
+    journal-api, which is its system of record; the remaining columns
+    (``study_links_json``, ``photo_data_url``, ``calendar_items_json``) keep
+    writing to local SQLite exactly as before.
+
+    The retired columns ``accomplishments``, ``gratitude_entry`` and
+    ``spiritual_notes`` are intentionally NOT written here: on INSERT they fall
+    back to their ``''`` schema defaults, and on UPDATE they are omitted from
+    the SET clause so any historical values authored before the redesign are
+    preserved untouched. The local ``journal_entry`` / ``scripture_study``
+    columns are now omitted for the same reason — prose lives in journal-api,
+    and the pre-migration local values are left in place rather than cleared.
+
+    ``photo_data_url`` and ``calendar_items_json`` default to ``UNSET``, meaning
+    "leave whatever is stored". Passing ``None`` / ``"[]"`` explicitly still
+    clears them. This lets a client that doesn't own those fields (the iOS app
+    holds no calendar data) save prose without erasing the day's photo and agenda.
     """
+    # Replace-only: each PUT carries that section's complete body.
+    stored_prose = {
+        column: put_entry_content(user_id, entry_date, entry_type, content)
+        for column, entry_type, content in (
+            ("journal_entry", ENTRY_TYPE_FOR_COLUMN["journal_entry"], journal_entry),
+            ("scripture_study", ENTRY_TYPE_FOR_COLUMN["scripture_study"], scripture_study),
+        )
+    }
+
     with _db_lock, closing(_connect()) as connection:
         _ensure_journal_schema(connection)
         _ensure_journal_columns(connection)
+        # Only the columns the caller actually supplied take part in the write;
+        # an UNSET column is left out of both the INSERT and the SET clause so
+        # its stored value survives.
+        columns = ["user_id", "entry_date", "calendar_summary", "study_links_json"]
+        placeholders = ["?", "?", "''", "?"]
+        params: list[str | None] = [user_id, entry_date, study_links_json]
+        assignments = ["study_links_json = excluded.study_links_json"]
+
+        for column, value in (
+            ("photo_data_url", photo_data_url),
+            ("calendar_items_json", calendar_items_json),
+        ):
+            if isinstance(value, _Unset):
+                continue
+            columns.append(column)
+            placeholders.append("?")
+            params.append(value)
+            assignments.append(f"{column} = excluded.{column}")
+
+        columns.append("updated_at")
+        placeholders.append("CURRENT_TIMESTAMP")
+        assignments.append("updated_at = CURRENT_TIMESTAMP")
+
         connection.execute(
-            """
-            INSERT INTO journal_entries (
-                user_id, entry_date, calendar_summary, journal_entry,
-                scripture_study, study_links_json, photo_data_url, calendar_items_json, updated_at
-            )
-            VALUES (?, ?, '', ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            f"""
+            INSERT INTO journal_entries ({', '.join(columns)})
+            VALUES ({', '.join(placeholders)})
             ON CONFLICT(user_id, entry_date) DO UPDATE SET
-                journal_entry = excluded.journal_entry,
-                scripture_study = excluded.scripture_study,
-                study_links_json = excluded.study_links_json,
-                photo_data_url = excluded.photo_data_url,
-                calendar_items_json = excluded.calendar_items_json,
-                updated_at = CURRENT_TIMESTAMP
+                {', '.join(assignments)}
             """,
-            (
-                user_id,
-                entry_date,
-                journal_entry,
-                scripture_study,
-                study_links_json,
-                photo_data_url,
-                calendar_items_json,
-            ),
+            params,
         )
         row = connection.execute(
             """
@@ -566,13 +663,15 @@ def upsert_journal_entry(
         ).fetchone()
         connection.commit()
 
+    # Prose comes from what journal-api just stored, not the local columns
+    # (which still hold pre-migration values and are no longer written).
     return {
         "entry_date": row["entry_date"],
         "calendar_summary": row["calendar_summary"],
-        "journal_entry": row["journal_entry"],
+        "journal_entry": stored_prose["journal_entry"],
         "accomplishments": row["accomplishments"],
         "gratitude_entry": row["gratitude_entry"],
-        "scripture_study": row["scripture_study"],
+        "scripture_study": stored_prose["scripture_study"],
         "spiritual_notes": row["spiritual_notes"],
         "study_links_json": row["study_links_json"],
         "photo_data_url": row["photo_data_url"],

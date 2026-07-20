@@ -250,14 +250,17 @@ struct JarvisAPIClient {
     }
 
     static func saveJournalEntry(baseURL: String, date: String, journalEntry: String, accomplishments: String, gratitudeEntry: String, scriptureStudy: String, spiritualNotes: String) async throws -> JournalDayEntry {
+        // Deliberately omits photo_data_url and calendar_items: this app owns
+        // neither, and the server leaves out-of-request fields as stored. Sending
+        // an empty calendar_items here would clear the day's agenda on every save.
         struct Body: Encodable {
             let journal_entry: String; let accomplishments: String; let gratitude_entry: String
-            let scripture_study: String; let spiritual_notes: String; let calendar_items: [String]
+            let scripture_study: String; let spiritual_notes: String
         }
         return try await put(JournalDayEntry.self, baseURL: baseURL, path: "/journal/\(date)",
             body: Body(journal_entry: journalEntry, accomplishments: accomplishments,
                        gratitude_entry: gratitudeEntry, scripture_study: scriptureStudy,
-                       spiritual_notes: spiritualNotes, calendar_items: []))
+                       spiritual_notes: spiritualNotes))
     }
 
     // MARK: - Calendar

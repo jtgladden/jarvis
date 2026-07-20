@@ -106,6 +106,16 @@ JOURNAL_IMPORT_PAGES_DIR = os.getenv("JOURNAL_IMPORT_PAGES_DIR", "data/journal_i
 JOURNAL_ENTRY_PHOTOS_DIR = os.getenv("JOURNAL_ENTRY_PHOTOS_DIR", "data/journal_entry_photos")
 JOURNAL_IMPORT_DB = os.getenv("JOURNAL_IMPORT_DB", "data/journal_import.db")
 
+# --- journal-api service -----------------------------------------------------
+# Standalone service that is the system of record for journal prose (the
+# journal_entry / scripture_study fields). All other journal columns stay in
+# the local SQLite journal_entries table.
+JOURNAL_API_BASE_URL = os.getenv("JOURNAL_API_BASE_URL", "http://192.168.0.67:8008").rstrip("/")
+# journal-api keys entries by its own user_id, which need not match the id Jarvis
+# uses for local storage (APP_DEFAULT_USER_ID). Only outbound journal-api calls
+# are remapped through this; every other store keeps its own id untouched.
+JOURNAL_API_USER_ID = os.getenv("JOURNAL_API_USER_ID", "").strip() or APP_DEFAULT_USER_ID
+
 # --- Journal pattern-surfacing feature (3-layer: extract -> analytics -> narrate) ---
 # Layer 1 stores per-entry derived signals in a SEPARATE db from the source
 # journal so extraction never mutates the entries it reads.
