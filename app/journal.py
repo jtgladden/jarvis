@@ -1886,6 +1886,36 @@ def get_journal_day(entry_date: str) -> JournalDayEntry:
     return entries[0]
 
 
+def journal_day_from_store(entry_date: str) -> JournalDayEntry:
+    """A day's entry built straight from stored fields, with NO calendar/news
+    enrichment — so it never needs Google credentials. Used after mutating a
+    stored-only field (e.g. source photos), mirroring save_journal_day's
+    lightweight response construction."""
+    user_id = get_default_user_context().user_id
+    day = date.fromisoformat(entry_date)
+    saved = list_journal_entries(user_id=user_id).get(entry_date, {})
+    return JournalDayEntry(
+        date=entry_date,
+        date_label=_format_date_label(day),
+        calendar_summary=str(saved.get("calendar_summary") or "").strip()
+        or _fallback_calendar_summary([]),
+        journal_entry=str(saved.get("journal_entry") or ""),
+        accomplishments=str(saved.get("accomplishments") or ""),
+        gratitude_entry=str(saved.get("gratitude_entry") or ""),
+        scripture_study=str(saved.get("scripture_study") or ""),
+        spiritual_notes=str(saved.get("spiritual_notes") or ""),
+        study_links=_parse_study_links(saved.get("study_links_json")),
+        photo_data_url=saved.get("photo_data_url"),
+        source_photos=_source_photo_urls(entry_date, saved.get("source_photos_json")),
+        world_event_articles=[],
+        calendar_items=[
+            CalendarAgendaItem.model_validate(item)
+            for item in json.loads(saved.get("calendar_items_json") or "[]")
+        ],
+        updated_at=saved.get("updated_at"),
+    )
+
+
 def save_journal_day(
     entry_date: str,
     journal_entry: str,

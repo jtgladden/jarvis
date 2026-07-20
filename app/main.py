@@ -25,7 +25,7 @@ from app.health_store import init_health_store
 from app.food_log import add_food_log_entry, add_meal_prep_item, get_daily_food_log, get_food_log_history, get_meal_prep_library, get_user_macro_targets, log_manual_workout, parse_food_description, remove_food_log_entry, remove_meal_prep_item, remove_manual_workout, update_food_log_entry, update_user_macro_targets
 from app.food_log_store import init_food_log_store
 from app.job_alerts import clear_email_parse_cache, get_job_alerts_cached, invalidate_job_alerts_cache, run_job_alerts_job
-from app.journal import extract_journal_day_citations, get_journal, get_journal_day, get_journal_entry_dates, save_journal_day
+from app.journal import extract_journal_day_citations, get_journal, get_journal_day, get_journal_entry_dates, journal_day_from_store, save_journal_day
 from app.journal_store import init_journal_store
 from app.journal_signal_extract import EXTRACTION_VERSION, run_extraction
 from app.journal_signals_store import get_signals_status, init_journal_signals_store
@@ -43,7 +43,8 @@ from app.journal_import import (
     record_usage,
     reextract_low_confidence_fragments,
 )
-from app.journal_ingest import entry_photo_path, page_image_path, preprocess_jpeg, rasterize_to_jpegs, save_page_image
+from app.journal_ingest import entry_photo_path, page_image_path, preprocess_jpeg, rasterize_to_jpegs, save_entry_photos, save_page_image
+from app.journal_store import set_journal_source_photos
 from app.journal_import_store import (
     create_batch,
     get_batch,
@@ -84,7 +85,7 @@ from app.movement import list_movement_entries, sync_movement_daily_entry
 from app.movement_store import init_movement_store
 from app.planner import generate_schedule_plan
 from app.rules import classify_new_email_rule
-from app.schemas import AssistantAskRequest, JournalImageExtractRequest, JournalImagesExtractRequest, JournalImageExtractResponse, JournalScanStageRequest, JournalScanBatch, JournalScanBatchListResponse, JournalScanBatchDetail, JournalScanFragment, JournalFragmentUpdateRequest, JournalBatchUpdateRequest, JournalBatchCommitRequest, JournalBatchCommitResponse, JournalDateConflict, JournalImportSpendResponse, JournalTriageRequest, JournalTriageResponse, DailyFoodLog, FoodLogAddRequest, FoodLogEntry, FoodLogHistoryResponse, FoodLogUpdateRequest, FoodParseRequest, FoodParseResponse, JobAlertsJobStartResponse, JobAlertsJobStatus, JobAlertsResponse, JobListing, MacroTargets, MacroTargetsUpdateRequest, ManualWorkoutLog, ManualWorkoutLogRequest, MealPrepCreateRequest, MealPrepItem, AssistantAskResponse, AssistantChatListResponse, AssistantChatThread, CalendarAgendaResponse, CalendarEventCreateResponse, CalendarEventPreview, CalendarQuickAddRequest, CalendarQuickAddResponse, ClassifiedEmailResponse, ClassificationGuidanceRequest, ClassificationGuidanceResponse, ClassificationOverviewResponse, CleanupJobStartResponse, CleanupJobStatus, CleanupResponse, DashboardResponse, DashboardTaskItem, DeleteEmailResponse, EmailCommandRequest, EmailCommandResponse, EmailPageResponse, EmailSummary, EmailUpdateRequest, EmailUpdateResponse, GmailLabel, HandleEmailRequest, HandleEmailResponse, HealthDailySyncRequest, HealthDailySyncResponse, HealthListResponse, JournalDayEntry, JournalDayNoteUpdateRequest, JournalEntryDatesResponse, JournalResponse, LanguageCode, LanguageConversationRequest, LanguageConversationResponse, LanguageDashboardResponse, LanguageFeedbackResponse, LanguagePracticeGenerateRequest, LanguagePracticeGenerateResponse, LanguagePracticeSession, LanguagePracticeSessionCreateRequest, LanguagePracticeSessionUpdateRequest, LanguageProfile, LanguageProfileUpdateRequest, LanguageSpeechRequest, LanguageVocabCreateRequest, LanguageVocabItem, LanguageVocabNormalizeResponse, LanguageVocabReviewRequest, LanguageVocabUpdateRequest, LanguageWordExplainRequest, LanguageWordExplainResponse, LanguageWritingFeedbackRequest, MovementDailySyncRequest, MovementDailySyncResponse, MovementListResponse, PlanningCalendarBulkCreateRequest, PlanningCalendarBulkCreateResponse, PlanningCalendarCreateRequest, PlanningCalendarCreateResponse, PlanningJobStartResponse, PlanningJobStatus, PlanningRequest, PlanningResponse, RuleSuggestion, RuleSuggestionResponse, RuleProcessResponse, TaskCreateRequest, TaskListResponse, TaskUpdateRequest, UserRule, UserRuleCondition, UserRuleCreateRequest, UserRuleListResponse, UserRuleUpdateRequest, WorkoutBatchSyncRequest, WorkoutBatchSyncResponse, WorkoutListResponse, WorkoutSetEntry, PeopleListResponse, Person, PersonCreateRequest, PersonUpdateRequest, PersonPhotoprismRefRequest, PersonTimelineResponse, PhotoprismSubjectsResponse, ReviewQueueResponse, ReviewCountResponse, MentionUpsertRequest, MentionClearRequest, AliasDefaultRequest, AliasDefaultClearRequest
+from app.schemas import AssistantAskRequest, JournalImageExtractRequest, JournalImagesExtractRequest, JournalImageExtractResponse, JournalSourcePagesRequest, JournalScanStageRequest, JournalScanBatch, JournalScanBatchListResponse, JournalScanBatchDetail, JournalScanFragment, JournalFragmentUpdateRequest, JournalBatchUpdateRequest, JournalBatchCommitRequest, JournalBatchCommitResponse, JournalDateConflict, JournalImportSpendResponse, JournalTriageRequest, JournalTriageResponse, DailyFoodLog, FoodLogAddRequest, FoodLogEntry, FoodLogHistoryResponse, FoodLogUpdateRequest, FoodParseRequest, FoodParseResponse, JobAlertsJobStartResponse, JobAlertsJobStatus, JobAlertsResponse, JobListing, MacroTargets, MacroTargetsUpdateRequest, ManualWorkoutLog, ManualWorkoutLogRequest, MealPrepCreateRequest, MealPrepItem, AssistantAskResponse, AssistantChatListResponse, AssistantChatThread, CalendarAgendaResponse, CalendarEventCreateResponse, CalendarEventPreview, CalendarQuickAddRequest, CalendarQuickAddResponse, ClassifiedEmailResponse, ClassificationGuidanceRequest, ClassificationGuidanceResponse, ClassificationOverviewResponse, CleanupJobStartResponse, CleanupJobStatus, CleanupResponse, DashboardResponse, DashboardTaskItem, DeleteEmailResponse, EmailCommandRequest, EmailCommandResponse, EmailPageResponse, EmailSummary, EmailUpdateRequest, EmailUpdateResponse, GmailLabel, HandleEmailRequest, HandleEmailResponse, HealthDailySyncRequest, HealthDailySyncResponse, HealthListResponse, JournalDayEntry, JournalDayNoteUpdateRequest, JournalEntryDatesResponse, JournalResponse, LanguageCode, LanguageConversationRequest, LanguageConversationResponse, LanguageDashboardResponse, LanguageFeedbackResponse, LanguagePracticeGenerateRequest, LanguagePracticeGenerateResponse, LanguagePracticeSession, LanguagePracticeSessionCreateRequest, LanguagePracticeSessionUpdateRequest, LanguageProfile, LanguageProfileUpdateRequest, LanguageSpeechRequest, LanguageVocabCreateRequest, LanguageVocabItem, LanguageVocabNormalizeResponse, LanguageVocabReviewRequest, LanguageVocabUpdateRequest, LanguageWordExplainRequest, LanguageWordExplainResponse, LanguageWritingFeedbackRequest, MovementDailySyncRequest, MovementDailySyncResponse, MovementListResponse, PlanningCalendarBulkCreateRequest, PlanningCalendarBulkCreateResponse, PlanningCalendarCreateRequest, PlanningCalendarCreateResponse, PlanningJobStartResponse, PlanningJobStatus, PlanningRequest, PlanningResponse, RuleSuggestion, RuleSuggestionResponse, RuleProcessResponse, TaskCreateRequest, TaskListResponse, TaskUpdateRequest, UserRule, UserRuleCondition, UserRuleCreateRequest, UserRuleListResponse, UserRuleUpdateRequest, WorkoutBatchSyncRequest, WorkoutBatchSyncResponse, WorkoutListResponse, WorkoutSetEntry, PeopleListResponse, Person, PersonCreateRequest, PersonUpdateRequest, PersonPhotoprismRefRequest, PersonTimelineResponse, PhotoprismSubjectsResponse, ReviewQueueResponse, ReviewCountResponse, MentionUpsertRequest, MentionClearRequest, AliasDefaultRequest, AliasDefaultClearRequest
 from app.rule_parser import parse_rule_to_fields
 from app.task_service import create_task, delete_task, list_tasks, update_task
 from app.task_store import init_task_store
@@ -763,6 +764,28 @@ def get_journal_entry_photo(entry_date: str, index: int):
     if not os.path.exists(path):
         raise HTTPException(status_code=404, detail="Source photo not found.")
     return FileResponse(path, media_type="image/jpeg")
+
+
+@api.post("/journal/{entry_date}/source-pages", response_model=JournalDayEntry)
+def journal_save_source_pages(entry_date: str, payload: JournalSourcePagesRequest):
+    """Persist the scanned source page images for an already-saved entry.
+
+    The phone scan flow saves entry text first (PUT /journal/{date}), then calls
+    this to attach the page image(s) that entry was transcribed from — the same
+    permanent per-entry storage the web batch commit writes, so the entry can
+    show its source page later via GET /journal/{date}/photo/{index}.
+    """
+    import base64 as _base64
+    import json as _json
+
+    user_id = get_default_user_context().user_id
+    images = [_base64.b64decode(_validate_base64(page)) for page in payload.pages if page]
+    if images:
+        paths = save_entry_photos(user_id, entry_date, images)
+        set_journal_source_photos(entry_date, _json.dumps(paths), user_id=user_id)
+    # Build the response straight from the store (no Google enrichment) — this is
+    # a stored-only mutation and must not depend on calendar/news credentials.
+    return journal_day_from_store(entry_date)
 
 
 @api.get("/journal/{entry_date}", response_model=JournalDayEntry)

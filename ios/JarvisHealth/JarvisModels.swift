@@ -345,4 +345,8 @@ struct JournalDayEntry: Codable {
     let spiritual_notes: String
     let updated_at: String?
     let calendar_items: [CalendarAgendaItem]
+    // Root-relative URLs of the scanned source page image(s) this entry was
+    // transcribed from (e.g. "/api/journal/2024-05-31/photo/0"). Empty if the
+    // entry wasn't scanned.
+    let source_photos: [String]?
 }

@@ -97,7 +97,15 @@ struct ScanEntry: Identifiable {
     var date: Date
     var dateDetected: Bool
     var text: String
+    var startPage: Int = 0   // 0-based page the entry began on within the scan
     var skip: Bool = false
+    // A leading undated fragment — the tail of an earlier entry that isn't part
+    // of this scan (appears above the first dated entry). Auto-skipped, but kept
+    // visible so the user can restore it if the date was simply missed.
+    var isContinuation: Bool = false
+    // The heading had a month/day but no year, so the year came from the scan's
+    // default year — these are the entries a bulk year change re-applies to.
+    var usedDefaultYear: Bool = false
 }
 
 enum ScanTarget: String, CaseIterable, Identifiable {
@@ -143,6 +151,9 @@ final class JournalViewModel: ObservableObject {
     @Published var pendingEntries: [ScanEntry] = []
     @Published var showScanConfirmation = false
     @Published var isSavingEntries = false
+    // Base64 JPEGs of the pages from the current scan, in order — retained
+    // through review so each saved entry can be linked to its source page(s).
+    private var scannedPages: [String] = []
 
     var isoDate: String {
         let fmt = DateFormatter()
@@ -238,44 +249,80 @@ final class JournalViewModel: ObservableObject {
         }
     }
 
-    func extractFromImage(baseURL: String, image: UIImage, scanTarget: ScanTarget) async {
-        guard let jpeg = image.jpegData(compressionQuality: 0.85) else {
-            extractError = "Could not encode image."; return
+    /// Transcribe one or more ordered scanned pages. Passing every page in a
+    /// single call lets the server recognize entries that continue across page
+    /// boundaries (a page with no date heading is merged into the prior entry
+    /// rather than becoming a new, undated one).
+    func extractFromImages(baseURL: String, images: [UIImage], scanTarget: ScanTarget, defaultYear: Int) async {
+        let pages = images.compactMap { $0.jpegData(compressionQuality: 0.85)?.base64EncodedString() }
+        guard !pages.isEmpty else {
+            extractError = "Could not encode the scanned pages."; return
         }
+        scannedPages = pages
         isExtracting = true; extractError = nil
-        let b64 = jpeg.base64EncodedString()
-        let isoFmt: DateFormatter = {
-            let f = DateFormatter()
-            f.dateFormat = "yyyy-MM-dd"
-            f.locale = Locale(identifier: "en_US_POSIX")
-            return f
-        }()
         do {
-            let result = try await JarvisAPIClient.extractJournalFromImage(
-                baseURL: baseURL, imageBase64: b64, mediaType: "image/jpeg",
+            let result = try await JarvisAPIClient.extractJournalFromImages(
+                baseURL: baseURL, pagesBase64: pages, mediaType: "image/jpeg",
                 scanTarget: scanTarget == .scripture ? "scripture" : "journal")
-            pendingEntries = result.entries.compactMap { e in
+            var entries = result.entries.compactMap { e -> ScanEntry? in
                 guard !e.text.isEmpty else { return nil }
-                let date: Date
-                let detected: Bool
-                if let ds = e.detected_date, let parsed = isoFmt.date(from: ds) {
-                    date = parsed; detected = true
-                } else {
-                    date = selectedDate; detected = false
-                }
-                return ScanEntry(date: date, dateDetected: detected, text: e.text)
+                let r = Self.resolveScanDate(e.detected_date, fallback: selectedDate, defaultYear: defaultYear)
+                return ScanEntry(date: r.date, dateDetected: r.detected, text: e.text,
+                                 startPage: max(0, e.start_page ?? 0),
+                                 usedDefaultYear: r.usedDefaultYear)
             }
+            // A leading undated entry is the tail of an earlier entry that isn't
+            // in this scan (e.g. the page's first entry started before it).
+            // Auto-skip that run, but only when a real dated entry follows — a
+            // wholly undated scan is a genuine addition to the selected day.
+            if let firstDated = entries.firstIndex(where: { $0.dateDetected }), firstDated > 0 {
+                for i in 0..<firstDated where !entries[i].dateDetected {
+                    entries[i].skip = true
+                    entries[i].isContinuation = true
+                }
+            }
+            pendingEntries = entries
             if !pendingEntries.isEmpty { showScanConfirmation = true }
-            else { extractError = "No text could be extracted from the image." }
+            else { extractError = "No text could be extracted from the scan." }
         } catch {
             extractError = "Scan failed: \(error.localizedDescription)"
         }
         isExtracting = false
     }
 
+    /// Turn the server's `detected_date` into a concrete calendar date.
+    ///
+    /// The live extract endpoint returns either a full `YYYY-MM-DD`, a partial
+    /// `MM-DD` (month/day written on the page but no year), or nil. For a
+    /// partial date we attach `defaultYear` — the year the user chose for this
+    /// scan — so month/day-only journals land on the right year instead of
+    /// defaulting to the launch day.
+    static func resolveScanDate(_ raw: String?, fallback: Date, defaultYear: Int)
+        -> (date: Date, detected: Bool, usedDefaultYear: Bool) {
+        guard let raw, !raw.isEmpty else { return (fallback, false, false) }
+        let posix = Locale(identifier: "en_US_POSIX")
+
+        let full = DateFormatter()
+        full.locale = posix; full.dateFormat = "yyyy-MM-dd"
+        if let parsed = full.date(from: raw) { return (parsed, true, false) }
+
+        let partial = DateFormatter()
+        partial.locale = posix; partial.dateFormat = "MM-dd"
+        if let md = partial.date(from: raw) {
+            let cal = Calendar.current
+            let mdParts = cal.dateComponents([.month, .day], from: md)
+            var parts = DateComponents()
+            parts.year = defaultYear
+            parts.month = mdParts.month
+            parts.day = mdParts.day
+            if let resolved = cal.date(from: parts) { return (resolved, true, true) }
+        }
+        return (fallback, false, false)
+    }
+
     func savePendingEntries(baseURL: String, scanTarget: ScanTarget) async {
         isSavingEntries = true; extractError = nil
-        let toSave = pendingEntries.filter { !$0.skip }
+        let entries = pendingEntries   // keep original order/indices for page ranges
         let isoFmt: DateFormatter = {
             let f = DateFormatter()
             f.dateFormat = "yyyy-MM-dd"
@@ -283,7 +330,7 @@ final class JournalViewModel: ObservableObject {
             return f
         }()
         var errors: [String] = []
-        for entry in toSave {
+        for (index, entry) in entries.enumerated() where !entry.skip {
             let dateStr = isoFmt.string(from: entry.date)
             do {
                 // The save replaces BOTH sections, so the untouched one has to be
@@ -305,15 +352,35 @@ final class JournalViewModel: ObservableObject {
                     gratitudeEntry: existing.gratitude_entry,
                     scriptureStudy: scripture,
                     spiritualNotes: existing.spiritual_notes)
+                // Link the source page image(s) this entry was transcribed from.
+                let pages = sourcePages(forEntryAt: index, in: entries)
+                if !pages.isEmpty {
+                    try? await JarvisAPIClient.saveJournalSourcePages(
+                        baseURL: baseURL, date: dateStr, pagesBase64: pages)
+                }
             } catch {
                 errors.append("\(dateStr): \(error.localizedDescription)")
             }
         }
         if !errors.isEmpty { extractError = "Some entries failed: \(errors.joined(separator: "; "))" }
         pendingEntries = []
+        scannedPages = []
         showScanConfirmation = false
         isSavingEntries = false
         await load(baseURL: baseURL)
+    }
+
+    /// The scanned pages belonging to one entry: from its start page up to (but
+    /// not including) the next entry's start page. Entries are in reading order,
+    /// so this reconstructs the same per-entry page grouping the batch importer
+    /// builds server-side.
+    private func sourcePages(forEntryAt index: Int, in entries: [ScanEntry]) -> [String] {
+        guard !scannedPages.isEmpty, entries.indices.contains(index) else { return [] }
+        let last = scannedPages.count - 1
+        let start = min(max(0, entries[index].startPage), last)
+        let nextStart = index + 1 < entries.count ? entries[index + 1].startPage : last + 1
+        let end = min(max(start, nextStart - 1), last)
+        return Array(scannedPages[start...end])
     }
 
     private func populateFields(from e: JournalDayEntry) {
@@ -329,7 +396,10 @@ final class JournalViewModel: ObservableObject {
 // MARK: - Document scanner wrapper
 
 struct DocumentScannerView: UIViewControllerRepresentable {
-    let onScanned: (UIImage) -> Void
+    /// Hands back every scanned page in capture order. Pages are kept separate
+    /// (not stitched into one image) so the server can detect entry
+    /// continuation across page boundaries.
+    let onScanned: ([UIImage]) -> Void
     let onDismiss: () -> Void
 
     func makeUIViewController(context: Context) -> VNDocumentCameraViewController {
@@ -342,34 +412,18 @@ struct DocumentScannerView: UIViewControllerRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator(onScanned: onScanned, onDismiss: onDismiss) }
 
     class Coordinator: NSObject, VNDocumentCameraViewControllerDelegate {
-        let onScanned: (UIImage) -> Void
+        let onScanned: ([UIImage]) -> Void
         let onDismiss: () -> Void
-        init(onScanned: @escaping (UIImage) -> Void, onDismiss: @escaping () -> Void) {
+        init(onScanned: @escaping ([UIImage]) -> Void, onDismiss: @escaping () -> Void) {
             self.onScanned = onScanned; self.onDismiss = onDismiss
         }
         func documentCameraViewController(_ controller: VNDocumentCameraViewController,
                                           didFinishWith scan: VNDocumentCameraScan) {
             let images = (0..<scan.pageCount).map { scan.imageOfPage(at: $0) }
-            onScanned(combineVertically(images))
+            onScanned(images)
         }
         func documentCameraViewControllerDidCancel(_ controller: VNDocumentCameraViewController) { onDismiss() }
         func documentCameraViewController(_ controller: VNDocumentCameraViewController, didFailWithError error: Error) { onDismiss() }
-
-        private func combineVertically(_ images: [UIImage]) -> UIImage {
-            guard !images.isEmpty else { return UIImage() }
-            guard images.count > 1 else { return images[0] }
-            let width  = images.map { $0.size.width  }.max() ?? 0
-            let height = images.map { $0.size.height }.reduce(0, +)
-            let format = UIGraphicsImageRendererFormat()
-            format.scale = images[0].scale
-            return UIGraphicsImageRenderer(size: CGSize(width: width, height: height), format: format).image { _ in
-                var y: CGFloat = 0
-                for img in images {
-                    img.draw(in: CGRect(x: 0, y: y, width: img.size.width, height: img.size.height))
-                    y += img.size.height
-                }
-            }
-        }
     }
 }
 
@@ -384,7 +438,14 @@ struct JournalView: View {
     @State private var showScanSheet  = false
     @State private var scanTarget: ScanTarget = .journal
     @State private var showDocScanner = false
-    @State private var scanPickerItem: PhotosPickerItem?
+    @State private var scanPickerItems: [PhotosPickerItem] = []
+    // Year applied to entries whose heading is month/day only (no year written).
+    // Defaults to the year of the day the scan is launched from.
+    @State private var scanDefaultYear = Calendar.current.component(.year, from: Date())
+    // Same idea, adjustable in the review sheet so a wrong pick doesn't force a re-scan.
+    @State private var reviewYear = Calendar.current.component(.year, from: Date())
+    // When on, the journal card shows the scanned source page(s) instead of the text.
+    @State private var showSourcePages = false
     @State private var showDatePicker = false
     @State private var pickerDate     = Date()
 
@@ -438,7 +499,10 @@ struct JournalView: View {
                     .foregroundStyle(JarvisPalette.cyan)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button { showScanSheet = true } label: {
+                    Button {
+                        scanDefaultYear = Calendar.current.component(.year, from: vm.selectedDate)
+                        showScanSheet = true
+                    } label: {
                         if vm.isExtracting {
                             ProgressView().tint(JarvisPalette.cyan)
                         } else {
@@ -454,29 +518,39 @@ struct JournalView: View {
             .sheet(isPresented: $vm.showScanConfirmation) { scanConfirmationSheet }
             .fullScreenCover(isPresented: $showDocScanner) {
                 DocumentScannerView(
-                    onScanned: { image in
+                    onScanned: { images in
                         showDocScanner = false
                         let target = scanTarget
-                        Task { await vm.extractFromImage(baseURL: hk.selectedBaseURL, image: image, scanTarget: target) }
+                        let year = scanDefaultYear
+                        Task { await vm.extractFromImages(baseURL: hk.selectedBaseURL, images: images, scanTarget: target, defaultYear: year) }
                     },
                     onDismiss: { showDocScanner = false }
                 )
                 .ignoresSafeArea()
             }
-            .onChange(of: scanPickerItem) { _, newItem in
-                guard let newItem else { return }
+            .onChange(of: scanPickerItems) { _, newItems in
+                guard !newItems.isEmpty else { return }
                 let target = scanTarget
+                let year = scanDefaultYear
                 Task {
-                    if let data = try? await newItem.loadTransferable(type: Data.self),
-                       let uiImage = UIImage(data: data) {
-                        await vm.extractFromImage(baseURL: hk.selectedBaseURL, image: uiImage, scanTarget: target)
+                    // Load in selection order so page continuation is preserved.
+                    var images: [UIImage] = []
+                    for item in newItems {
+                        if let data = try? await item.loadTransferable(type: Data.self),
+                           let uiImage = UIImage(data: data) {
+                            images.append(uiImage)
+                        }
                     }
-                    scanPickerItem = nil
+                    if !images.isEmpty {
+                        await vm.extractFromImages(baseURL: hk.selectedBaseURL, images: images, scanTarget: target, defaultYear: year)
+                    }
+                    scanPickerItems = []
                 }
             }
             .task { await vm.load(baseURL: hk.selectedBaseURL) }
             .onChange(of: vm.selectedDate) { _, _ in
                 if dictation.isRecording { dictation.stop() }
+                showSourcePages = false   // back to text when switching days
             }
         }
     }
@@ -707,20 +781,85 @@ struct JournalView: View {
     // MARK: - Journal card  (cyan — journal_entry)
 
     private var journalCard: some View {
-        JarvisCard {
+        let sources = vm.entry?.source_photos ?? []
+        return JarvisCard {
             VStack(alignment: .leading, spacing: 14) {
-                Label("JOURNAL ENTRY", systemImage: "pencil.line")
-                    .font(.system(size: 11, weight: .semibold, design: .rounded))
-                    .tracking(1.5)
-                    .foregroundStyle(JarvisPalette.cyan)
+                HStack {
+                    Label("JOURNAL ENTRY", systemImage: "pencil.line")
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .tracking(1.5)
+                        .foregroundStyle(JarvisPalette.cyan)
+                    Spacer()
+                    if !sources.isEmpty {
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.2)) { showSourcePages.toggle() }
+                        } label: {
+                            HStack(spacing: 5) {
+                                Image(systemName: showSourcePages ? "text.alignleft" : "doc.text.image")
+                                Text(showSourcePages ? "Text" : "Source")
+                            }
+                            .font(.system(size: 11, weight: .semibold, design: .rounded))
+                            .foregroundStyle(JarvisPalette.cyan)
+                            .padding(.horizontal, 10).padding(.vertical, 5)
+                            .background(Capsule().fill(JarvisPalette.cyan.opacity(0.12)))
+                        }
+                    }
+                }
 
-                editorField(field: "journal",
-                            text: $vm.journalText,
-                            placeholder: "What's on your mind today?",
-                            accent: JarvisPalette.cyan,
-                            minHeight: 200)
+                if showSourcePages, !sources.isEmpty {
+                    sourcePagesView(sources)
+                } else {
+                    editorField(field: "journal",
+                                text: $vm.journalText,
+                                placeholder: "What's on your mind today?",
+                                accent: JarvisPalette.cyan,
+                                minHeight: 200)
+                }
             }
         }
+    }
+
+    /// The scanned source page image(s) for the current entry, shown in place of
+    /// the journal text when "Source" is toggled on.
+    @ViewBuilder
+    private func sourcePagesView(_ relativePaths: [String]) -> some View {
+        VStack(spacing: 12) {
+            ForEach(Array(relativePaths.enumerated()), id: \.offset) { _, path in
+                if let url = sourceImageURL(path) {
+                    AsyncImage(url: url) { phase in
+                        switch phase {
+                        case .success(let image):
+                            image.resizable().scaledToFit()
+                                .frame(maxWidth: .infinity)
+                                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        case .failure:
+                            sourceImagePlaceholder(icon: "exclamationmark.triangle", label: "Couldn't load page")
+                        default:
+                            sourceImagePlaceholder(icon: "photo", label: "Loading…")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func sourceImagePlaceholder(icon: String, label: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: icon)
+            Text(label).font(.system(size: 12, design: .rounded))
+        }
+        .foregroundStyle(JarvisPalette.subtleText)
+        .frame(maxWidth: .infinity, minHeight: 160)
+        .background(RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(0.04)))
+    }
+
+    /// Build a full image URL from a root-relative source path. `selectedBaseURL`
+    /// ends in `/api`, while source paths already include `/api`, so we strip the
+    /// suffix to avoid `/api/api`.
+    private func sourceImageURL(_ relativePath: String) -> URL? {
+        var root = hk.selectedBaseURL.trimmingCharacters(in: CharacterSet(charactersIn: "/ "))
+        if root.hasSuffix("/api") { root = String(root.dropLast(4)) }
+        return URL(string: root + relativePath)
     }
 
     // MARK: - Reflection card  (emerald — gratitude + accomplishments)
@@ -883,6 +1022,13 @@ struct JournalView: View {
 
     // MARK: - Scan options sheet
 
+    /// Selectable years for the default-year picker: this year back ~25 years,
+    /// newest first (journals being scanned are usually recent-to-older).
+    private var scanYearRange: [Int] {
+        let thisYear = Calendar.current.component(.year, from: Date())
+        return Array((thisYear - 25...thisYear).reversed())
+    }
+
     private var scanOptionsSheet: some View {
         NavigationStack {
             VStack(spacing: 24) {
@@ -924,6 +1070,39 @@ struct JournalView: View {
                 }
 
                 VStack(alignment: .leading, spacing: 10) {
+                    Text("Default year")
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .tracking(0.5)
+                        .foregroundStyle(JarvisPalette.subtleText)
+                        .padding(.horizontal, 4)
+
+                    HStack(spacing: 14) {
+                        Image(systemName: "calendar.badge.clock")
+                            .font(.system(size: 16))
+                            .foregroundStyle(JarvisPalette.cyan)
+                            .frame(width: 24)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Applied to month/day-only dates")
+                                .font(.system(size: 14, weight: .medium, design: .rounded))
+                                .foregroundStyle(.white)
+                            Text("For entries with no year written")
+                                .font(.system(size: 12, design: .rounded))
+                                .foregroundStyle(JarvisPalette.subtleText)
+                        }
+                        Spacer()
+                        Picker("Default year", selection: $scanDefaultYear) {
+                            ForEach(scanYearRange, id: \.self) { year in
+                                Text(String(year)).tag(year)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .tint(JarvisPalette.cyan)
+                    }
+                    .padding(.horizontal, 16).padding(.vertical, 12)
+                    .background(RoundedRectangle(cornerRadius: 14).fill(Color.white.opacity(0.05)))
+                }
+
+                VStack(alignment: .leading, spacing: 10) {
                     Text("Source")
                         .font(.system(size: 13, weight: .semibold, design: .rounded))
                         .tracking(0.5)
@@ -940,10 +1119,14 @@ struct JournalView: View {
                     }
                     .buttonStyle(.plain)
 
-                    PhotosPicker(selection: $scanPickerItem, matching: .images, photoLibrary: .shared()) {
+                    PhotosPicker(selection: $scanPickerItems,
+                                 maxSelectionCount: 10,
+                                 selectionBehavior: .ordered,
+                                 matching: .images,
+                                 photoLibrary: .shared()) {
                         scanSourceRow(icon: "photo.on.rectangle",
                                       title: "Choose from Library",
-                                      subtitle: "Pick an existing photo of your notes")
+                                      subtitle: "Pick one or more photos of your notes, in order")
                     }
                     .buttonStyle(.plain)
                     .simultaneousGesture(TapGesture().onEnded { showScanSheet = false })
@@ -962,7 +1145,7 @@ struct JournalView: View {
                 }
             }
         }
-        .presentationDetents([.medium])
+        .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
     }
 
@@ -998,10 +1181,12 @@ struct JournalView: View {
                     let total   = vm.pendingEntries.count
                     let skipped = vm.pendingEntries.filter { $0.skip }.count
                     let saving  = total - skipped
+                    let pageCount = (vm.pendingEntries.map { $0.startPage }.max() ?? 0) + 1
 
                     HStack {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("\(total) \(total == 1 ? "entry" : "entries") detected")
+                            Text("\(total) \(total == 1 ? "entry" : "entries") detected"
+                                 + (pageCount > 1 ? " across \(pageCount) pages" : ""))
                                 .font(.system(size: 13, weight: .semibold, design: .rounded))
                                 .foregroundStyle(.white)
                             Text("Review dates and text before saving.")
@@ -1012,8 +1197,33 @@ struct JournalView: View {
                     }
                     .padding(.horizontal, 18).padding(.top, 4)
 
+                    if vm.pendingEntries.contains(where: { $0.usedDefaultYear }) {
+                        HStack(spacing: 12) {
+                            Image(systemName: "calendar.badge.clock")
+                                .font(.system(size: 14)).foregroundStyle(JarvisPalette.cyan)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text("Year for month/day entries")
+                                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                                    .foregroundStyle(.white)
+                                Text("No year was written on those pages")
+                                    .font(.system(size: 11, design: .rounded))
+                                    .foregroundStyle(JarvisPalette.subtleText)
+                            }
+                            Spacer()
+                            Picker("Year", selection: $reviewYear) {
+                                ForEach(scanYearRange, id: \.self) { Text(String($0)).tag($0) }
+                            }
+                            .pickerStyle(.menu)
+                            .tint(JarvisPalette.cyan)
+                            .onChange(of: reviewYear) { _, year in applyReviewYear(year) }
+                        }
+                        .padding(.horizontal, 14).padding(.vertical, 10)
+                        .background(RoundedRectangle(cornerRadius: 14).fill(JarvisPalette.cyan.opacity(0.08)))
+                        .padding(.horizontal, 18)
+                    }
+
                     ForEach($vm.pendingEntries) { $entry in
-                        scanEntryCard(entry: $entry)
+                        scanEntryCard(entry: $entry, showPage: pageCount > 1)
                     }
 
                     VStack(spacing: 10) {
@@ -1043,16 +1253,40 @@ struct JournalView: View {
                 }
                 .padding(.top, 8)
             }
+            .scrollDismissesKeyboard(.interactively)
             .background(JarvisPalette.background.ignoresSafeArea())
             .navigationTitle("Review Scan")
             .navigationBarTitleDisplayMode(.inline)
+            .onAppear { reviewYear = scanDefaultYear }
+            .toolbar {
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") {
+                        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
+                                                        to: nil, from: nil, for: nil)
+                    }
+                    .font(.system(size: 15, weight: .semibold, design: .rounded))
+                    .foregroundStyle(JarvisPalette.cyan)
+                }
+            }
         }
         .presentationDetents([.large])
         .presentationDragIndicator(.visible)
     }
 
+    /// Re-stamp the year on every entry whose heading was month/day only, so a
+    /// single change fixes them all without re-running the scan.
+    private func applyReviewYear(_ year: Int) {
+        let cal = Calendar.current
+        for i in vm.pendingEntries.indices where vm.pendingEntries[i].usedDefaultYear {
+            var comps = cal.dateComponents([.year, .month, .day], from: vm.pendingEntries[i].date)
+            comps.year = year
+            if let d = cal.date(from: comps) { vm.pendingEntries[i].date = d }
+        }
+    }
+
     @ViewBuilder
-    private func scanEntryCard(entry: Binding<ScanEntry>) -> some View {
+    private func scanEntryCard(entry: Binding<ScanEntry>, showPage: Bool) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 10) {
                 Image(systemName: "calendar")
@@ -1061,7 +1295,20 @@ struct JournalView: View {
                     .labelsHidden()
                     .tint(JarvisPalette.cyan)
                     .colorScheme(.dark)
-                if !entry.dateDetected.wrappedValue {
+                if showPage {
+                    Text("Pg \(entry.startPage.wrappedValue + 1)")
+                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                        .foregroundStyle(JarvisPalette.subtleText)
+                        .padding(.horizontal, 8).padding(.vertical, 3)
+                        .background(Capsule().fill(Color.white.opacity(0.06)))
+                }
+                if entry.isContinuation.wrappedValue {
+                    Text("Continuation")
+                        .font(.system(size: 11, design: .rounded))
+                        .foregroundStyle(JarvisPalette.subtleText)
+                        .padding(.horizontal, 8).padding(.vertical, 3)
+                        .background(Capsule().fill(Color.white.opacity(0.06)))
+                } else if !entry.dateDetected.wrappedValue {
                     Text("Date not detected")
                         .font(.system(size: 11, design: .rounded))
                         .foregroundStyle(Color.orange.opacity(0.85))
@@ -1076,13 +1323,22 @@ struct JournalView: View {
                 }
             }
 
-            Text(entry.text.wrappedValue)
+            // Full, editable transcription — grows to show the whole entry and
+            // lets the user fix OCR mistakes before saving.
+            TextField("Entry text", text: entry.text, axis: .vertical)
                 .font(.system(size: 13, design: .rounded))
                 .foregroundStyle(entry.skip.wrappedValue
                                  ? JarvisPalette.subtleText.opacity(0.35)
                                  : JarvisPalette.secondaryText)
+                .tint(JarvisPalette.cyan)
+                .disabled(entry.skip.wrappedValue)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .lineLimit(6)
+                .padding(10)
+                .background(RoundedRectangle(cornerRadius: 10).fill(Color.white.opacity(0.04)))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10)
+                        .stroke(Color.white.opacity(entry.skip.wrappedValue ? 0 : 0.08), lineWidth: 1)
+                )
         }
         .padding(16)
         .background(
